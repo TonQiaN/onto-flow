@@ -58,8 +58,11 @@ docker buildx build \
   .
 mkdir -p output
 docker image save "${image_ref}" | gzip > "output/codex-sdk-experiment-git-${git_sha}.tar.gz"
-shasum -a 256 "output/codex-sdk-experiment-git-${git_sha}.tar.gz" \
-  > "output/codex-sdk-experiment-git-${git_sha}.tar.gz.sha256"
+(
+  cd output
+  shasum -a 256 "codex-sdk-experiment-git-${git_sha}.tar.gz" \
+    > "codex-sdk-experiment-git-${git_sha}.tar.gz.sha256"
+)
 ```
 
 Every image tag contains the full 40-character commit SHA. Never use `latest`
