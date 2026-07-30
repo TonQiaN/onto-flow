@@ -206,13 +206,33 @@ for label in \
   launchctl bootout "${launch_domain}/${label}" >/dev/null 2>&1 || true
 done
 
+bootstrap_launch_agent() {
+  local label="$1"
+  local attempt
+
+  for attempt in 1 2 3 4 5; do
+    if launchctl bootstrap \
+      "${launch_domain}" \
+      "${launch_dir}/${label}.plist"; then
+      return 0
+    fi
+    if launchctl print "${launch_domain}/${label}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if [[ "${attempt}" -lt 5 ]]; then
+      sleep 1
+    fi
+  done
+
+  echo "Unable to bootstrap ${label} after five attempts." >&2
+  return 1
+}
+
 for label in \
   com.codex-sdk-experiment.tunnel \
   com.codex-sdk-experiment.worker \
   com.codex-sdk-experiment.maintenance; do
-  launchctl bootstrap \
-    "${launch_domain}" \
-    "${launch_dir}/${label}.plist"
+  bootstrap_launch_agent "${label}"
   launchctl enable "${launch_domain}/${label}"
 done
 
