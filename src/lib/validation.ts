@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isAllowedRecipient } from "@/lib/recipients";
 
 export const loginSchema = z.object({
   username: z.string().trim().min(1).max(80),
@@ -9,7 +10,7 @@ export const createMessageSchema = z.object({
   recipient: z
     .string()
     .trim()
-    .refine((value) => value === "付方圆", "Recipient is not allowed."),
+    .refine(isAllowedRecipient, "Recipient is not allowed."),
   message: z
     .string()
     .trim()

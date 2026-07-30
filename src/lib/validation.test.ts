@@ -18,6 +18,27 @@ describe("request validation", () => {
     });
   });
 
+  it("accepts the second exact allowlisted recipient", () => {
+    expect(
+      createMessageSchema.parse({
+        recipient: " 成雨函 ",
+        message: " 仅验证选项，不执行发送 ",
+      }),
+    ).toEqual({
+      recipient: "成雨函",
+      message: "仅验证选项，不执行发送",
+    });
+  });
+
+  it("rejects recipients outside the exact allowlist", () => {
+    expect(
+      createMessageSchema.safeParse({
+        recipient: "其他用户",
+        message: "不应入队",
+      }).success,
+    ).toBe(false);
+  });
+
   it("rejects empty or oversized messages", () => {
     expect(
       createMessageSchema.safeParse({ recipient: "付方圆", message: " " }).success,

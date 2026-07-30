@@ -7,17 +7,19 @@ automation:
 - Tencent Cloud runs only the Next.js web service and its SQLite database.
 - A signed-in macOS GUI session runs the local `@openai/codex-sdk` worker,
   Computer Use, and WeLink.
-- The first release has no public HTTP endpoint. Both the browser and worker
-  reach Tencent Cloud through `127.0.0.1:4310` and an SSH tunnel.
+- Browser traffic reaches Tencent Cloud through an authenticated HTTPS
+  endpoint. The worker continues to use `127.0.0.1:4310` through an SSH tunnel,
+  so its bearer token and desktop automation channel are not publicly exposed.
 
 The cloud container never receives the raw worker token, Codex login, or WeLink
 login. The Mac never receives the administrator password hash or cloud
 database.
 
-For the first end-to-end experiment, the recipient allowlist contains only
-`付方圆`, and the page is prefilled with `这是一条测试消息`. This keeps the
-real-message acceptance test bounded; extend the allowlist only after adding
-and verifying another exact WeLink identity.
+The recipient allowlist contains the exact WeLink identities `付方圆` and
+`成雨函`, while the page remains prefilled with `付方圆` and
+`这是一条测试消息`. Only `付方圆` has been authorized for real-message
+acceptance tests so far; `成雨函` is selectable but must not be used for a real
+send until a separate test is explicitly requested.
 
 ## Local development
 
@@ -45,9 +47,10 @@ npm run check
 Detailed instructions are in [deploy/README.md](deploy/README.md):
 
 - immutable Linux image build and Tencent Cloud release;
-- loopback-only Compose service and macOS SSH-tunnel LaunchAgents;
+- HTTPS Caddy edge plus a loopback-only worker API tunnel;
 - consistent SQLite plus screenshot backup and restore;
 - log rotation, retention, rollback, and production acceptance.
 
-No Nginx configuration is used in the first release. Port `4310` is bound only
-to the Tencent host's loopback interface.
+No shared Nginx configuration is modified. Public browser traffic uses the
+dedicated HTTPS hostname, while port `4310` remains bound only to the Tencent
+host's loopback interface.

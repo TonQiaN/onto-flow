@@ -53,3 +53,60 @@ services:
           pids: 128
         reservations:
           memory: 128M
+
+  edge:
+    image: ${CODEX_EXPERIMENT_EDGE_IMAGE:?Set CODEX_EXPERIMENT_EDGE_IMAGE to an immutable Caddy digest}
+    restart: unless-stopped
+    init: true
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      CODEX_EXPERIMENT_PUBLIC_HOST: ${CODEX_EXPERIMENT_PUBLIC_HOST:?Set the public HTTPS hostname}
+    ports:
+      - "0.0.0.0:443:443"
+      - "0.0.0.0:443:443/udp"
+    volumes:
+      - type: bind
+        source: ./deploy/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+      - caddy_data:/data
+      - caddy_config:/config
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,noexec,nosuid,nodev
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 64
+    stop_grace_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"
+        compress: "true"
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 128M
+          pids: 64
+        reservations:
+          memory: 32M
+
+volumes:
+  caddy_data:
+  caddy_config:

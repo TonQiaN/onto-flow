@@ -1,0 +1,22 @@
+{
+	auto_https disable_redirects
+	admin off
+}
+
+{$CODEX_EXPERIMENT_PUBLIC_HOST} {
+	encode zstd gzip
+
+	route {
+		@root path /
+		redir @root /codex-experiment 307
+
+		@experiment path /codex-experiment /codex-experiment/*
+		reverse_proxy @experiment web:3000 {
+			header_up X-Real-IP {remote_host}
+		}
+
+		respond 404
+	}
+
+	header -Server
+}

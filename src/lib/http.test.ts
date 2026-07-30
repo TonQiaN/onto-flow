@@ -82,4 +82,22 @@ describe("production transport configuration", () => {
       /SESSION_COOKIE_SECURE/,
     );
   });
+
+  it("accepts the authenticated public HTTPS endpoint with secure cookies", () => {
+    Object.assign(process.env, {
+      NODE_ENV: "production",
+      PUBLIC_APP_URL:
+        "https://codex.82.156.249.86.nip.io/codex-experiment",
+      SESSION_COOKIE_SECURE: "true",
+      TRUST_PROXY_HEADERS: "true",
+      TRUSTED_ORIGINS: "https://codex.82.156.249.86.nip.io",
+    });
+
+    const config = parseServerConfig(process.env);
+    expect(config.PUBLIC_APP_URL).toBe(
+      "https://codex.82.156.249.86.nip.io/codex-experiment",
+    );
+    expect(config.SESSION_COOKIE_SECURE).toBe(true);
+    expect(config.TRUST_PROXY_HEADERS).toBe(true);
+  });
 });

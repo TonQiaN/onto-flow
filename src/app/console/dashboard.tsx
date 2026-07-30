@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { PublicJob } from "@/lib/api-types";
+import { ALLOWED_RECIPIENTS } from "@/lib/recipients";
 
 type WorkerSummary = {
   online: boolean;
@@ -246,7 +247,11 @@ export function Dashboard({
                   value={recipient}
                   onChange={(event) => setRecipient(event.target.value)}
                 >
-                  <option value="付方圆">付方圆</option>
+                  {ALLOWED_RECIPIENTS.map((allowedRecipient) => (
+                    <option key={allowedRecipient} value={allowedRecipient}>
+                      {allowedRecipient}
+                    </option>
+                  ))}
                 </select>
                 <ChevronIcon />
               </span>

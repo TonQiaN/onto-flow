@@ -114,7 +114,9 @@ mv "${temporary_archive}" "${archive_path}"
   sha256sum "${archive_name}" > "${archive_name}.sha256"
 )
 
-image_ref="$("${compose[@]}" config --images | head -n 1)"
+image_ref="$(
+  sed -n 's/^CODEX_EXPERIMENT_IMAGE=//p' "${compose_env_file}" | tail -n 1
+)"
 {
   printf 'created_at=%s\n' "${timestamp}"
   printf 'project=%s\n' "${project_name}"
