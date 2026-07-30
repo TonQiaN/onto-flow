@@ -1,0 +1,55 @@
+name: codex-sdk-experiment
+
+services:
+  web:
+    image: ${CODEX_EXPERIMENT_IMAGE:?Set CODEX_EXPERIMENT_IMAGE to a git-<40-hex-sha> tag or sha256 digest}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ${APP_ENV_FILE:-/opt/codex-sdk-experiment/config/app.env}
+    environment:
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "127.0.0.1:4310:3000"
+    volumes:
+      - type: bind
+        source: /opt/codex-sdk-experiment/data
+        target: /app/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+    mem_limit: 512m
+    cpus: 0.75
+    pids_limit: 128
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "5"
+        compress: "true"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/codex-experiment/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 512M
+          pids: 128
+        reservations:
+          memory: 128M

@@ -1,0 +1,21 @@
+[Unit]
+Description=Cold backup of Codex SDK experiment SQLite data and screenshots
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/codex-sdk-experiment/release
+Environment=COMPOSE_FILE=/opt/codex-sdk-experiment/release/docker-compose.yml
+Environment=COMPOSE_ENV_FILE=/opt/codex-sdk-experiment/config/compose.env
+Environment=DATA_DIR=/opt/codex-sdk-experiment/data
+Environment=BACKUP_DIR=/opt/codex-sdk-experiment/backups
+Environment=RETENTION_DAYS=30
+ExecStart=/opt/codex-sdk-experiment/release/deploy/scripts/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

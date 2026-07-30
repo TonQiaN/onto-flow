@@ -1,0 +1,23 @@
+# Dependencies and builds
+node_modules/
+.next/
+coverage/
+output/
+
+# Runtime data
+.data/
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Secrets
+.env
+.env.*
+!.env.example
+!.env.worker.example
+
+# Local tooling
+.DS_Store
+*.log
+*.tsbuildinfo

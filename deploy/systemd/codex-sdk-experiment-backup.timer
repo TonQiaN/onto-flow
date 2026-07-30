@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily backup of Codex SDK experiment data
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=codex-sdk-experiment-backup.service
+
+[Install]
+WantedBy=timers.target
