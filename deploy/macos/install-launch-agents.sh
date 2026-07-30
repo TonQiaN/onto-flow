@@ -216,9 +216,6 @@ bootstrap_launch_agent() {
       "${launch_dir}/${label}.plist"; then
       return 0
     fi
-    if launchctl print "${launch_domain}/${label}" >/dev/null 2>&1; then
-      return 0
-    fi
     if [[ "${attempt}" -lt 5 ]]; then
       sleep 1
     fi
