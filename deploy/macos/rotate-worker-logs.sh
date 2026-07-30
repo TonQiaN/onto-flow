@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_dir="${CODEX_EXPERIMENT_PROJECT_DIR:?Missing project directory}"
-log_dir="${project_dir}/.data/logs"
+log_dir="${CODEX_EXPERIMENT_LOG_DIR:-${HOME}/Library/Logs/CodexSDKExperiment}"
 max_bytes="${WORKER_LOG_MAX_BYTES:-10485760}"
 keep_files="${WORKER_LOG_KEEP_FILES:-5}"
 worker_label="com.codex-sdk-experiment.worker"

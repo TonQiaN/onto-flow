@@ -8,19 +8,19 @@
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
-    <string>__PROJECT_DIR__/deploy/macos/run-worker.sh</string>
+    <string>__RUNTIME_DIR__/run-worker.sh</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>CODEX_EXPERIMENT_NODE_BIN</key>
     <string>__NODE_BIN__</string>
     <key>CODEX_EXPERIMENT_PROJECT_DIR</key>
-    <string>__PROJECT_DIR__</string>
+    <string>__RUNTIME_DIR__</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
   <key>WorkingDirectory</key>
-  <string>__PROJECT_DIR__</string>
+  <string>__RUNTIME_DIR__</string>
   <key>LimitLoadToSessionType</key>
   <string>Aqua</string>
   <key>ProcessType</key>
@@ -35,8 +35,8 @@
   <key>ThrottleInterval</key>
   <integer>30</integer>
   <key>StandardOutPath</key>
-  <string>__PROJECT_DIR__/.data/logs/worker.stdout.log</string>
+  <string>__LOG_DIR__/worker.stdout.log</string>
   <key>StandardErrorPath</key>
-  <string>__PROJECT_DIR__/.data/logs/worker.stderr.log</string>
+  <string>__LOG_DIR__/worker.stderr.log</string>
 </dict>
 </plist>

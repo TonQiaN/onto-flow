@@ -180,11 +180,12 @@ This installs:
 
 - `com.codex-sdk-experiment.tunnel`: persistent loopback SSH forwarding;
 - `com.codex-sdk-experiment.worker`: local Node/Codex worker in the Aqua login
-  session;
+  session, running from a private mirror under
+  `~/Library/Application Support/CodexSDKExperiment/runtime`;
 - `com.codex-sdk-experiment.maintenance`: daily bounded log rotation.
 
-The worker and tunnel restart on failure. Logs remain under ignored
-`.data/logs`, rotate at 10 MB, and retain five files. Check them without
+The worker and tunnel restart on failure. Logs remain under
+`~/Library/Logs/CodexSDKExperiment`, rotate at 10 MB, and retain five files. Check them without
 printing environment files or tokens:
 
 ```bash

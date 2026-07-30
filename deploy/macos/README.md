@@ -42,3 +42,15 @@ launchctl bootout \
 The installer backs up an existing plist with a UTC timestamp before replacing
 it. Generated plists contain paths and the SSH target, but no token, Codex
 credential, administrator password, or message content.
+
+LaunchAgent stdout and stderr are written under
+`~/Library/Logs/CodexSDKExperiment`, not under the project on Desktop. This
+keeps log-file creation outside macOS protected Desktop folders.
+
+The installer also creates a private runtime mirror under
+`~/Library/Application Support/CodexSDKExperiment/runtime`. It contains only
+the local Worker source, dependencies, WeLink skill, and a `0600` copy of the
+Worker environment. LaunchAgent processes run from that mirror because macOS
+background services cannot read a project stored in the protected Desktop
+folder. Re-running the installer replaces the runtime atomically and preserves
+the previous runtime in a timestamped sibling directory.

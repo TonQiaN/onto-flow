@@ -1,4 +1,5 @@
 import { mkdir, open, readFile, unlink } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 function processIsAlive(pid: number): boolean {
@@ -11,7 +12,17 @@ function processIsAlive(pid: number): boolean {
 }
 
 export async function acquireWorkerLock(): Promise<() => Promise<void>> {
-  const runtimeDirectory = path.join(process.cwd(), ".data");
+  const configuredDirectory =
+    process.env.CODEX_EXPERIMENT_STATE_DIR?.trim() || undefined;
+  const runtimeDirectory = configuredDirectory
+    ? path.resolve(configuredDirectory)
+    : path.join(
+        os.homedir(),
+        "Library",
+        "Application Support",
+        "CodexSDKExperiment",
+        "state",
+      );
   const lockPath = path.join(runtimeDirectory, "worker.lock");
   await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
 

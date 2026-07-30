@@ -64,9 +64,16 @@ worker_env="${project_dir}/.env.worker.local"
 uid="$(id -u)"
 launch_domain="gui/${uid}"
 launch_dir="${HOME}/Library/LaunchAgents"
-log_dir="${project_dir}/.data/logs"
+log_dir="${HOME}/Library/Logs/CodexSDKExperiment"
+runtime_root="${HOME}/Library/Application Support/CodexSDKExperiment"
+runtime_dir="${runtime_root}/runtime"
 
-for value in "${project_dir}" "${node_bin}" "${ssh_key}"; do
+for value in \
+  "${project_dir}" \
+  "${node_bin}" \
+  "${ssh_key}" \
+  "${log_dir}" \
+  "${runtime_dir}"; do
   if [[ "${value}" == *$'\n'* || "${value}" == *[\&\<\>]* ]]; then
     echo "A generated plist value contains unsupported characters." >&2
     exit 1
@@ -84,6 +91,11 @@ if [[ "${worker_env_mode}" != "600" ]]; then
   exit 1
 fi
 
+if [[ ! -d "${project_dir}/node_modules" ]]; then
+  echo "Run npm ci before installing the LaunchAgents." >&2
+  exit 1
+fi
+
 if ! grep -Fxq \
   'WEB_APP_URL=http://127.0.0.1:4310/codex-experiment' \
   "${worker_env}"; then
@@ -91,8 +103,49 @@ if ! grep -Fxq \
   exit 1
 fi
 
-mkdir -p "${launch_dir}" "${log_dir}"
-chmod 0700 "${log_dir}"
+mkdir -p "${launch_dir}" "${log_dir}" "${runtime_root}"
+chmod 0700 "${log_dir}" "${runtime_root}"
+
+runtime_staging="$(mktemp -d "${runtime_root}/.runtime-new.XXXXXX")"
+cleanup_runtime_staging() {
+  case "${runtime_staging}" in
+    "${runtime_root}"/.runtime-new.*)
+      if [[ -d "${runtime_staging}" ]]; then
+        rm -rf -- "${runtime_staging}"
+      fi
+      ;;
+  esac
+}
+trap cleanup_runtime_staging EXIT
+
+for relative_path in \
+  package.json \
+  package-lock.json \
+  tsconfig.json \
+  next-env.d.ts \
+  worker \
+  src \
+  .codex \
+  node_modules; do
+  ditto \
+    "${project_dir}/${relative_path}" \
+    "${runtime_staging}/${relative_path}"
+done
+install -m 0755 \
+  "${script_dir}/run-worker.sh" \
+  "${runtime_staging}/run-worker.sh"
+install -m 0755 \
+  "${script_dir}/rotate-worker-logs.sh" \
+  "${runtime_staging}/rotate-worker-logs.sh"
+install -m 0600 "${worker_env}" "${runtime_staging}/.env.worker.local"
+
+if [[ -d "${runtime_dir}" ]]; then
+  runtime_backup="${runtime_root}/runtime.before-$(date -u '+%Y%m%dT%H%M%SZ')-$$"
+  mv "${runtime_dir}" "${runtime_backup}"
+fi
+mv "${runtime_staging}" "${runtime_dir}"
+trap - EXIT
+
 for log_name in \
   worker.stdout.log \
   worker.stderr.log \
@@ -110,6 +163,8 @@ escaped_project_dir="$(escape_sed_replacement "${project_dir}")"
 escaped_node_bin="$(escape_sed_replacement "${node_bin}")"
 escaped_ssh_key="$(escape_sed_replacement "${ssh_key}")"
 escaped_ssh_target="$(escape_sed_replacement "${ssh_target}")"
+escaped_log_dir="$(escape_sed_replacement "${log_dir}")"
+escaped_runtime_dir="$(escape_sed_replacement "${runtime_dir}")"
 
 render_plist() {
   local template_name="$1"
@@ -122,6 +177,8 @@ render_plist() {
     -e "s/__NODE_BIN__/${escaped_node_bin}/g" \
     -e "s/__SSH_KEY__/${escaped_ssh_key}/g" \
     -e "s/__SSH_TARGET__/${escaped_ssh_target}/g" \
+    -e "s/__LOG_DIR__/${escaped_log_dir}/g" \
+    -e "s/__RUNTIME_DIR__/${escaped_runtime_dir}/g" \
     "${script_dir}/${template_name}" > "${temporary_path}"
   plutil -lint "${temporary_path}" >/dev/null
 
