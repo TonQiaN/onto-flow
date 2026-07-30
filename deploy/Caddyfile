@@ -10,6 +10,9 @@
 		@root path /
 		redir @root /codex-experiment 307
 
+		@worker_api path /codex-experiment/api/worker /codex-experiment/api/worker/*
+		respond @worker_api 404
+
 		@experiment path /codex-experiment /codex-experiment/*
 		reverse_proxy @experiment web:3000 {
 			header_up X-Real-IP {remote_host}

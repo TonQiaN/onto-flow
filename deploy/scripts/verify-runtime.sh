@@ -86,7 +86,7 @@ curl --fail --silent --show-error \
   | grep -q '"ok":true'
 
 for _ in {1..30}; do
-  if curl --fail --silent --show-error \
+  if curl --fail --silent --show-error --connect-timeout 3 --max-time 8 \
     "https://${public_host}/codex-experiment/api/health" \
     | grep -q '"ok":true'; then
     public_ready=true
@@ -99,12 +99,39 @@ if [[ "${public_ready:-false}" != "true" ]]; then
   exit 1
 fi
 
-unauthenticated_status="$(
-  curl --silent --output /dev/null --write-out '%{http_code}' \
+read -r unauthenticated_status unauthenticated_redirect < <(
+  curl --silent --show-error --connect-timeout 3 --max-time 8 \
+    --output /dev/null --write-out '%{http_code} %{redirect_url}\n' \
     "https://${public_host}/codex-experiment/console"
-)"
-if [[ "${unauthenticated_status}" != "307" ]]; then
+)
+expected_login_url="https://${public_host}/codex-experiment/login"
+if [[ "${unauthenticated_status}" != "307" \
+  || "${unauthenticated_redirect}" != "${expected_login_url}" ]]; then
   echo "Unauthenticated console did not redirect to login." >&2
+  exit 1
+fi
+
+origin_status="$(
+  curl --silent --show-error --connect-timeout 3 --max-time 8 \
+    --output /dev/null --write-out '%{http_code}' \
+    --request POST \
+    --header "Origin: https://${public_host}" \
+    --header 'Content-Type: application/json' \
+    --data '{}' \
+    "https://${public_host}/codex-experiment/api/auth/login"
+)"
+if [[ "${origin_status}" != "400" ]]; then
+  echo "Public login origin validation failed with status ${origin_status}." >&2
+  exit 1
+fi
+
+worker_api_status="$(
+  curl --silent --show-error --connect-timeout 3 --max-time 8 \
+    --output /dev/null --write-out '%{http_code}' \
+    "https://${public_host}/codex-experiment/api/worker/claim"
+)"
+if [[ "${worker_api_status}" != "404" ]]; then
+  echo "Worker API is unexpectedly reachable through the public edge." >&2
   exit 1
 fi
 

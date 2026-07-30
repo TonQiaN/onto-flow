@@ -151,15 +151,22 @@ sudo docker compose \
   --project-name codex-sdk-experiment \
   --env-file ../config/compose.env \
   --file docker-compose.yml \
-  up --detach --no-build web edge
+  up --detach --no-build web
+sudo docker compose \
+  --project-name codex-sdk-experiment \
+  --env-file ../config/compose.env \
+  --file docker-compose.yml \
+  up --detach --no-build --force-recreate --no-deps edge
 sudo deploy/scripts/verify-runtime.sh
 ```
 
 For an application-only rollback, restore the previous image reference in
-`compose.env` and run the same `up --detach --no-build web` command. If a
-release changed persistent data incompatibly, restore the backup that was
-created immediately before that release; see
-[BACKUP_RESTORE.md](BACKUP_RESTORE.md).
+`compose.env` and run the web command above. If the rollback also changes
+`deploy/Caddyfile`, run the force-recreate edge command so Caddy loads the
+restored bind-mounted configuration. A normal `compose up` does not reload
+changed Caddyfile contents in an already-running container. If a release
+changed persistent data incompatibly, restore the backup that was created
+immediately before that release; see [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 
 ## macOS SSH tunnel and GUI worker
 
