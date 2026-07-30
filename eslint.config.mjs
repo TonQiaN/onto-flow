@@ -10,6 +10,7 @@ export default defineConfig([
     ".data/**",
     "node_modules/**",
     "output/**",
+    "sites-app/dist/**",
     "next-env.d.ts",
   ]),
 ]);

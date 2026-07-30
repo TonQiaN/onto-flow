@@ -15,7 +15,8 @@ test("ships the authenticated recipient console", async () => {
   assert.match(page, /"付方圆", "成雨函"/);
   assert.match(page, /不要重复提交/);
   assert.match(layout, /WeLink Message Lab/);
-  assert.match(layout, /\/og\.png/);
+  assert.match(layout, /\/og-v2\.png/);
+  assert.match(layout, /summary_large_image/);
 });
 
 test("preserves D1 queue safety and private R2 evidence", async () => {
@@ -32,5 +33,8 @@ test("preserves D1 queue safety and private R2 evidence", async () => {
   assert.match(route, /Cache-Control": "private, no-store"/);
   assert.match(migration, /message_jobs_single_active_idx/);
   assert.match(migration, /manual_review/);
-  assert.deepEqual(JSON.parse(hosting), { d1: "DB", r2: "SCREENSHOTS" });
+  const hostingConfig = JSON.parse(hosting);
+  assert.equal(hostingConfig.d1, "DB");
+  assert.equal(hostingConfig.r2, "SCREENSHOTS");
+  assert.match(hostingConfig.project_id, /^appgprj_/);
 });
