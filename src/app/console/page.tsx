@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 export default async function ConsolePage() {
   const session = await getAdminSession();
   const basePath = normalizedBasePath();
-  if (!session) redirect(`${basePath}/login`);
+  if (!session) redirect("/login");
 
   return (
     <Dashboard

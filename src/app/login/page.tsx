@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function LoginPage() {
   const session = await getAdminSession();
   const basePath = normalizedBasePath();
-  if (session) redirect(`${basePath}/console`);
+  if (session) redirect("/console");
 
   return (
     <main className="login-shell">
