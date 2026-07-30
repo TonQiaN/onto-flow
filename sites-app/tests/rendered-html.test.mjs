@@ -28,6 +28,8 @@ test("preserves D1 queue safety and private R2 evidence", async () => {
 
   assert.match(route, /HttpOnly; Secure; SameSite=Strict/);
   assert.match(route, /WORKER_TOKEN_SHA256/);
+  assert.match(route, /const jobId = parts\[1\] === "jobs" \? parts\[2\] : ""/);
+  assert.match(route, /const action = parts\[3\]/);
   assert.match(route, /发送结果不确定，已停止自动重试/);
   assert.match(route, /SCREENSHOTS\.put/);
   assert.match(route, /Cache-Control": "private, no-store"/);

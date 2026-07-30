@@ -480,8 +480,8 @@ export async function POST(request: Request, context: Context) {
     return json({ job: publicJob((await getJob(queued.id))!), leaseToken });
   }
 
-  const jobId = parts[2] === "jobs" ? parts[3] : "";
-  const action = parts[4];
+  const jobId = parts[1] === "jobs" ? parts[2] : "";
+  const action = parts[3];
   if (!jobId || !action) return json({ error: "Not found." }, 404);
 
   if (action === "result") {
