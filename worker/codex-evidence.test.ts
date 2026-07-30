@@ -18,7 +18,7 @@ function strictCode(id = jobId) {
     await sky.click({app:"${appName}",x:942,y:742});
     var finalState_${suffix}=await sky.get_app_state({app:"${appName}",disableDiff:true});
     nodeRepl.write("FINAL_SCREENSHOT:${id}");
-    await nodeRepl.emitImage({bytes:await finalFs_${suffix}.readFile(finalUrl_${suffix}.fileURLToPath(finalState_${suffix}.screenshot.url)),mimeType:"image/jpeg"});
+    await nodeRepl.emitImage(await finalFs_${suffix}.readFile(finalUrl_${suffix}.fileURLToPath(finalState_${suffix}.screenshot.url)));
   `;
 }
 
@@ -67,6 +67,18 @@ describe("Codex Computer Use evidence", () => {
       isStrictFinalSendCall(
         { code: strictCode() },
         "a3b7b301-31ad-4652-9691-d3d7642f251e",
+        appName,
+      ),
+    ).toBe(false);
+    expect(
+      isStrictFinalSendCall(
+        {
+          code: strictCode().replace(
+            `await nodeRepl.emitImage(await finalFs_${finalEvidenceVariableSuffix(jobId)}.readFile(finalUrl_${finalEvidenceVariableSuffix(jobId)}.fileURLToPath(finalState_${finalEvidenceVariableSuffix(jobId)}.screenshot.url)));`,
+            `await nodeRepl.emitImage({bytes:await finalFs_${finalEvidenceVariableSuffix(jobId)}.readFile(finalUrl_${finalEvidenceVariableSuffix(jobId)}.fileURLToPath(finalState_${finalEvidenceVariableSuffix(jobId)}.screenshot.url)),mimeType:"image/png"});`,
+          ),
+        },
+        jobId,
         appName,
       ),
     ).toBe(false);

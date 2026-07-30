@@ -218,12 +218,7 @@ describe("message job state machine", () => {
     });
   });
 
-  it.each([
-    ["sent", "succeeded", "job.manual_resolved_sent"],
-    ["not_sent", "failed", "job.manual_resolved_not_sent"],
-  ] as const)(
-    "lets an admin terminate manual review as %s without requeueing",
-    (resolution, expectedStatus, expectedEvent) => {
+  it("lets an admin terminate manual review as not sent without requeueing", () => {
       const job = createJob({
         userId,
         recipient: "付方圆",
@@ -244,10 +239,10 @@ describe("message job state machine", () => {
       const resolved = resolveManualReview({
         jobId: job.id,
         userId,
-        resolution,
+        resolution: "not_sent",
       });
       expect(resolved).toMatchObject({
-        status: expectedStatus,
+        status: "failed",
         resultSummary: expect.stringContaining("不会"),
         errorMessage: null,
       });
@@ -258,15 +253,19 @@ describe("message job state machine", () => {
              FROM audit_events
              WHERE job_id = ? AND event_type = ?`,
           )
-          .get(job.id, expectedEvent),
+          .get(job.id, "job.manual_resolved_not_sent"),
       ).toEqual({
         actor_type: "user",
         actor_id: userId,
-        event_type: expectedEvent,
-        metadata_json: JSON.stringify({ resolution }),
+        event_type: "job.manual_resolved_not_sent",
+        metadata_json: JSON.stringify({ resolution: "not_sent" }),
       });
       expect(
-        resolveManualReview({ jobId: job.id, userId, resolution }),
+        resolveManualReview({
+          jobId: job.id,
+          userId,
+          resolution: "not_sent",
+        }),
       ).toBeNull();
       expect(claimNextJob("mac-2")).toBeNull();
       expect(
@@ -274,8 +273,57 @@ describe("message job state machine", () => {
           .prepare("SELECT COUNT(*) AS count FROM message_jobs")
           .get(),
       ).toEqual({ count: 1 });
-    },
-  );
+  });
+
+  it("records a sanitized screenshot when manual review is resolved as sent", () => {
+    const job = createJob({
+      userId,
+      recipient: "付方圆",
+      message: "这是一条测试消息",
+    });
+    const claim = claimNextJob("mac-1")!;
+    startSending(job.id, "mac-1", claim.leaseToken);
+    failJob({
+      jobId: job.id,
+      workerId: "mac-1",
+      leaseToken: claim.leaseToken,
+      certainty: "uncertain",
+      error: "Send result could not be verified.",
+    });
+
+    const screenshot = {
+      filename: `${job.id}.abcdefghijklmnop.jpg`,
+      mime: "image/jpeg" as const,
+      digest: "b".repeat(64),
+    };
+    expect(
+      resolveManualReview({
+        jobId: job.id,
+        userId,
+        resolution: "sent",
+        screenshot,
+      }),
+    ).toMatchObject({
+      status: "succeeded",
+      screenshotFilename: screenshot.filename,
+      screenshotMime: screenshot.mime,
+      screenshotSha256: screenshot.digest,
+      resultSummary: expect.stringContaining("独立截图证据"),
+    });
+    expect(
+      database
+        .prepare(
+          `SELECT metadata_json FROM audit_events
+           WHERE job_id = ? AND event_type = 'job.manual_resolved_sent'`,
+        )
+        .get(job.id),
+    ).toEqual({
+      metadata_json: JSON.stringify({
+        resolution: "sent",
+        screenshotSha256: screenshot.digest,
+      }),
+    });
+  });
 
   it("refreshes worker presence only when a heartbeat renews the lease", () => {
     const job = createJob({

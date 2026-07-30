@@ -18,9 +18,15 @@ export const createMessageSchema = z.object({
     .refine((value) => !/[\r\n]/.test(value), "Message must be single-line."),
 });
 
-export const manualReviewResolutionSchema = z.object({
-  resolution: z.enum(["sent", "not_sent"]),
-});
+export const manualReviewResolutionSchema = z.discriminatedUnion("resolution", [
+  z.object({
+    resolution: z.literal("sent"),
+    screenshotDataUrl: z.string().min(1).max(12_000_000),
+  }),
+  z.object({
+    resolution: z.literal("not_sent"),
+  }),
+]);
 
 export const workerIdentitySchema = z.object({
   workerId: z

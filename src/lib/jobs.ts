@@ -544,18 +544,36 @@ export function failJob(input: {
 
 export type ManualReviewResolution = "sent" | "not_sent";
 
-export function resolveManualReview(input: {
+type ManualReviewScreenshot = {
+  filename: string;
+  mime: "image/png" | "image/jpeg";
+  digest: string;
+};
+
+type ManualReviewInput = {
   jobId: string;
   userId: string;
-  resolution: ManualReviewResolution;
-}): MessageJob | null {
+} & (
+  | {
+      resolution: "sent";
+      screenshot: ManualReviewScreenshot;
+    }
+  | {
+      resolution: "not_sent";
+      screenshot?: never;
+    }
+);
+
+export function resolveManualReview(input: ManualReviewInput): MessageJob | null {
   const database = getDb();
   const now = Date.now();
   const status: JobStatus =
     input.resolution === "sent" ? "succeeded" : "failed";
+  const screenshot =
+    input.resolution === "sent" ? input.screenshot : undefined;
   const summary =
     input.resolution === "sent"
-      ? "管理员人工核对：消息已发送。任务已终结，不会触发补发。"
+      ? "管理员人工核对：消息已发送，并补录了独立截图证据。任务已终结，不会触发补发。"
       : "管理员人工核对：消息未发送。任务已终结，不会自动补发。";
 
   const transaction = database.transaction(() => {
@@ -565,13 +583,25 @@ export function resolveManualReview(input: {
          SET status = ?,
              lease_token_hash = NULL,
              lease_until = NULL,
+             screenshot_filename = ?,
+             screenshot_mime = ?,
+             screenshot_sha256 = ?,
              result_summary = ?,
              error_message = NULL,
              updated_at = ?,
              completed_at = ?
          WHERE id = ? AND status = 'manual_review'`,
       )
-      .run(status, summary, now, now, input.jobId);
+      .run(
+        status,
+        screenshot?.filename ?? null,
+        screenshot?.mime ?? null,
+        screenshot?.digest ?? null,
+        summary,
+        now,
+        now,
+        input.jobId,
+      );
     if (result.changes !== 1) return null;
 
     recordAudit(
@@ -580,7 +610,12 @@ export function resolveManualReview(input: {
       input.userId,
       `job.manual_resolved_${input.resolution}`,
       input.jobId,
-      { resolution: input.resolution },
+      {
+        resolution: input.resolution,
+        ...(screenshot
+          ? { screenshotSha256: screenshot.digest }
+          : {}),
+      },
     );
     return getJob(input.jobId);
   });

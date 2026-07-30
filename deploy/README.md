@@ -237,4 +237,7 @@ Also verify from a separate network that `TENCENT_PUBLIC_IP:4310` is
 unreachable. UI acceptance must use the in-app Browser plugin. A message test
 is accepted only when the queued job reaches success and a fresh WeLink
 screenshot visibly shows the exact recipient and message. An uncertain send
-must remain for manual review and must never be retried automatically.
+must remain for manual review and must never be retried automatically. After
+an independent WeLink check, resolving it as sent requires uploading that fresh
+PNG/JPEG evidence; the server decodes, bounds, strips metadata from, and
+re-encodes the image before attaching it to the terminal job.

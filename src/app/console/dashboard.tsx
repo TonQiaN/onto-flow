@@ -11,6 +11,19 @@ type WorkerSummary = {
 };
 
 type ManualReviewResolution = "sent" | "not_sent";
+const maximumManualScreenshotBytes = 8 * 1024 * 1024;
+
+function fileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Unable to read screenshot."));
+    reader.onload = () =>
+      typeof reader.result === "string"
+        ? resolve(reader.result)
+        : reject(new Error("Unable to read screenshot."));
+    reader.readAsDataURL(file);
+  });
+}
 
 const statusLabels: Record<PublicJob["status"], string> = {
   queued: "等待执行",
@@ -46,6 +59,9 @@ export function Dashboard({
   const [reviewing, setReviewing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [resolvingJobId, setResolvingJobId] = useState<string | null>(null);
+  const [manualEvidenceFiles, setManualEvidenceFiles] = useState<
+    Record<string, File | undefined>
+  >({});
   const [error, setError] = useState("");
   const [resolutionError, setResolutionError] = useState("");
 
@@ -125,6 +141,19 @@ export function Dashboard({
     job: PublicJob,
     resolution: ManualReviewResolution,
   ) {
+    const evidenceFile = manualEvidenceFiles[job.id];
+    if (
+      resolution === "sent" &&
+      (!evidenceFile ||
+        !["image/png", "image/jpeg"].includes(evidenceFile.type) ||
+        evidenceFile.size === 0 ||
+        evidenceFile.size > maximumManualScreenshotBytes)
+    ) {
+      setResolutionError(
+        "核对为已发送前，请选择一张不超过 8 MB 的 PNG 或 JPEG 独立截图。",
+      );
+      return;
+    }
     const conclusion = resolution === "sent" ? "已发送" : "未发送";
     const confirmed = window.confirm(
       `确认已在 WeLink 中人工核对该任务为“${conclusion}”吗？此操作只会终结任务，不会重新入队或自动补发。`,
@@ -134,12 +163,20 @@ export function Dashboard({
     setResolvingJobId(job.id);
     setResolutionError("");
     try {
+      const screenshotDataUrl =
+        resolution === "sent" && evidenceFile
+          ? await fileAsDataUrl(evidenceFile)
+          : undefined;
       const response = await fetch(
         `${basePath}/api/tasks/${encodeURIComponent(job.id)}/resolve`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ resolution }),
+          body: JSON.stringify(
+            resolution === "sent"
+              ? { resolution, screenshotDataUrl }
+              : { resolution },
+          ),
         },
       );
       if (response.status === 401) {
@@ -159,6 +196,11 @@ export function Dashboard({
           currentJob.id === payload.job!.id ? payload.job! : currentJob,
         ),
       );
+      setManualEvidenceFiles((current) => {
+        const next = { ...current };
+        delete next[job.id];
+        return next;
+      });
     } catch {
       setResolutionError("暂时无法保存人工核对结论，请刷新后重试。");
     } finally {
@@ -284,7 +326,14 @@ export function Dashboard({
                 <JobCard
                   job={job}
                   key={job.id}
+                  evidenceFile={manualEvidenceFiles[job.id]}
                   resolving={resolvingJobId === job.id}
+                  onEvidenceChange={(file) =>
+                    setManualEvidenceFiles((current) => ({
+                      ...current,
+                      [job.id]: file,
+                    }))
+                  }
                   onResolve={resolveManualReview}
                 />
               ))
@@ -370,11 +419,15 @@ function WorkerBadge({ worker }: { worker: WorkerSummary }) {
 
 function JobCard({
   job,
+  evidenceFile,
   resolving,
+  onEvidenceChange,
   onResolve,
 }: {
   job: PublicJob;
+  evidenceFile: File | undefined;
   resolving: boolean;
+  onEvidenceChange: (file: File | undefined) => void;
   onResolve: (
     job: PublicJob,
     resolution: ManualReviewResolution,
@@ -413,6 +466,18 @@ function JobCard({
           <p>
             请先在 WeLink 中人工核对实际结果。以下操作只记录结论并终结任务，不会发送或重试。
           </p>
+          <label className="manual-evidence-input">
+            <span>独立截图证据（核对为已发送时必填）</span>
+            <input
+              accept="image/png,image/jpeg"
+              disabled={resolving}
+              onChange={(event) =>
+                onEvidenceChange(event.currentTarget.files?.[0])
+              }
+              type="file"
+            />
+            {evidenceFile ? <small>{evidenceFile.name}</small> : null}
+          </label>
           <div>
             <button
               className="secondary-button"
@@ -439,7 +504,7 @@ function JobCard({
           <img src={job.screenshotUrl} alt={`${job.recipient} 的发送结果截图`} />
           <figcaption>
             <CheckIcon />
-            Computer Use 返回的发送后截图
+            Computer Use 发送后截图 / 人工复核证据
           </figcaption>
         </figure>
       ) : null}

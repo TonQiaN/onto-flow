@@ -715,6 +715,33 @@ select:focus {
   line-height: 1.5;
 }
 
+.manual-evidence-input {
+  display: grid;
+  gap: 0.35rem;
+  margin-top: 0.7rem;
+  color: #68491d;
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.manual-evidence-input input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #dfc998;
+  border-radius: 0.55rem;
+  color: var(--ink);
+  font: inherit;
+  background: white;
+}
+
+.manual-evidence-input small {
+  overflow: hidden;
+  color: #7c5419;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .manual-review-actions > div {
   display: grid;
   grid-template-columns: 1fr 1fr;

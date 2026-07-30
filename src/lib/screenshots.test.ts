@@ -13,6 +13,7 @@ import {
 } from "vitest";
 import { sha256 } from "@/lib/crypto";
 import {
+  decodeScreenshotDataUrl,
   detectScreenshotMime,
   persistScreenshot,
   resolveScreenshot,
@@ -60,6 +61,33 @@ describe("screenshot validation", () => {
     expect(
       detectScreenshotMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00])),
     ).toBe("image/jpeg");
+  });
+
+  it("decodes canonical data URLs and rejects declared MIME mismatches", async () => {
+    const jpeg = await sharp({
+      create: {
+        width: 2,
+        height: 2,
+        channels: 3,
+        background: "white",
+      },
+    })
+      .jpeg()
+      .toBuffer();
+
+    expect(
+      decodeScreenshotDataUrl(
+        `data:image/jpeg;base64,${jpeg.toString("base64")}`,
+      ),
+    ).toEqual(jpeg);
+    expect(() =>
+      decodeScreenshotDataUrl(
+        `data:image/png;base64,${jpeg.toString("base64")}`,
+      ),
+    ).toThrow("does not match");
+    expect(() =>
+      decodeScreenshotDataUrl("data:image/jpeg;base64,not canonical"),
+    ).toThrow("invalid");
   });
 
   it("rejects content that only claims to be an image", async () => {

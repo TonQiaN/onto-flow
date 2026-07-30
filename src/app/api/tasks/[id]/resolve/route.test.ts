@@ -11,14 +11,25 @@ import {
   startSending,
   touchWorker,
 } from "@/lib/jobs";
+import { persistScreenshot, removeScreenshot } from "@/lib/screenshots";
 import { POST } from "./route";
 
 vi.mock("@/lib/auth", () => ({
   getAdminSession: vi.fn(),
 }));
+vi.mock("@/lib/screenshots", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/lib/screenshots")>();
+  return {
+    ...original,
+    persistScreenshot: vi.fn(),
+    removeScreenshot: vi.fn(),
+  };
+});
 
 const userId = "00000000-0000-4000-8000-000000000001";
 const mockedGetAdminSession = vi.mocked(getAdminSession);
+const mockedPersistScreenshot = vi.mocked(persistScreenshot);
+const mockedRemoveScreenshot = vi.mocked(removeScreenshot);
 let database: Database.Database;
 
 beforeEach(() => {
@@ -47,6 +58,14 @@ beforeEach(() => {
   globalThis.__codexExperimentDb = database;
   touchWorker("mac-1", "test");
   mockedGetAdminSession.mockReset();
+  mockedPersistScreenshot.mockReset();
+  mockedRemoveScreenshot.mockReset();
+  mockedPersistScreenshot.mockResolvedValue({
+    filename:
+      "00000000-0000-4000-8000-000000000001.abcdefghijklmnop.jpg",
+    mime: "image/jpeg",
+    digest: "b".repeat(64),
+  });
 });
 
 afterEach(() => {
@@ -72,7 +91,11 @@ function createManualReviewJob() {
   return job;
 }
 
-function resolutionRequest(jobId: string, resolution: "sent" | "not_sent") {
+function resolutionRequest(
+  jobId: string,
+  resolution: "sent" | "not_sent",
+  screenshotDataUrl?: string,
+) {
   return new NextRequest(
     `http://localhost:3000/api/tasks/${jobId}/resolve`,
     {
@@ -81,7 +104,11 @@ function resolutionRequest(jobId: string, resolution: "sent" | "not_sent") {
         "Content-Type": "application/json",
         Origin: "http://localhost:3000",
       },
-      body: JSON.stringify({ resolution }),
+      body: JSON.stringify(
+        resolution === "sent"
+          ? { resolution, screenshotDataUrl }
+          : { resolution },
+      ),
     },
   );
 }
@@ -132,6 +159,45 @@ describe("manual review resolution API", () => {
       actor_type: "user",
       actor_id: userId,
       event_type: "job.manual_resolved_not_sent",
+    });
+  });
+
+  it("sanitizes and stores an independent screenshot for a sent conclusion", async () => {
+    const job = createManualReviewJob();
+    mockedGetAdminSession.mockResolvedValue({
+      userId,
+      username: "admin",
+      role: "admin",
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const response = await POST(
+      resolutionRequest(
+        job.id,
+        "sent",
+        `data:image/jpeg;base64,${Buffer.from([
+          0xff, 0xd8, 0xff, 0xd9,
+        ]).toString("base64")}`,
+      ),
+      {
+        params: Promise.resolve({ id: job.id }),
+      },
+    );
+    const payload = (await response.json()) as {
+      job: {
+        status: string;
+        screenshotUrl: string | null;
+        resultSummary: string;
+      };
+    };
+
+    expect(response.status).toBe(200);
+    expect(mockedPersistScreenshot).toHaveBeenCalledOnce();
+    expect(mockedRemoveScreenshot).not.toHaveBeenCalled();
+    expect(payload.job).toMatchObject({
+      status: "succeeded",
+      screenshotUrl: expect.stringContaining(`/api/tasks/${job.id}/screenshot`),
+      resultSummary: expect.stringContaining("独立截图证据"),
     });
   });
 });

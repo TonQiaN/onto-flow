@@ -27,6 +27,24 @@ export function detectScreenshotMime(
   return null;
 }
 
+export function decodeScreenshotDataUrl(value: string): Buffer {
+  const match =
+    /^data:(image\/(?:png|jpeg));base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+  if (!match || match[2].length % 4 !== 0) {
+    throw new Error("Screenshot data URL is invalid.");
+  }
+
+  const buffer = Buffer.from(match[2], "base64");
+  if (
+    buffer.length === 0 ||
+    buffer.toString("base64") !== match[2] ||
+    detectScreenshotMime(buffer) !== match[1]
+  ) {
+    throw new Error("Screenshot data URL does not match its image type.");
+  }
+  return buffer;
+}
+
 export function screenshotDirectory(): string {
   return path.resolve(getServerConfig().DATA_DIR, "screenshots");
 }

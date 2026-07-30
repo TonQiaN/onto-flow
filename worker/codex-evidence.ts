@@ -57,7 +57,7 @@ export function isStrictFinalSendCall(
       `${whitespace}await\\s+sky\\.click\\(${whitespace}\\{${whitespace}app${whitespace}:${whitespace}${appLiteral}${whitespace},${whitespace}x${whitespace}:${whitespace}(\\d{1,5})${whitespace},${whitespace}y${whitespace}:${whitespace}(\\d{1,5})${whitespace}\\}${whitespace}\\)${whitespace};`,
       `${whitespace}var\\s+${stateVariable}${whitespace}=${whitespace}await\\s+sky\\.get_app_state\\(${whitespace}\\{${whitespace}app${whitespace}:${whitespace}${appLiteral}${whitespace},${whitespace}disableDiff${whitespace}:${whitespace}true${whitespace}\\}${whitespace}\\)${whitespace};`,
       `${whitespace}nodeRepl\\.write\\(${whitespace}${markerLiteral}${whitespace}\\)${whitespace};`,
-      `${whitespace}await\\s+nodeRepl\\.emitImage\\(${whitespace}\\{${whitespace}bytes${whitespace}:${whitespace}await\\s+${fsVariable}\\.readFile\\(${whitespace}${urlVariable}\\.fileURLToPath\\(${whitespace}${stateVariable}\\.screenshot\\.url${whitespace}\\)${whitespace}\\)${whitespace},${whitespace}mimeType${whitespace}:${whitespace}"image\\/(?:jpeg|png)"${whitespace}\\}${whitespace}\\)${whitespace};${whitespace}$`,
+      `${whitespace}await\\s+nodeRepl\\.emitImage\\(${whitespace}await\\s+${fsVariable}\\.readFile\\(${whitespace}${urlVariable}\\.fileURLToPath\\(${whitespace}${stateVariable}\\.screenshot\\.url${whitespace}\\)${whitespace}\\)${whitespace}\\)${whitespace};${whitespace}$`,
     ].join(""),
   );
   const match = pattern.exec(code);

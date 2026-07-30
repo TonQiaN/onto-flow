@@ -343,7 +343,7 @@ var finalUrl_${evidenceSuffix}=await import("node:url");
 await sky.click({app:${JSON.stringify(config.WELINK_APP_NAME)},x:<SEND_X>,y:<SEND_Y>});
 var finalState_${evidenceSuffix}=await sky.get_app_state({app:${JSON.stringify(config.WELINK_APP_NAME)},disableDiff:true});
 nodeRepl.write(${JSON.stringify(`FINAL_SCREENSHOT:${job.id}`)});
-await nodeRepl.emitImage({bytes:await finalFs_${evidenceSuffix}.readFile(finalUrl_${evidenceSuffix}.fileURLToPath(finalState_${evidenceSuffix}.screenshot.url)),mimeType:"image/jpeg"});
+await nodeRepl.emitImage(await finalFs_${evidenceSuffix}.readFile(finalUrl_${evidenceSuffix}.fileURLToPath(finalState_${evidenceSuffix}.screenshot.url)));
 `.trim();
   return `
 执行一个且仅一个已授权的 WeLink 发信任务。
@@ -382,9 +382,9 @@ ${jobData}
    - 在尝试发送前发现错误：status=not_sent。
 8. 在发送后的同一次 node_repl.js 调用中，获取包含当前会话标题与刚发送消息的
    最新完整截图。最后一次 node_repl.js 调用只允许包含下面六条语句，逐字保持
-   变量名、顺序、应用标识、marker、对象字段顺序和双引号；只把 <SEND_X> 与
-   <SEND_Y> 换成视觉确认后的 Send 按钮整数坐标。若截图 URL 实际为 PNG，只可把
-   最后一行的 image/jpeg 改为 image/png，不得作其他改动：
+   变量名、顺序、应用标识、marker 和双引号；只把 <SEND_X> 与 <SEND_Y> 换成
+   视觉确认后的 Send 按钮整数坐标，不得作其他改动。最后一行直接传入截图字节，
+   让 node_repl 从真实内容推断图片格式，不得自行声明 MIME：
 
 ${finalEvidenceCode}
 
