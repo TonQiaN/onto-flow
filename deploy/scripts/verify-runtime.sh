@@ -75,7 +75,7 @@ if [[ "${runtime_edge_image}" != "${configured_edge_image}" ]]; then
   exit 1
 fi
 
-edge_binding="$("${compose[@]}" port edge 443/tcp)"
+edge_binding="$("${compose[@]}" port edge 443)"
 if [[ "${edge_binding}" != "0.0.0.0:443" ]]; then
   echo "Unexpected HTTPS binding: ${edge_binding}" >&2
   exit 1
