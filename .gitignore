@@ -1,23 +1,15 @@
-# Dependencies and builds
 node_modules/
 .next/
-coverage/
-output/
-
-# Runtime data
+_reference/
 .data/
 data/
-*.sqlite
-*.sqlite-shm
-*.sqlite-wal
-
-# Secrets
-.env
-.env.*
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env*
 !.env.example
-!.env.worker.example
-
-# Local tooling
 .DS_Store
-*.log
-*.tsbuildinfo
+tsconfig.tsbuildinfo
+test-results/
+playwright-report/
