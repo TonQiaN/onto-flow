@@ -4,10 +4,15 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import {
+  asStatusFilter,
   durationText,
+  formatCost,
   formatDateTime,
+  formatTokens,
+  RUN_STATUS_FILTERS,
   toMillis,
   type RunListItem,
+  type RunStatus,
 } from "./lib";
 import { StatusBadge } from "./status-badge";
 
@@ -25,6 +30,7 @@ function RunsList() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const workflowId = searchParams.get("workflowId");
+  const status = asStatusFilter(searchParams.get("status"));
 
   const [rows, setRows] = useState<RunListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,10 +38,13 @@ function RunsList() {
   const load = useCallback(
     async (isCurrent: () => boolean = () => true) => {
       try {
-        const url = workflowId
-          ? `/api/runs?workflowId=${encodeURIComponent(workflowId)}`
-          : "/api/runs";
-        const res = await fetch(url, { cache: "no-store" });
+        const query = new URLSearchParams();
+        if (workflowId) query.set("workflowId", workflowId);
+        if (status) query.set("status", status);
+        const qs = query.toString();
+        const res = await fetch(`/api/runs${qs ? `?${qs}` : ""}`, {
+          cache: "no-store",
+        });
         const data = await res.json();
         if (!isCurrent()) return; // 筛选已切换，丢弃过期响应
         if (!res.ok) {
@@ -50,7 +59,7 @@ function RunsList() {
         if (isCurrent()) setError("网络错误，加载运行列表失败");
       }
     },
-    [workflowId],
+    [workflowId, status],
   );
 
   useEffect(() => {
@@ -68,6 +77,15 @@ function RunsList() {
     const timer = setInterval(() => void load(), 3000);
     return () => clearInterval(timer);
   }, [rows, load]);
+
+  // 状态筛选写进 URL（保留 workflowId），不滚动页面
+  const setStatus = (next: "" | RunStatus) => {
+    const query = new URLSearchParams();
+    if (workflowId) query.set("workflowId", workflowId);
+    if (next) query.set("status", next);
+    const qs = query.toString();
+    router.replace(`/runs${qs ? `?${qs}` : ""}`, { scroll: false });
+  };
 
   const filteredName =
     workflowId && rows && rows.length > 0 ? rows[0].workflowName : null;
@@ -90,6 +108,24 @@ function RunsList() {
         </button>
       </div>
 
+      <div className="mb-4 inline-flex rounded-lg border border-zinc-200 bg-white p-1">
+        {RUN_STATUS_FILTERS.map((f) => (
+          <button
+            key={f.value || "all"}
+            type="button"
+            onClick={() => setStatus(f.value)}
+            aria-pressed={status === f.value}
+            className={`rounded-md px-3 py-1 text-sm transition-colors ${
+              status === f.value
+                ? "bg-zinc-900 text-white"
+                : "text-zinc-600 hover:bg-zinc-100"
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {workflowId && (
         <div className="mb-4 flex items-center gap-3 rounded-lg border border-zinc-200 bg-white px-4 py-2.5 text-sm text-zinc-600">
           <span>
@@ -98,7 +134,7 @@ function RunsList() {
             的运行
           </span>
           <Link
-            href="/runs"
+            href={status ? `/runs?status=${status}` : "/runs"}
             className="text-zinc-400 underline transition-colors hover:text-zinc-900"
           >
             清除筛选
@@ -116,10 +152,14 @@ function RunsList() {
         !error && <div className="text-sm text-zinc-500">加载中…</div>
       ) : rows.length === 0 ? (
         <div className="rounded-lg border border-zinc-200 bg-white px-4 py-12 text-center text-sm text-zinc-500">
-          暂无运行记录
+          {status
+            ? `暂无${
+                RUN_STATUS_FILTERS.find((f) => f.value === status)?.label ?? ""
+              }的运行记录`
+            : "暂无运行记录"}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-zinc-200 bg-white">
+        <div className="overflow-x-auto rounded-lg border border-zinc-200 bg-white">
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-zinc-50 text-left text-xs text-zinc-500">
@@ -127,6 +167,8 @@ function RunsList() {
                 <th className="px-4 py-2.5 font-medium">状态</th>
                 <th className="px-4 py-2.5 font-medium">开始时间</th>
                 <th className="px-4 py-2.5 font-medium">耗时</th>
+                <th className="px-4 py-2.5 text-right font-medium">总 token</th>
+                <th className="px-4 py-2.5 text-right font-medium">总费用</th>
               </tr>
             </thead>
             <tbody>
@@ -149,6 +191,12 @@ function RunsList() {
                     </td>
                     <td className="px-4 py-3 text-zinc-600">
                       {durationText(row.startedAt, row.finishedAt)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono text-xs text-zinc-600">
+                      {formatTokens(row.totalTokens)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-mono text-xs text-zinc-600">
+                      {formatCost(row.totalCost)}
                     </td>
                   </tr>
                 );

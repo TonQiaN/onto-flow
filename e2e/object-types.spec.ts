@@ -16,7 +16,13 @@ test.describe("对象类型", () => {
         .locator("li")
         .filter({ has: page.getByRole("heading", { name, exact: true }) });
       await expect(row).toHaveCount(1);
-      await expect(row.getByText("内置", { exact: true })).toBeVisible();
+      // 「内置」徽章是静态 span；卡片上同名的标签徽章「类型/内置」是可点击 button，
+      // 两者文案相同，用 span 约束到真正的内置徽章。
+      const builtinBadge = row
+        .getByText("内置", { exact: true })
+        .and(page.locator("span"));
+      await expect(builtinBadge).toHaveCount(1);
+      await expect(builtinBadge).toBeVisible();
       await expect(row.getByRole("button", { name: "删除" })).toHaveCount(0);
       await expect(row.getByRole("button", { name: "编辑" })).toHaveCount(0);
     }
@@ -33,7 +39,8 @@ test.describe("对象类型", () => {
       page.getByRole("heading", { name: "新建对象类型" }),
     ).toBeVisible();
     await page.getByPlaceholder("如：需求文件、集采计划").fill(name);
-    await page.getByRole("combobox").selectOption("json");
+    // v2 顶部工具条也有一个 select（排序），按标签定位到抽屉里的「基础形态」
+    await page.getByLabel("基础形态").selectOption("json");
 
     // 非法 schema：被阻止，出现错误提示，弹层不关闭
     await page.getByPlaceholder(SCHEMA_PLACEHOLDER).fill("{这不是合法的 JSON");

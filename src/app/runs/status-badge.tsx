@@ -18,6 +18,12 @@ const STYLES: Record<
     badge: "border-red-200 bg-red-50 text-red-700",
     dot: "bg-red-500",
   },
+  cancelled: {
+    // 人为中止：灰色系，与失败的红色明确区分
+    label: "已取消",
+    badge: "border-zinc-300 bg-zinc-100 text-zinc-600",
+    dot: "bg-zinc-400",
+  },
   pending: {
     label: "等待中",
     badge: "border-zinc-200 bg-zinc-50 text-zinc-500",
@@ -51,6 +57,7 @@ export const STATUS_DOT: Record<string, string> = {
   running: "animate-pulse bg-blue-500",
   success: "bg-emerald-500",
   failed: "bg-red-500",
+  cancelled: "bg-zinc-400",
   pending: "bg-zinc-300",
   skipped: "bg-amber-400",
 };

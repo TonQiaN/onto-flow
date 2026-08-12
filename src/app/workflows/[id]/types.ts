@@ -3,10 +3,31 @@
  * 与 docs/DESIGN.md 的 API 契约（ActionDto / NodeDto / EdgeDto）严格一致。
  */
 import type { Edge, Node } from "@xyflow/react";
+import type { Tag } from "@/components/library";
 import type { ValidationIssue } from "@/lib/graph";
 
 export type PortKind = "text" | "file" | "json";
-export type RunNodeStatus = "pending" | "running" | "success" | "failed" | "skipped";
+export type ReasoningEffort = "low" | "medium" | "high" | "max";
+export type RunNodeStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export const EFFORT_LABEL: Record<ReasoningEffort, string> = {
+  low: "低",
+  medium: "中",
+  high: "高",
+  max: "最大",
+};
+
+export const KIND_LABEL: Record<PortKind, string> = {
+  text: "文本",
+  file: "文件",
+  json: "JSON",
+};
 
 export interface PortSnapshot {
   name: string;
@@ -28,10 +49,16 @@ export interface ActionDto {
   prompt: string;
   rule: string;
   modelId: string;
-  reasoningEffort: "low" | "medium" | "high" | "max";
+  reasoningEffort: ReasoningEffort;
   ports: ActionPortDto[];
   skillIds: string[];
   toolIds: string[];
+}
+
+/** 列表接口（DESIGN-V2 第一节信封）在 ActionDto 上追加的公共字段 */
+export interface ActionItem extends ActionDto {
+  tags: Tag[];
+  refCount: number;
 }
 
 export interface ObjectTypeRow {
@@ -41,6 +68,25 @@ export interface ObjectTypeRow {
   description: string;
   jsonSchema: string | null;
   builtin: boolean;
+}
+
+export interface ModelRow {
+  id: string;
+  providerId: string;
+  modelId: string;
+  displayName: string;
+}
+
+export interface SkillRow {
+  id: string;
+  name: string;
+  description: string;
+}
+
+export interface ToolRow {
+  id: string;
+  name: string;
+  description: string;
 }
 
 export interface NodeDto {
@@ -68,9 +114,20 @@ export interface WorkflowDetail {
   issues: ValidationIssue[];
 }
 
+/** 节点卡片上的只读展示信息，不参与持久化（`_` 前缀，toNodeDto 天然剥离） */
+export interface NodeMeta {
+  description: string;
+  modelName: string;
+  effort: ReasoningEffort;
+  refCount: number;
+  tagNames: string[];
+  /** Action 已被删除 / 引用失效 */
+  missing?: boolean;
+}
+
 /**
  * node.data 只放展示与引用数据（Dify 模式）：
- * 持久化字段走 toNodeDto 白名单；`_` 前缀为瞬态运行状态，保存时天然剥离。
+ * 持久化字段走 toNodeDto 白名单；`_` 前缀为瞬态字段，保存时天然剥离。
  */
 export type FlowNodeData = {
   kind: "action" | "input" | "output";
@@ -81,6 +138,8 @@ export type FlowNodeData = {
   outputs: PortSnapshot[];
   /** 瞬态：本次运行中该节点的状态（SSE snapshot 写入，保存时剥离） */
   _status?: RunNodeStatus;
+  /** 瞬态：卡片副信息（模型、思考强度、引用数…） */
+  _meta?: NodeMeta;
 };
 
 export type FlowNode = Node<FlowNodeData, "flowNode">;
@@ -111,13 +170,19 @@ export function typeColor(objectTypeId: string): string {
 
 /** Action 端口签名：「输入们 → 输出们」 */
 export function portSignature(action: ActionDto): string {
-  const ins = action.ports
-    .filter((p) => p.direction === "input")
-    .map((p) => p.name);
-  const outs = action.ports
-    .filter((p) => p.direction === "output")
-    .map((p) => p.name);
+  const ins = actionPorts(action, "input").map((p) => p.name);
+  const outs = actionPorts(action, "output").map((p) => p.name);
   return `${ins.join("、") || "无输入"} → ${outs.join("、") || "无输出"}`;
+}
+
+/** 按 position 排序后的某方向端口 */
+export function actionPorts(
+  action: ActionDto,
+  direction: "input" | "output",
+): ActionPortDto[] {
+  return action.ports
+    .filter((p) => p.direction === direction)
+    .sort((a, b) => a.position - b.position);
 }
 
 /** 保存序列化：只取白名单字段，`_` 前缀瞬态字段与 selected 等自动剥离 */
@@ -149,27 +214,88 @@ export function actionPortSnapshots(action: ActionDto): {
   outputs: PortSnapshot[];
 } {
   const pick = (direction: "input" | "output"): PortSnapshot[] =>
-    action.ports
-      .filter((p) => p.direction === direction)
-      .map((p) => ({
-        name: p.name,
-        objectTypeId: p.objectTypeId,
-        objectTypeName: p.objectTypeName,
-        kind: p.kind,
-      }));
+    actionPorts(action, direction).map((p) => ({
+      name: p.name,
+      objectTypeId: p.objectTypeId,
+      objectTypeName: p.objectTypeName,
+      kind: p.kind,
+    }));
   return { inputs: pick("input"), outputs: pick("output") };
+}
+
+/** Action → 节点卡片副信息 */
+export function actionMeta(
+  action: ActionItem | ActionDto,
+  modelById: Map<string, ModelRow>,
+): NodeMeta {
+  const meta = action as Partial<ActionItem>;
+  return {
+    description: action.description,
+    modelName: modelById.get(action.modelId)?.displayName ?? "未知模型",
+    effort: action.reasoningEffort,
+    refCount: meta.refCount ?? 0,
+    tagNames: (meta.tags ?? []).map((t) => t.name),
+  };
+}
+
+/** Action 被删除时的兜底节点副信息 */
+export function missingMeta(): NodeMeta {
+  return {
+    description: "",
+    modelName: "—",
+    effort: "max",
+    refCount: 0,
+    tagNames: [],
+    missing: true,
+  };
+}
+
+/** 用最新的 Action 定义刷新单个节点的 data（端口、标题、副信息一起更新） */
+export function applyActionToNode(
+  node: FlowNode,
+  action: ActionDto,
+  modelById: Map<string, ModelRow>,
+): FlowNode {
+  const ports = actionPortSnapshots(action);
+  return {
+    ...node,
+    data: {
+      ...node.data,
+      actionId: action.id,
+      label: action.name,
+      inputs: ports.inputs,
+      outputs: ports.outputs,
+      _meta: actionMeta(action, modelById),
+    },
+  };
+}
+
+/** 丢弃指向已不存在端口的连线（Action 端口改名/删除后遗留） */
+export function pruneEdges(nodes: FlowNode[], edges: Edge[]): Edge[] {
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  return edges.filter((e) => {
+    const source = nodeById.get(e.source);
+    const target = nodeById.get(e.target);
+    if (!source || !target) return false;
+    return (
+      source.data.outputs.some((p) => p.name === (e.sourceHandle ?? "value")) &&
+      target.data.inputs.some((p) => p.name === (e.targetHandle ?? "value"))
+    );
+  });
 }
 
 /** 加载：NodeDto[] + Action/ObjectType 快照 → React Flow 节点 */
 export function buildFlowNodes(
   dtos: NodeDto[],
-  actionById: Map<string, ActionDto>,
+  actionById: Map<string, ActionItem>,
   typeById: Map<string, ObjectTypeRow>,
+  modelById: Map<string, ModelRow>,
 ): FlowNode[] {
   return dtos.map((dto) => {
     let inputs: PortSnapshot[] = [];
     let outputs: PortSnapshot[] = [];
     let label = dto.label;
+    let meta: NodeMeta | undefined;
 
     if (dto.kind === "action") {
       const action = dto.actionId ? actionById.get(dto.actionId) : undefined;
@@ -178,8 +304,10 @@ export function buildFlowNodes(
         const ports = actionPortSnapshots(action);
         inputs = ports.inputs;
         outputs = ports.outputs;
+        meta = actionMeta(action, modelById);
       } else {
         label = dto.label || "（Action 已删除）";
+        meta = missingMeta();
       }
     } else {
       const type = dto.objectTypeId ? typeById.get(dto.objectTypeId) : undefined;
@@ -209,30 +337,22 @@ export function buildFlowNodes(
         label,
         inputs,
         outputs,
+        _meta: meta,
       },
     };
   });
 }
 
 export function buildFlowEdges(dtos: EdgeDto[], nodes: FlowNode[]): Edge[] {
-  const nodeById = new Map(nodes.map((n) => [n.id, n]));
-  // 丢弃引用了已不存在端口的失效边（Action 端口改名/删除后遗留）。
-  // 否则这些边在画布上不渲染也无法删除，却让服务端校验永久报错、阻塞运行。
-  return dtos
-    .filter((e) => {
-      const source = nodeById.get(e.sourceNodeId);
-      const target = nodeById.get(e.targetNodeId);
-      if (!source || !target) return false;
-      return (
-        source.data.outputs.some((p) => p.name === e.sourcePort) &&
-        target.data.inputs.some((p) => p.name === e.targetPort)
-      );
-    })
-    .map((e) => ({
+  // 失效边不渲染也无法删除，却让服务端校验永久报错、阻塞运行，所以直接丢弃。
+  return pruneEdges(
+    nodes,
+    dtos.map((e) => ({
       id: e.id,
       source: e.sourceNodeId,
       sourceHandle: e.sourcePort,
       target: e.targetNodeId,
       targetHandle: e.targetPort,
-    }));
+    })),
+  );
 }

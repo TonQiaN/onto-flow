@@ -856,7 +856,7 @@ const SEED_TAG_NAMES = [
   "能力/审核",
   "能力/归档",
   "类型/业务对象",
-  "类型/内置",
+  "类型/通用",
   "状态/已验证",
 ] as const;
 type SeedTagName = (typeof SEED_TAG_NAMES)[number];
@@ -888,9 +888,9 @@ assignTags("object_type", otRequirementPrompt, [tag("类型/业务对象")]);
 assignTags("object_type", otPlan, [tag("类型/业务对象"), tag("采购/集采")]);
 assignTags("object_type", otReview, [tag("类型/业务对象"), tag("采购/集采")]);
 assignTags("object_type", otReceipt, [tag("类型/业务对象")]);
-assignTags("object_type", otText, [tag("类型/内置")]);
-assignTags("object_type", otFile, [tag("类型/内置")]);
-assignTags("object_type", otJson, [tag("类型/内置")]);
+assignTags("object_type", otText, [tag("类型/通用")]);
+assignTags("object_type", otFile, [tag("类型/通用")]);
+assignTags("object_type", otJson, [tag("类型/通用")]);
 
 // ---------------------------------------------------------------------------
 // ⑨ 种子实体的第 1 版修订

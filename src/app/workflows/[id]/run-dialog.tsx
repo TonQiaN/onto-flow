@@ -4,9 +4,9 @@
  * 运行前的输入收集对话框：为每个输入节点按 Object Type kind 收集 PortValue。
  * text → textarea；json → textarea（提交前 JSON.parse 校验）；file → 上传（POST /api/uploads）。
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { PortValue } from "@/lib/values";
-import type { PortKind } from "./types";
+import { KIND_LABEL, type PortKind } from "./types";
 
 export interface RunInputSpec {
   nodeId: string;
@@ -93,15 +93,24 @@ export function RunDialog({
 
   const anyUploading = specs.some((s) => fields[s.nodeId]?.uploading);
 
+  // Esc 关闭（提交过程中不打断）
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !submitting) onCancel();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [submitting, onCancel]);
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      className="ff-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onClick={() => {
         if (!submitting) onCancel();
       }}
     >
       <div
-        className="max-h-[85vh] w-[32rem] overflow-auto rounded-lg border border-zinc-200 bg-white p-5 shadow-xl"
+        className="ff-rise-in max-h-[85vh] w-[32rem] overflow-auto rounded-lg border border-zinc-200 bg-white p-5 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="text-base font-semibold text-zinc-900">运行工作流</h2>
@@ -119,7 +128,7 @@ export function RunDialog({
                 <label className="block text-sm font-medium text-zinc-800">
                   {spec.label}
                   <span className="ml-1.5 text-xs font-normal text-zinc-400">
-                    {spec.typeName} · {spec.kind}
+                    {spec.typeName} · {KIND_LABEL[spec.kind]}
                   </span>
                 </label>
                 {spec.kind === "file" ? (

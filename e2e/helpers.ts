@@ -9,13 +9,16 @@ export async function cleanupByPrefix(
   listPath: string,
   prefix: string,
 ): Promise<void> {
-  const res = await request.get(listPath);
+  // v2 起列表 GET 返回信封 { items, total, page, pageSize }；按前缀搜索并放大页长，
+  // 保证一次拿全（MAX_PAGE_SIZE = 100）。
+  const res = await request.get(
+    `${listPath}?q=${encodeURIComponent(prefix)}&pageSize=100`,
+  );
   if (!res.ok()) return;
-  const rows = (await res.json()) as Array<{
-    id: string;
-    name: string;
-    builtin?: boolean;
-  }>;
+  const body = (await res.json()) as {
+    items?: Array<{ id: string; name: string; builtin?: boolean }>;
+  };
+  const rows = body.items ?? [];
   for (const row of rows) {
     if (row.builtin) continue;
     if (!row.name.startsWith(prefix)) continue;

@@ -2,18 +2,33 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   durationText,
+  formatCost,
   formatDateTime,
+  formatTokens,
   toMillis,
+  totalUsage,
+  type NodeStatus,
   type RunEventRow,
   type RunNodeRow,
   type RunRow,
 } from "../lib";
 import { StatusBadge } from "../status-badge";
+import { CancelButton } from "./cancel-button";
 import { EventLog } from "./event-log";
 import { NodeCard } from "./node-card";
+
+/** 节点状态计数的展示顺序与文案 */
+const NODE_STATUS_LABELS: Array<[NodeStatus, string]> = [
+  ["success", "成功"],
+  ["running", "运行中"],
+  ["pending", "等待中"],
+  ["failed", "失败"],
+  ["cancelled", "已取消"],
+  ["skipped", "已跳过"],
+];
 
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
@@ -107,6 +122,20 @@ export default function RunDetailPage() {
     };
   }, [id]);
 
+  // 取消成功后立刻拉一次，不等 SSE 下一轮轮询
+  const reload = useCallback(async () => {
+    if (!id) return;
+    try {
+      const res = await fetch(`/api/runs/${id}`, { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) return;
+      setRun(data.run as RunRow);
+      setNodes((data.nodes ?? []) as RunNodeRow[]);
+    } catch {
+      // 忽略：SSE 仍会推最新 snapshot
+    }
+  }, [id]);
+
   // 运行中每秒重渲染一次，让“已耗时”走动
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -130,6 +159,16 @@ export default function RunDetailPage() {
     () => new Map(nodes.map((n) => [n.nodeId, n.label])),
     [nodes],
   );
+
+  const usage = useMemo(() => totalUsage(nodes), [nodes]);
+
+  const statusCounts = useMemo(() => {
+    const counts = new Map<NodeStatus, number>();
+    for (const n of nodes) counts.set(n.status, (counts.get(n.status) ?? 0) + 1);
+    return NODE_STATUS_LABELS.filter(([s]) => (counts.get(s) ?? 0) > 0).map(
+      ([s, label]) => ({ status: s, label, count: counts.get(s) ?? 0 }),
+    );
+  }, [nodes]);
 
   const started = run ? toMillis(run.startedAt) : null;
   const finished = run ? toMillis(run.finishedAt) : null;
@@ -158,13 +197,23 @@ export default function RunDetailPage() {
           <div className="rounded-lg border border-zinc-200 bg-white p-5">
             <div className="flex flex-wrap items-center gap-3">
               <StatusBadge status={run.status} />
+              {run.workflowName && (
+                <span className="font-medium text-zinc-900">
+                  {run.workflowName}
+                </span>
+              )}
               <span className="font-mono text-xs text-zinc-400">{run.id}</span>
-              <Link
-                href={`/runs?workflowId=${encodeURIComponent(run.workflowId)}`}
-                className="ml-auto text-sm text-zinc-500 underline transition-colors hover:text-zinc-900"
-              >
-                查看该工作流的全部运行
-              </Link>
+              <div className="ml-auto flex items-center gap-4">
+                {run.status === "running" && id && (
+                  <CancelButton runId={id} onCancelled={() => void reload()} />
+                )}
+                <Link
+                  href={`/runs?workflowId=${encodeURIComponent(run.workflowId)}`}
+                  className="text-sm text-zinc-500 underline transition-colors hover:text-zinc-900"
+                >
+                  查看该工作流的全部运行
+                </Link>
+              </div>
             </div>
             <dl className="mt-4 grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
               <div>
@@ -183,6 +232,33 @@ export default function RunDetailPage() {
                 <dt className="text-xs text-zinc-400">耗时</dt>
                 <dd className="mt-0.5 text-zinc-700">
                   {durationText(run.startedAt, run.finishedAt)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-zinc-400">总 token</dt>
+                <dd className="mt-0.5 font-mono text-zinc-700">
+                  {formatTokens(usage.tokens)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-zinc-400">总费用</dt>
+                <dd className="mt-0.5 font-mono text-zinc-700">
+                  {formatCost(usage.cost)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-zinc-400">
+                  节点（共 {nodes.length}）
+                </dt>
+                <dd className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-zinc-700">
+                  {statusCounts.length === 0
+                    ? "—"
+                    : statusCounts.map((s) => (
+                        <span key={s.status} className="whitespace-nowrap">
+                          {s.label}
+                          <span className="ml-1 font-mono">{s.count}</span>
+                        </span>
+                      ))}
                 </dd>
               </div>
             </dl>
