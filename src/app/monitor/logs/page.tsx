@@ -3,9 +3,10 @@
 /**
  * 监控台 · 日志检索：跨运行检索 run_events。
  *
- * 数据来自 `/api/monitor/logs`（游标分页，cursor = 上一页最小 id）。该接口的 `type`
- * 是单值，而这里支持多选事件类型——多选时按类型并行拉取、各自持有游标，前端按 id
- * 倒序归并；这样过滤仍然发生在 SQL 里，不会出现「翻了十页才凑够几条」的情况。
+ * 数据来自 `/api/monitor/logs`（游标分页，cursor = 上一页最小 id）。多选事件类型时
+ * 把类型用逗号拼给接口（服务端走单条 SQL 的 in 过滤 + 单一游标）——**不要**退回成
+ * 「每类各开一条流再前端归并」：那样每条流各自分页、深度不一致，「已加载 N 条」与
+ * 翻页深度都会失真，让人误判某类事件不存在。
  *
  * 全部筛选条件写进 URL（?runId=&nodeId=&types=&q=&errors=1），检索结果可分享、可后退。
  */
@@ -39,13 +40,6 @@ const TYPE_CHIP: Record<string, string> = {
   "session.error": "border-red-500/40 text-red-300",
   "session.idle": "border-emerald-500/40 text-emerald-300",
 };
-
-interface Stream {
-  /** null = 不按类型过滤的单条流 */
-  type: string | null;
-  /** null = 该流已到底 */
-  cursor: number | null;
-}
 
 async function readError(res: Response): Promise<string> {
   try {
@@ -143,7 +137,8 @@ function LogsConsole() {
   const typesKey = types.join(",");
 
   const [rows, setRows] = useState<LogItem[] | null>(null);
-  const [streams, setStreams] = useState<Stream[]>([]);
+  /** 单一游标：null = 已到底 */
+  const [cursor, setCursor] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -155,39 +150,29 @@ function LogsConsole() {
 
   /** 用当前筛选条件拉一页；append=false 时重置结果 */
   const fetchPage = useCallback(
-    async (targets: Stream[], append: boolean) => {
+    async (nextCursor: number | null, append: boolean) => {
       const token = ++reqId.current;
       setLoading(true);
       try {
-        const results = await Promise.all(
-          targets.map(async (stream) => {
-            const query = new URLSearchParams();
-            if (runId) query.set("runId", runId);
-            if (nodeId) query.set("nodeId", nodeId);
-            if (stream.type) query.set("type", stream.type);
-            if (q) query.set("q", q);
-            if (onlyErrors) query.set("onlyErrors", "true");
-            query.set("limit", String(PAGE_SIZE));
-            if (stream.cursor != null) query.set("cursor", String(stream.cursor));
-            const res = await fetch(`/api/monitor/logs?${query.toString()}`, {
-              cache: "no-store",
-            });
-            if (!res.ok) throw new Error(await readError(res));
-            const payload = (await res.json()) as LogsPayload;
-            return { type: stream.type, payload };
-          }),
-        );
+        const query = new URLSearchParams();
+        if (runId) query.set("runId", runId);
+        if (nodeId) query.set("nodeId", nodeId);
+        // 多选类型交给服务端：单条 SQL in 过滤 + 单一游标
+        if (typesKey) query.set("type", typesKey);
+        if (q) query.set("q", q);
+        if (onlyErrors) query.set("onlyErrors", "true");
+        query.set("limit", String(PAGE_SIZE));
+        if (nextCursor != null) query.set("cursor", String(nextCursor));
+        const res = await fetch(`/api/monitor/logs?${query.toString()}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(await readError(res));
+        const payload = (await res.json()) as LogsPayload;
         if (token !== reqId.current) return; // 筛选已切换，丢弃过期响应
-        const incoming = results.flatMap((r) => r.payload.items);
-        setRows((prev) => mergeRows(append ? (prev ?? []) : [], incoming));
-        setStreams((prev) =>
-          append
-            ? prev.map((s) => {
-                const hit = results.find((r) => r.type === s.type);
-                return hit ? { type: s.type, cursor: hit.payload.nextCursor } : s;
-              })
-            : results.map((r) => ({ type: r.type, cursor: r.payload.nextCursor })),
+        setRows((prev) =>
+          mergeRows(append ? (prev ?? []) : [], payload.items),
         );
+        setCursor(payload.nextCursor);
         setError(null);
       } catch (err) {
         if (token !== reqId.current) return;
@@ -197,19 +182,15 @@ function LogsConsole() {
         if (token === reqId.current) setLoading(false);
       }
     },
-    [runId, nodeId, q, onlyErrors],
+    [runId, nodeId, typesKey, q, onlyErrors],
   );
 
-  // 筛选变化 → 重新开一组流
+  // 筛选变化 → 从头拉第一页
   useEffect(() => {
-    const initial: Stream[] =
-      typesKey.length > 0
-        ? typesKey.split(",").map((t) => ({ type: t, cursor: null }))
-        : [{ type: null, cursor: null }];
     setRows(null);
     setOpenId(null);
-    void fetchPage(initial, false);
-  }, [typesKey, fetchPage]);
+    void fetchPage(null, false);
+  }, [fetchPage]);
 
   // 运行下拉
   useEffect(() => {
@@ -274,7 +255,7 @@ function LogsConsole() {
     return () => clearTimeout(timer);
   }, [draftQ, q, setParams]);
 
-  const hasMore = streams.some((s) => s.cursor != null);
+  const hasMore = cursor != null;
   const list = rows ?? [];
   const filtered = Boolean(runId || nodeId || q || onlyErrors || typesKey);
 
@@ -286,9 +267,8 @@ function LogsConsole() {
   };
 
   const loadMore = () => {
-    const pending = streams.filter((s) => s.cursor != null);
-    if (pending.length === 0 || loading) return;
-    void fetchPage(pending, true);
+    if (cursor == null || loading) return;
+    void fetchPage(cursor, true);
   };
 
   const exportJson = () => {
@@ -380,11 +360,7 @@ function LogsConsole() {
             <button
               type="button"
               onClick={() => {
-                const initial: Stream[] =
-                  types.length > 0
-                    ? types.map((t) => ({ type: t, cursor: null }))
-                    : [{ type: null, cursor: null }];
-                void fetchPage(initial, false);
+                void fetchPage(null, false);
               }}
               className="rounded-md border border-zinc-800 px-2.5 py-1.5 text-[11px] text-zinc-300 transition-colors hover:bg-zinc-800"
             >
@@ -433,11 +409,7 @@ function LogsConsole() {
           message={error}
           onRetry={() => {
             setError(null);
-            const initial: Stream[] =
-              types.length > 0
-                ? types.map((t) => ({ type: t, cursor: null }))
-                : [{ type: null, cursor: null }];
-            void fetchPage(initial, false);
+            void fetchPage(null, false);
           }}
         />
       )}

@@ -113,10 +113,14 @@ test.describe("监控台 · 实时会话", () => {
     await expect(
       page.getByRole("heading", { name: "进行中的会话" }),
     ).toBeVisible();
-    // 连接活着（连接徽标显示「实时」）
-    await expect(page.getByText("实时", { exact: true })).toBeVisible({
+
+    // 连接活着：面板头里的连接徽标显示「实时 HH:MM:SS」，会话计数不再是加载态的「—」
+    const panelHeader = page.locator("header").filter({ hasText: "进行中的会话" });
+    await expect(panelHeader).toHaveCount(1);
+    await expect(panelHeader).toContainText(/实时\s*\d{1,2}:\d{2}:\d{2}/, {
       timeout: 15_000,
     });
+    await expect(panelHeader.getByText("—")).toHaveCount(0);
 
     // 收到 sessions 帧后，要么有行、要么是空态文案——都不能停在「等待实时数据…」
     const rows = page.locator("tbody tr");
@@ -153,8 +157,13 @@ test.describe("监控台 · Trace", () => {
     expect(count, "甘特图应至少有一条 span").toBeGreaterThan(0);
     await expect(page.getByText(`span（${count} 条）`)).toBeVisible();
 
-    // 摘要条上的 span / 节点计数与运行名
-    await expect(page.getByText("采购集采计划生成").first()).toBeVisible();
+    // 摘要条：运行名 + span/节点/耗时等字段（下拉 option 里的同名文本不算）
+    await expect(
+      page.getByText("采购集采计划生成").filter({ visible: true }).first(),
+    ).toBeVisible();
+    for (const field of ["开始", "总耗时", "span", "节点", "token", "费用"]) {
+      await expect(page.getByText(field, { exact: true }).first()).toBeVisible();
+    }
     // 链路里的节点名（工作流固定含该审核节点）
     await expect(
       page.getByTestId("trace-span-row").filter({ hasText: "集采计划审核" }),
