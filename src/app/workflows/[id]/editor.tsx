@@ -706,6 +706,29 @@ function EditorInner({ workflowId }: { workflowId: string }) {
     [workflowId, subscribeRun],
   );
 
+  // 挂载时重连进行中的运行：SSE snapshot 会全量回放状态，动画/跟随/运行条整套恢复。
+  // 没有它，离开画布再回来就只能去运行详情看时间线（多条并发时取最新一条）。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/runs?workflowId=${encodeURIComponent(workflowId)}&status=running`,
+          { cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const rows = (await res.json()) as Array<{ id?: string }>;
+        const runId = Array.isArray(rows) ? rows[0]?.id : undefined;
+        if (!cancelled && runId) subscribeRun(runId);
+      } catch {
+        // 重连失败不影响画布本身，静默即可
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [workflowId, subscribeRun]);
+
   // ---------- 键盘 ----------
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

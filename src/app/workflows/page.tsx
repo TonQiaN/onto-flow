@@ -56,6 +56,8 @@ function WorkflowsLibrary() {
   const [createBusy, setCreateBusy] = useState(false);
   const [detail, setDetail] = useState<WorkflowItem | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
+  /** 有进行中运行的工作流 id 集合（卡片「运行中」徽标；点卡片进画布会自动重连动画） */
+  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,9 +84,28 @@ function WorkflowsLibrary() {
     }
   }, [q, sort, page]);
 
+  /** 与列表同步刷新的运行中标记；失败静默（徽标缺失不影响列表本身） */
+  const loadRunning = useCallback(async () => {
+    try {
+      const res = await fetch("/api/runs?status=running", { cache: "no-store" });
+      if (!res.ok) return;
+      const rows = (await res.json()) as Array<{ workflowId?: string }>;
+      setRunningIds(
+        new Set(
+          (Array.isArray(rows) ? rows : [])
+            .map((r) => r.workflowId)
+            .filter((id): id is string => typeof id === "string"),
+        ),
+      );
+    } catch {
+      // 静默
+    }
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadRunning();
+  }, [load, loadRunning]);
 
   const items = data?.items ?? [];
 
@@ -207,9 +228,15 @@ function WorkflowsLibrary() {
               }`}
             >
               <div className="flex items-start justify-between gap-2">
-                <h2 className="truncate text-sm font-semibold text-zinc-900">
+                <h2 className="min-w-0 truncate text-sm font-semibold text-zinc-900">
                   {workflow.name}
                 </h2>
+                {runningIds.has(workflow.id) && (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                    运行中
+                  </span>
+                )}
                 <div
                   className="flex shrink-0 gap-1"
                   onClick={(e) => e.stopPropagation()}
