@@ -20,7 +20,7 @@ import {
  *
  * 归一规则 = writer 的 revisionPayload 字段集：
  * 只保留写入路径真正接受的字段，DTO 派生字段（ports.id/objectTypeName/kind、
- * tags/refCount）、行主键与时间戳、以及 workflow 的 issues 一律不属于定义。
+ * folder/refCount）、行主键与时间戳、以及 workflow 的 issues 一律不属于定义。
  * 两边都过同一个函数，diff 结果才等于「回滚后真正会变的东西」。
  */
 type Rec = Record<string, unknown>;

@@ -6,6 +6,7 @@ import {
   sqliteTable,
   text,
   uniqueIndex,
+  type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
 
 const id = () =>
@@ -23,7 +24,7 @@ const timestamps = {
     .$onUpdateFn(() => new Date()),
 };
 
-/** 五个库共用的实体种类（标签、修订、引用查询都按它区分） */
+/** 五个库共用的实体种类（修订、引用查询都按它区分） */
 export const ENTITY_KINDS = [
   "workflow",
   "action",
@@ -33,30 +34,45 @@ export const ENTITY_KINDS = [
 ] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 
-/**
- * 标签：跨全部库的分类维度，多归属（ADR-0003）。
- * name 可用 `/` 表达层级（`采购/集采`），UI 按层级渲染成可折叠树。
- */
-export const tags = sqliteTable("tags", {
-  id: id(),
-  name: text("name").notNull().unique(),
-  /** 树上的色点，留空则按名字哈希取色 */
-  color: text("color"),
-  ...timestamps,
-});
+/** 可进文件夹的四个库（workflow 明确不分类，ADR-0005） */
+export const FOLDER_ENTITY_KINDS = [
+  "action",
+  "skill",
+  "tool",
+  "object_type",
+] as const;
+export type FolderEntityKind = (typeof FOLDER_ENTITY_KINDS)[number];
 
-export const entityTags = sqliteTable(
-  "entity_tags",
+/**
+ * 文件夹：跨四个库共享的单归属流程树（ADR-0005，推翻 ADR-0003）。
+ * name 是单段名（不含 `/`），层级由 parentId 表达；同级同名由服务层拒绝
+ * （SQLite 唯一索引把 NULL 视作互不相等，root 层级无法用 DB 约束）。
+ */
+export const folders = sqliteTable(
+  "folders",
   {
-    entityKind: text("entity_kind", { enum: ENTITY_KINDS }).notNull(),
+    id: id(),
+    name: text("name").notNull(),
+    /** null = 根层级 */
+    parentId: text("parent_id").references((): AnySQLiteColumn => folders.id),
+    ...timestamps,
+  },
+  (t) => [index("folders_by_parent").on(t.parentId)],
+);
+
+/** 实体 → 文件夹的单归属指派；无行 = 未归类。故意不 cascade：删文件夹必须显式上移内容 */
+export const entityFolders = sqliteTable(
+  "entity_folders",
+  {
+    entityKind: text("entity_kind", { enum: FOLDER_ENTITY_KINDS }).notNull(),
     entityId: text("entity_id").notNull(),
-    tagId: text("tag_id")
+    folderId: text("folder_id")
       .notNull()
-      .references(() => tags.id, { onDelete: "cascade" }),
+      .references(() => folders.id),
   },
   (t) => [
-    primaryKey({ columns: [t.entityKind, t.entityId, t.tagId] }),
-    index("entity_tags_by_tag").on(t.tagId),
+    primaryKey({ columns: [t.entityKind, t.entityId] }),
+    index("entity_folders_by_folder").on(t.folderId),
   ],
 );
 

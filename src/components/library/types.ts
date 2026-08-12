@@ -58,15 +58,25 @@ export function isSortKey(v: string | null | undefined): v is SortKey {
   return SORT_OPTIONS.some((o) => o.value === v);
 }
 
-export interface Tag {
+/** GET /api/folders 的文件夹元素：扁平返回，树形由前端组装（ADR-0005） */
+export interface FolderDto {
   id: string;
   name: string;
-  color: string | null;
+  parentId: string | null;
 }
 
-/** GET /api/tags 的元素：带各库下的挂载计数 */
-export interface TagWithCounts extends Tag {
-  counts: Partial<Record<EntityKind, number>>;
+/** 实体卡片/编辑器上显示的归属：path = 根到本文件夹的 name 用 "/" 连接（如 "采购/集采"） */
+export interface FolderRef {
+  id: string;
+  name: string;
+  path: string;
+}
+
+/** GET /api/folders?kind=... 返回的本库实体叶子；folderId 为空 = 未归类 */
+export interface EntityLeaf {
+  id: string;
+  name: string;
+  folderId: string | null;
 }
 
 /** 通用列表信封（DESIGN-V2 第一节） */
@@ -77,9 +87,9 @@ export interface ListEnvelope<T> {
   pageSize: number;
 }
 
-/** 列表项在原有字段上追加的公共部分 */
+/** 列表项在原有字段上追加的公共部分（workflow 不分类，folder 恒为 null） */
 export interface WithLibraryMeta {
-  tags: Tag[];
+  folder: FolderRef | null;
   refCount: number;
 }
 
@@ -104,13 +114,17 @@ export interface RevisionDetail extends RevisionSummary {
   payload: Record<string, unknown>;
 }
 
-/** 标签集合发生变化（新建/指派）时广播，标签树据此刷新计数 */
-export const TAGS_CHANGED_EVENT = "flowforge:tags-changed";
+/** 文件夹结构或实体归属变化时广播：FolderTree 刷新，列表页重载 */
+export const FOLDERS_CHANGED_EVENT = "flowforge:folders-changed";
 
-export function notifyTagsChanged(): void {
+export function notifyFoldersChanged(): void {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent(TAGS_CHANGED_EVENT));
+  window.dispatchEvent(new CustomEvent(FOLDERS_CHANGED_EVENT));
 }
+
+/** 拖拽 MIME：实体 payload 是 JSON {kind, id}；文件夹 payload 是 folder id 字符串 */
+export const DND_ENTITY_MIME = "application/x-flowforge-entity";
+export const DND_FOLDER_MIME = "application/x-flowforge-folder";
 
 export async function readError(res: Response): Promise<string> {
   try {
@@ -127,38 +141,4 @@ export function formatTime(value: string | number | null | undefined): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString("zh-CN", { hour12: false });
-}
-
-/** 柔和色板：tag.color 为空时按名字哈希取稳定色 */
-const TAG_PALETTE = [
-  "#93c5fd",
-  "#a5b4fc",
-  "#c4b5fd",
-  "#f0abfc",
-  "#f9a8d4",
-  "#fca5a5",
-  "#fdba74",
-  "#fcd34d",
-  "#86efac",
-  "#5eead4",
-  "#7dd3fc",
-  "#d8b4fe",
-] as const;
-
-function hashString(s: string): number {
-  let h = 5381;
-  for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-
-/** 标签色点：显式 color 优先，否则按名字哈希取稳定柔和色 */
-export function tagColor(tag: { name: string; color?: string | null }): string {
-  if (tag.color && tag.color.trim()) return tag.color.trim();
-  return TAG_PALETTE[hashString(tag.name) % TAG_PALETTE.length]!;
-}
-
-/** 标签名末段（`采购/集采` → `集采`） */
-export function tagLeafName(name: string): string {
-  const parts = name.split("/");
-  return parts[parts.length - 1] ?? name;
 }

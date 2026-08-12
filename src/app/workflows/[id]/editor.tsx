@@ -633,7 +633,7 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   /** 复制为新 Action 并替换本节点：改指新实体后立刻保存整图 */
   const applyFork = useCallback(
     async (nodeId: string, created: ActionDto) => {
-      setActions((prev) => [...prev, { ...created, tags: [], refCount: 1 }]);
+      setActions((prev) => [...prev, { ...created, folder: null, refCount: 1 }]);
       const live = storeApi.getState();
       const nextNodes = live.nodes.map((n) =>
         n.id === nodeId ? applyActionToNode(n, created, modelById) : n,

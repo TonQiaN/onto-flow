@@ -11,7 +11,7 @@
  */
 import { useEffect, useState } from "react";
 import { ActionEditor } from "@/app/actions/action-editor";
-import { readError, type Tag } from "@/components/library";
+import { readError } from "@/components/library";
 import type {
   ActionDto,
   ActionItem,
@@ -87,13 +87,11 @@ export function ActionInspector({
     );
   }
 
-  const tags: Tag[] = target.action.tags;
-
   return (
     <>
       <ActionEditor
         initial={fresh}
-        initialTags={tags}
+        initialFolder={target.action.folder}
         refCount={target.action.refCount}
         models={models}
         objectTypes={objectTypes}
@@ -105,7 +103,7 @@ export function ActionInspector({
           onClose();
         }}
         onRefresh={() => {
-          /* 画布不维护列表分页，标签变化无需重拉 */
+          /* 画布不维护列表分页，归属变化无需重拉 */
         }}
         onFork={async (created) => {
           await onForked(target.nodeId, created);

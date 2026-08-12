@@ -1,12 +1,13 @@
 "use client";
 
 /**
- * 工作流列表页：左标签树 + 顶部搜索/排序/分页（状态同步 URL）+ 卡片网格。
+ * 工作流列表页：顶部搜索/排序/分页（状态同步 URL）+ 卡片网格。
+ * 工作流不参与文件夹分类（ADR-0005），所以没有左侧文件夹树。
  * 列表数据读 DESIGN-V2 第一节的信封响应 { items, total, page, pageSize }。
  * 工作流是顶层实体（refCount 恒为 0），卡片不显示引用计数，改显示节点数。
- * 卡片点开进画布；「信息」抽屉里改名称/描述/标签、看被引用与修订历史。
+ * 卡片点开进画布；「信息」抽屉里改名称/描述、看被引用与修订历史。
  */
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import {
   DEFAULT_PAGE_SIZE,
@@ -17,11 +18,6 @@ import {
   readError,
   ReferencesPanel,
   RevisionPanel,
-  type Tag,
-  tagColor,
-  TagPicker,
-  tagLeafName,
-  TagTree,
   useLibraryQuery,
   type WithLibraryMeta,
 } from "@/components/library";
@@ -34,6 +30,7 @@ interface WorkflowRow {
   updatedAt: string;
 }
 
+// 列表 API 返回的 folder 字段对工作流恒为 null，此处直接忽略
 type WorkflowItem = WorkflowRow & WithLibraryMeta;
 
 export default function WorkflowsPage() {
@@ -48,9 +45,8 @@ export default function WorkflowsPage() {
 
 function WorkflowsLibrary() {
   const router = useRouter();
-  const { q, tags, sort, page, setQ, setTags, setSort, setPage } =
+  const { q, sort, page, highlight, setQ, setSort, setPage } =
     useLibraryQuery();
-  const highlight = useSearchParams().get("highlight");
 
   const [data, setData] = useState<ListEnvelope<WorkflowItem> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,7 +62,6 @@ function WorkflowsLibrary() {
     setLoadError(null);
     const params = new URLSearchParams();
     if (q) params.set("q", q);
-    if (tags.length > 0) params.set("tags", tags.join(","));
     params.set("sort", sort);
     params.set("page", String(page));
     try {
@@ -85,7 +80,7 @@ function WorkflowsLibrary() {
     } finally {
       setLoading(false);
     }
-  }, [q, tags, sort, page]);
+  }, [q, sort, page]);
 
   useEffect(() => {
     void load();
@@ -158,14 +153,13 @@ function WorkflowsLibrary() {
     }
   }
 
-  const filtering = q !== "" || tags.length > 0;
+  const filtering = q !== "";
 
   return (
     <>
       <LibraryLayout
         title="工作流"
         subtitle="编排 Action 的 DAG，点击卡片进入画布编辑器。"
-        tree={<TagTree kind="workflow" selected={tags} onChange={setTags} />}
         toolbar={
           <LibraryToolbar
             q={q}
@@ -240,29 +234,6 @@ function WorkflowsLibrary() {
               <p className="mt-1 line-clamp-2 min-h-[1.25rem] text-xs text-zinc-500">
                 {workflow.description || "（无描述）"}
               </p>
-
-              {workflow.tags.length > 0 && (
-                <div
-                  className="mt-2 flex flex-wrap items-center gap-1"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  {workflow.tags.map((tag) => (
-                    <button
-                      key={tag.id}
-                      type="button"
-                      title={`按标签「${tag.name}」筛选`}
-                      onClick={() => setTags([tag.id])}
-                      className="inline-flex items-center gap-1 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 hover:border-zinc-400 hover:text-zinc-900"
-                    >
-                      <span
-                        className="h-1.5 w-1.5 rounded-full"
-                        style={{ backgroundColor: tagColor(tag) }}
-                      />
-                      {tagLeafName(tag.name)}
-                    </button>
-                  ))}
-                </div>
-              )}
 
               <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-400">
                 <span>节点数：{workflow.nodeCount}</span>
@@ -367,7 +338,6 @@ function WorkflowDrawer({
   const [tab, setTab] = useState<TabKey>("basic");
   const [name, setName] = useState(workflow.name);
   const [description, setDescription] = useState(workflow.description);
-  const [tags, setTags] = useState<Tag[]>(workflow.tags);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -489,20 +459,6 @@ function WorkflowDrawer({
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                 />
               </label>
-              <div>
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  标签
-                </span>
-                <TagPicker
-                  kind="workflow"
-                  entityId={workflow.id}
-                  value={tags}
-                  onChange={(next) => {
-                    setTags(next);
-                    onRefresh();
-                  }}
-                />
-              </div>
               <p className="text-xs text-zinc-400">
                 节点与连线在画布里编辑：
                 <button

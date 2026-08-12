@@ -6,12 +6,12 @@
  */
 import { useCallback, useState } from "react";
 import {
-  notifyTagsChanged,
+  FolderPicker,
+  type FolderRef,
+  notifyFoldersChanged,
   readError,
   ReferencesPanel,
   RevisionPanel,
-  type Tag,
-  TagPicker,
 } from "@/components/library";
 
 export type Kind = "text" | "file" | "json";
@@ -53,13 +53,14 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
 
 export function ObjectTypeEditor({
   initial,
-  initialTags,
+  initialFolder,
   onClose,
   onSaved,
   onRefresh,
 }: {
   initial: ObjectTypeRow | null;
-  initialTags: Tag[];
+  /** create 模式是页面传入的默认归属（当前选中文件夹），edit 模式是实体现有归属 */
+  initialFolder: FolderRef | null;
   onClose: () => void;
   onSaved: () => void;
   onRefresh: () => void;
@@ -69,7 +70,7 @@ export function ObjectTypeEditor({
   const [kind, setKind] = useState<Kind>(initial?.kind ?? "text");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [jsonSchema, setJsonSchema] = useState(initial?.jsonSchema ?? "");
-  const [tags, setTags] = useState<Tag[]>(initialTags);
+  const [folder, setFolder] = useState<FolderRef | null>(initialFolder);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -125,19 +126,20 @@ export function ObjectTypeEditor({
         setError(await readError(res));
         return;
       }
-      if (!initial && tags.length > 0) {
+      // 新建时实体此前无 id，归属只存在内存里，落库后补一次指派
+      if (!initial && folder) {
         const created = (await res.json()) as { id?: string };
         if (created?.id) {
-          await fetch("/api/tags/assign", {
+          await fetch("/api/folders/assign", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               entityKind: "object_type",
               entityId: created.id,
-              tagIds: tags.map((t) => t.id),
+              folderId: folder.id,
             }),
           });
-          notifyTagsChanged();
+          notifyFoldersChanged();
         }
       }
       onSaved();
@@ -229,20 +231,20 @@ export function ObjectTypeEditor({
               </label>
               <div>
                 <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  标签
+                  文件夹
                 </span>
-                <TagPicker
+                <FolderPicker
                   kind="object_type"
                   entityId={initial?.id ?? ""}
-                  value={tags}
+                  value={folder}
                   onChange={(next) => {
-                    setTags(next);
+                    setFolder(next);
                     if (initial) onRefresh();
                   }}
                 />
                 {!initial && (
                   <p className="mt-1 text-xs text-zinc-400">
-                    新建的对象类型保存后才会真正挂上标签。
+                    新建的对象类型保存后才会真正归入文件夹。
                   </p>
                 )}
               </div>

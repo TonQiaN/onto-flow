@@ -2,16 +2,16 @@
 
 /**
  * Skill 编辑抽屉：小标签页组织「基本信息 / 被引用 / 修订历史」，避免面板过长。
- * 基本信息里内嵌 TagPicker（新建时先收集，实体落库后再整体指派）。
+ * 基本信息里内嵌 FolderPicker（新建时先收集，实体落库后再补一次归属指派）。
  */
 import { useCallback, useState } from "react";
 import {
-  notifyTagsChanged,
+  FolderPicker,
+  type FolderRef,
+  notifyFoldersChanged,
   readError,
   ReferencesPanel,
   RevisionPanel,
-  type Tag,
-  TagPicker,
 } from "@/components/library";
 
 export interface SkillRow {
@@ -33,24 +33,25 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
 
 export function SkillEditor({
   initial,
-  initialTags,
+  initialFolder,
   onClose,
   onSaved,
   onRefresh,
 }: {
   initial: SkillRow | null;
-  initialTags: Tag[];
+  /** create 模式是页面传入的默认归属（当前选中文件夹），edit 模式是实体现有归属 */
+  initialFolder: FolderRef | null;
   onClose: () => void;
   /** 保存成功：关闭抽屉并刷新列表 */
   onSaved: () => void;
-  /** 抽屉内改动了实体（标签变更、回滚），列表需要刷新但抽屉保持打开 */
+  /** 抽屉内改动了实体（归属变更、回滚），列表需要刷新但抽屉保持打开 */
   onRefresh: () => void;
 }) {
   const [tab, setTab] = useState<TabKey>("basic");
   const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [content, setContent] = useState(initial?.content ?? "");
-  const [tags, setTags] = useState<Tag[]>(initialTags);
+  const [folder, setFolder] = useState<FolderRef | null>(initialFolder);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,20 +96,20 @@ export function SkillEditor({
         setError(await readError(res));
         return;
       }
-      // 新建时实体此前无 id，标签只存在内存里，落库后补一次整体指派
-      if (!initial && tags.length > 0) {
+      // 新建时实体此前无 id，归属只存在内存里，落库后补一次指派
+      if (!initial && folder) {
         const created = (await res.json()) as { id?: string };
         if (created?.id) {
-          await fetch("/api/tags/assign", {
+          await fetch("/api/folders/assign", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               entityKind: "skill",
               entityId: created.id,
-              tagIds: tags.map((t) => t.id),
+              folderId: folder.id,
             }),
           });
-          notifyTagsChanged();
+          notifyFoldersChanged();
         }
       }
       onSaved();
@@ -186,20 +187,20 @@ export function SkillEditor({
               </label>
               <div>
                 <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  标签
+                  文件夹
                 </span>
-                <TagPicker
+                <FolderPicker
                   kind="skill"
                   entityId={initial?.id ?? ""}
-                  value={tags}
+                  value={folder}
                   onChange={(next) => {
-                    setTags(next);
+                    setFolder(next);
                     if (initial) onRefresh();
                   }}
                 />
                 {!initial && (
                   <p className="mt-1 text-xs text-zinc-400">
-                    新建的 Skill 保存后才会真正挂上标签。
+                    新建的 Skill 保存后才会真正归入文件夹。
                   </p>
                 )}
               </div>

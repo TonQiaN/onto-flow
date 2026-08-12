@@ -1,11 +1,30 @@
 import { expect, test } from "@playwright/test";
 
+const FOLDER_PREFIX = "e2e-文件夹-";
+
+/** 兜底清理：删除树上残留的 e2e 前缀文件夹（正常流程里用例自己已删干净） */
+async function cleanupFoldersByPrefix(
+  request: import("@playwright/test").APIRequestContext,
+  prefix: string,
+): Promise<void> {
+  const res = await request.get("/api/folders");
+  if (!res.ok()) return;
+  const body = (await res.json()) as {
+    folders?: Array<{ id: string; name: string }>;
+  };
+  for (const folder of body.folders ?? []) {
+    if (!folder.name.startsWith(prefix)) continue;
+    await request.delete(`/api/folders/${folder.id}`);
+  }
+}
+
 /**
- * FlowForge v2 阶段一新能力的验收：层级标签树筛选、编辑面板的「修订历史」与「被引用」。
- * 全部只读种子数据，不新建实体、不改种子、不触发工作流运行，因此无需 afterEach 清理。
+ * FlowForge v2 阶段一新能力的验收：文件夹树筛选（ADR-0005，单归属含子孙语义）、
+ * 树上的文件夹管理（新建/重命名/删除）、编辑面板的「修订历史」与「被引用」。
+ * 筛选与面板用例只读种子数据；管理用例自建 e2e 前缀文件夹并在用例内删除。
  */
 test.describe("库 v2 新能力", () => {
-  test("标签树点「能力/审核」：Action 列表收窄且 URL 出现 ?tags=", async ({
+  test("文件夹树点「采购/集采」：Action 列表收窄且 URL 出现 ?folder=", async ({
     page,
   }) => {
     await page.goto("/actions");
@@ -16,29 +35,66 @@ test.describe("库 v2 新能力", () => {
     ).toBeVisible();
     await expect(page.getByText("共 4 条")).toBeVisible();
 
-    // 标签树节点的 title 是完整路径；卡片上的标签徽章 title 是「按标签「…」筛选」，
-    // 用 exact 把两者区分开。
-    await page.getByTitle("能力/审核", { exact: true }).click();
+    // 树上文件夹行的 title 是完整路径；卡片上的文件夹徽章 title 是
+    // 「进入文件夹「…」」，用 exact 把两者区分开。
+    await page.getByTitle("采购/集采", { exact: true }).click();
 
-    // URL 同步出 tags 参数（值是标签 uuid）
-    await expect(page).toHaveURL(/[?&]tags=[0-9a-f-]{36}/);
+    // URL 同步出 folder 参数（值是文件夹 uuid）
+    await expect(page).toHaveURL(/[?&]folder=[0-9a-f-]{36}/);
 
-    // 列表收窄到唯一一个带「能力/审核」标签的 Action
-    await expect(page.getByText("共 1 条")).toBeVisible();
+    // 列表收窄到「采购/集采」下的 3 个 Action，「采购/需求」下的需求整理消失
+    await expect(page.getByText("共 3 条")).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: "集采计划审核", exact: true }),
-    ).toBeVisible();
-    for (const gone of ["需求整理", "集采计划生成", "集采计划归档"]) {
+      page.getByRole("heading", { name: "需求整理", exact: true }),
+    ).toHaveCount(0);
+    for (const kept of ["集采计划生成", "集采计划审核", "集采计划归档"]) {
       await expect(
-        page.getByRole("heading", { name: gone, exact: true }),
-      ).toHaveCount(0);
+        page.getByRole("heading", { name: kept, exact: true }),
+      ).toBeVisible();
     }
 
     // 点树顶部的「全部」清空筛选（筛选中该按钮带「清空筛选」副标，
-    // 与「全部折叠」区分开），URL 里的 tags 参数消失，列表恢复
+    // 与「全部折叠」区分开），URL 里的 folder 参数消失，列表恢复
     await page.getByRole("button", { name: "全部 清空筛选" }).click();
-    await expect(page).not.toHaveURL(/[?&]tags=/);
+    await expect(page).not.toHaveURL(/[?&]folder=/);
     await expect(page.getByText("共 4 条")).toBeVisible();
+  });
+
+  test("树上管理文件夹：「＋」新建根文件夹 → 右键重命名 → 右键删除", async ({
+    page,
+    request,
+  }) => {
+    const name = `${FOLDER_PREFIX}${Date.now()}`;
+    const renamed = `${name}-改`;
+    try {
+      await page.goto("/actions");
+
+      // 树顶「＋」新建根文件夹：行内输入，Enter 提交
+      await page.getByRole("button", { name: "新建根文件夹" }).click();
+      await page.getByPlaceholder("文件夹名").fill(name);
+      await page.getByPlaceholder("文件夹名").press("Enter");
+      // 根文件夹的完整路径就是名字本身
+      await expect(page.getByTitle(name, { exact: true })).toBeVisible();
+
+      // 右键 → 重命名：行内输入预填原名，改名后 Enter 提交
+      await page.getByTitle(name, { exact: true }).click({ button: "right" });
+      await page.getByRole("button", { name: "重命名" }).click();
+      await page.getByPlaceholder("文件夹名").fill(renamed);
+      await page.getByPlaceholder("文件夹名").press("Enter");
+      await expect(page.getByTitle(renamed, { exact: true })).toBeVisible();
+      await expect(page.getByTitle(name, { exact: true })).toHaveCount(0);
+
+      // 右键 → 删除文件夹：window.confirm 说明内容去向，接受后行消失
+      await page
+        .getByTitle(renamed, { exact: true })
+        .click({ button: "right" });
+      page.once("dialog", (dialog) => void dialog.accept());
+      await page.getByRole("button", { name: "删除文件夹" }).click();
+      await expect(page.getByTitle(renamed, { exact: true })).toHaveCount(0);
+    } finally {
+      // 用例中途失败时兜底清掉残留的 e2e 文件夹
+      await cleanupFoldersByPrefix(request, FOLDER_PREFIX);
+    }
   });
 
   test("编辑面板「修订历史」显示 v1「种子初始版本」", async ({ page }) => {

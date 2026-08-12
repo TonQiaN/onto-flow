@@ -3,7 +3,7 @@
  * 与 docs/DESIGN.md 的 API 契约（ActionDto / NodeDto / EdgeDto）严格一致。
  */
 import type { Edge, Node } from "@xyflow/react";
-import type { Tag } from "@/components/library";
+import type { FolderRef } from "@/components/library";
 import type { ValidationIssue } from "@/lib/graph";
 
 export type PortKind = "text" | "file" | "json";
@@ -57,7 +57,7 @@ export interface ActionDto {
 
 /** 列表接口（DESIGN-V2 第一节信封）在 ActionDto 上追加的公共字段 */
 export interface ActionItem extends ActionDto {
-  tags: Tag[];
+  folder: FolderRef | null;
   refCount: number;
 }
 
@@ -120,7 +120,6 @@ export interface NodeMeta {
   modelName: string;
   effort: ReasoningEffort;
   refCount: number;
-  tagNames: string[];
   /** Action 已被删除 / 引用失效 */
   missing?: boolean;
 }
@@ -234,7 +233,6 @@ export function actionMeta(
     modelName: modelById.get(action.modelId)?.displayName ?? "未知模型",
     effort: action.reasoningEffort,
     refCount: meta.refCount ?? 0,
-    tagNames: (meta.tags ?? []).map((t) => t.name),
   };
 }
 
@@ -245,7 +243,6 @@ export function missingMeta(): NodeMeta {
     modelName: "—",
     effort: "max",
     refCount: 0,
-    tagNames: [],
     missing: true,
   };
 }

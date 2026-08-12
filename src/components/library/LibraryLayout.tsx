@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 
 /**
- * 五个库列表页统一骨架：左侧 240px 固定标签树 + 右侧自适应内容，
+ * 五个库列表页统一骨架：左侧 240px 固定文件夹树 + 右侧自适应内容，
  * 含标题/副标题、错误横幅（带重试）、加载态与空态。
  */
 export function LibraryLayout({
@@ -19,7 +19,7 @@ export function LibraryLayout({
 }: {
   title: string;
   subtitle?: string;
-  /** 左栏内容，通常是 <TagTree /> */
+  /** 左栏内容，通常是 <FolderTree /> */
   tree?: ReactNode;
   children?: ReactNode;
   /** 始终显示在内容区顶部的状态条，通常是 <LibraryToolbar /> */

@@ -16,11 +16,7 @@ test.describe("对象类型", () => {
         .locator("li")
         .filter({ has: page.getByRole("heading", { name, exact: true }) });
       await expect(row).toHaveCount(1);
-      // 「内置」徽章是静态 span；卡片上同名的标签徽章「类型/内置」是可点击 button，
-      // 两者文案相同，用 span 约束到真正的内置徽章。
-      const builtinBadge = row
-        .getByText("内置", { exact: true })
-        .and(page.locator("span"));
+      const builtinBadge = row.getByText("内置", { exact: true });
       await expect(builtinBadge).toHaveCount(1);
       await expect(builtinBadge).toBeVisible();
       await expect(row.getByRole("button", { name: "删除" })).toHaveCount(0);

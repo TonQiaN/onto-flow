@@ -3,12 +3,12 @@
  *
  * 运行：npm run db:seed（tsx scripts/seed.ts）；执行前需先 npm run db:push 建表。
  * 幂等：命名实体按 name 查找，存在则 update 内容（id 保持稳定）、不存在则 insert；
- * 关联表（动作端口/技能/工具关联、工作流节点/连线、实体标签）先删后插，
+ * 关联表（动作端口/技能/工具关联、工作流节点/连线、实体文件夹归属）先删后插，
  * 修订只在该实体尚无任何修订时补写第 1 版——重复执行不产生重复行。
  */
 import fs from "node:fs";
 import path from "node:path";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import {
   actionPorts,
   actions,
@@ -16,12 +16,13 @@ import {
   actionTools,
   db,
   type EntityKind,
-  entityTags,
+  entityFolders,
+  type FolderEntityKind,
+  folders,
   models,
   objectTypes,
   revisions,
   skills,
-  tags,
   tools,
   workflowEdges,
   workflowNodes,
@@ -454,32 +455,41 @@ function upsertWorkflow(input: { name: string; description: string }): string {
   return id;
 }
 
-/** 标签按 name 唯一，已存在则复用（不覆盖用户后来改过的颜色） */
-function upsertTag(name: string): string {
-  const existing = db.select().from(tags).where(eq(tags.name, name)).get();
+/** 文件夹按（同级, name）唯一，已存在则复用；parentId 为 null 表示根层级 */
+function upsertFolder(name: string, parentId: string | null): string {
+  const existing = db
+    .select()
+    .from(folders)
+    .where(
+      and(
+        eq(folders.name, name),
+        parentId === null
+          ? isNull(folders.parentId)
+          : eq(folders.parentId, parentId),
+      ),
+    )
+    .get();
   if (existing) return existing.id;
   const id = crypto.randomUUID();
-  db.insert(tags).values({ id, name, color: null }).run();
+  db.insert(folders).values({ id, name, parentId }).run();
   return id;
 }
 
-/** 整体替换某实体的标签集合：先删该实体已有关联再插 */
-function assignTags(
-  entityKind: EntityKind,
+/** 单归属指派，整体替换语义：先删该实体已有指派再插 */
+function assignFolder(
+  entityKind: FolderEntityKind,
   entityId: string,
-  tagIds: string[],
+  folderId: string,
 ): void {
-  db.delete(entityTags)
+  db.delete(entityFolders)
     .where(
       and(
-        eq(entityTags.entityKind, entityKind),
-        eq(entityTags.entityId, entityId),
+        eq(entityFolders.entityKind, entityKind),
+        eq(entityFolders.entityId, entityId),
       ),
     )
     .run();
-  for (const tagId of Array.from(new Set(tagIds))) {
-    db.insert(entityTags).values({ entityKind, entityId, tagId }).run();
-  }
+  db.insert(entityFolders).values({ entityKind, entityId, folderId }).run();
 }
 
 // ---------------------------------------------------------------------------
@@ -845,52 +855,26 @@ for (const edge of seedEdges) {
 }
 
 // ---------------------------------------------------------------------------
-// ⑧ 标签体系（ADR-0003：多归属标签，`/` 表达层级，由前端拆成树）
+// ⑧ 文件夹体系（ADR-0005：跨四库共享的单归属流程树，workflow 不分类）
 // ---------------------------------------------------------------------------
 
-const SEED_TAG_NAMES = [
-  "采购/集采",
-  "采购/需求",
-  "能力/整理",
-  "能力/生成",
-  "能力/审核",
-  "能力/归档",
-  "类型/业务对象",
-  "类型/通用",
-  "状态/已验证",
-] as const;
-type SeedTagName = (typeof SEED_TAG_NAMES)[number];
+const folderCaigou = upsertFolder("采购", null);
+const folderJicai = upsertFolder("集采", folderCaigou);
+const folderXuqiu = upsertFolder("需求", folderCaigou);
 
-const seedTagIds = new Map<string, string>(
-  SEED_TAG_NAMES.map((name) => [name, upsertTag(name)]),
-);
+assignFolder("action", actionTidy, folderXuqiu);
+assignFolder("action", actionGenerate, folderJicai);
+assignFolder("action", actionReview, folderJicai);
+assignFolder("action", actionArchive, folderJicai);
 
-function tag(name: SeedTagName): string {
-  const id = seedTagIds.get(name);
-  if (!id) throw new Error(`标签未创建：${name}`);
-  return id;
-}
+assignFolder("skill", skillBianzhi, folderJicai);
+assignFolder("skill", skillShenhe, folderJicai);
 
-assignTags("workflow", workflowId, [tag("采购/集采"), tag("状态/已验证")]);
+assignFolder("tool", toolSavePlan, folderJicai);
 
-assignTags("action", actionTidy, [tag("采购/需求"), tag("能力/整理")]);
-assignTags("action", actionGenerate, [tag("采购/集采"), tag("能力/生成")]);
-assignTags("action", actionReview, [tag("采购/集采"), tag("能力/审核")]);
-assignTags("action", actionArchive, [tag("采购/集采"), tag("能力/归档")]);
-
-assignTags("skill", skillBianzhi, [tag("采购/集采"), tag("能力/生成")]);
-assignTags("skill", skillShenhe, [tag("采购/集采"), tag("能力/审核")]);
-
-assignTags("tool", toolSavePlan, [tag("采购/集采"), tag("能力/归档")]);
-
-assignTags("object_type", otRequirementFile, [tag("类型/业务对象")]);
-assignTags("object_type", otRequirementPrompt, [tag("类型/业务对象")]);
-assignTags("object_type", otPlan, [tag("类型/业务对象"), tag("采购/集采")]);
-assignTags("object_type", otReview, [tag("类型/业务对象"), tag("采购/集采")]);
-assignTags("object_type", otReceipt, [tag("类型/业务对象")]);
-assignTags("object_type", otText, [tag("类型/通用")]);
-assignTags("object_type", otFile, [tag("类型/通用")]);
-assignTags("object_type", otJson, [tag("类型/通用")]);
+assignFolder("object_type", otPlan, folderJicai);
+assignFolder("object_type", otReview, folderJicai);
+// 其余对象类型未归类（根级散叶子）；workflow 永远不指派文件夹
 
 // ---------------------------------------------------------------------------
 // ⑨ 种子实体的第 1 版修订
@@ -1071,8 +1055,8 @@ const counts = {
   工作流: db.select().from(workflows).all().length,
   工作流节点: db.select().from(workflowNodes).all().length,
   工作流连线: db.select().from(workflowEdges).all().length,
-  标签: db.select().from(tags).all().length,
-  标签关联: db.select().from(entityTags).all().length,
+  文件夹: db.select().from(folders).all().length,
+  文件夹归属: db.select().from(entityFolders).all().length,
   修订: db.select().from(revisions).all().length,
 };
 

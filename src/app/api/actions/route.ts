@@ -26,7 +26,7 @@ export async function GET(request: Request) {
       },
       query,
     });
-    // 列表项是完整 ActionDto（含 ports/skillIds/toolIds），再附 tags/refCount
+    // 列表项是完整 ActionDto（含 ports/skillIds/toolIds），再附 folder/refCount
     return NextResponse.json(listEnvelope(page, loadActionDtos(page.ids)));
   });
 }

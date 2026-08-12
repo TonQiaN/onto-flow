@@ -1,15 +1,16 @@
 # FlowForge v2 实现契约
 
 v1 契约见 [DESIGN.md](./DESIGN.md)（执行引擎、opencode 集成规范仍然有效）。
-领域语义见 [../CONTEXT.md](../CONTEXT.md)，本轮新决策见 ADR-0003（标签而非文件夹）、
-ADR-0004（画布编辑共享 Action）。
+领域语义见 [../CONTEXT.md](../CONTEXT.md)，本轮新决策见 ADR-0004（画布编辑共享 Action）、
+ADR-0005（文件夹而非标签，推翻 ADR-0003）。
 
 v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 监控页。本文件是三阶段共同的接口基准。
 
 ## 已定的地基（schema 已 push，勿改）
 
-- `tags` / `entity_tags`：跨五库的多归属标签，`entityKind ∈ workflow|action|skill|tool|object_type`。
-  标签名可含 `/` 表达层级。
+- `folders` / `entity_folders`：跨四库（`entityKind ∈ action|skill|tool|object_type`）共享的
+  单归属文件夹树（ADR-0005）。`folders.name` 是单段名（不含 `/`），层级由 `parentId` 表达；
+  `entity_folders` 无行 = 未归类；workflow 明确不分类。
 - `revisions`：`(entityKind, entityId, versionNo)` 唯一，`payload` 存该实体完整定义，
   `pinned` 标记不被清理。
 - `run_nodes` 新增：`snapshot`（运行快照 JSON）、六个用量字段（inputTokens / outputTokens /
@@ -24,7 +25,7 @@ Query 参数（全部可选，缺省即不过滤）：
 | 参数 | 含义 |
 |---|---|
 | `q` | 关键词，匹配 name + description（大小写不敏感，`LIKE %q%`） |
-| `tags` | 逗号分隔的 tag id，**OR 语义**（命中任一标签即入选） |
+| `folder` | 单个文件夹 id，**含全部子孙**语义（命中该文件夹整棵子树内的实体）；kind=workflow 忽略此参数 |
 | `sort` | `updated_desc`(默认) / `updated_asc` / `name_asc` / `name_desc` / `refs_desc` |
 | `page` | 从 1 开始，默认 1 |
 | `pageSize` | 默认 30，上限 100 |
@@ -38,28 +39,29 @@ Query 参数（全部可选，缺省即不过滤）：
 每个 item 在原有字段基础上追加：
 
 ```ts
-tags: Array<{ id: string; name: string; color: string | null }>
+folder: { id: string; name: string; path: string } | null   // path = 根到本文件夹的 name 用 "/" 连接；未归类与 workflow 恒为 null
 refCount: number   // 被引用次数，见第三节
 ```
 
-`tags` 取 OR 而非 AND 的理由：标签树（第五节）是**文件夹式浏览**，点父节点会把
-「自身 + 全部子孙」的 tag id 一起提交。若按 AND 过滤，点「采购」= 要求实体同时挂着
-`采购`、`采购/集采`、`采购/询价`…，结果必然为空，文件夹式浏览的核心操作直接失效。
-OR 语义下点父节点 = 看到其整棵子树下的全部内容，与树上显示的 `totalCount` 一致。
+`folder` 取「自身 + 全部子孙」的理由：文件夹树（第五节）是单选「进入」语义，
+点父文件夹 = 看到其整棵子树下的全部内容，与树上显示的子树实体计数一致。
+过滤实现为 `subtreeIds(folderId)`（自身 + 全部子孙 id），实体 id ∈ 指派到这些
+文件夹的集合；文件夹不存在时结果强制为空页。
 
 > 破坏性变更：列表 API 由「裸数组」改为上面的信封形状，前端一并改。不做兼容层（AGENTS.md）。
 
-## 二、标签 API
+## 二、文件夹 API
 
 | 路由 | 方法 | 说明 |
 |---|---|---|
-| `/api/tags` | GET | `?kind=action` 可选。返回 `Array<{id,name,color,counts:{[kind]:number}}>`，按 name 升序 |
-| `/api/tags` | POST | `{name, color?}`；name 去空白、非空、唯一（409）；`/` 分隔层级，不允许空段（400） |
-| `/api/tags/[id]` | PUT | `{name?, color?}`；改名是全局操作 |
-| `/api/tags/[id]` | DELETE | 直接删，`entity_tags` 级联清除（标签是软分类，删除无需引用保护） |
-| `/api/tags/assign` | POST | `{entityKind, entityId, tagIds: string[]}` 整体替换该实体的标签集合 |
+| `/api/folders` | GET | `{ folders: FolderDto[] }`，按 name 升序 |
+| `/api/folders?kind=action` | GET | `{ folders: FolderDto[], entities: Array<{id,name,folderId\|null}> }`（本库实体叶子）；kind 非四库之一 400 |
+| `/api/folders` | POST | `{name, parentId?}` → FolderDto；name 折叠空白、非空、不含 `/`；父不存在 404，同级同名 409 |
+| `/api/folders/[id]` | PATCH | `{name?, parentId?}`（parentId 传 null = 移到根）→ FolderDto；移到自己或自己的子孙 400，目标同级同名 409 |
+| `/api/folders/[id]` | DELETE | `{ ok: true }`；子文件夹与实体指派上移到父级（父为 null 时实体变未归类），实体本身永不删除 |
+| `/api/folders/assign` | POST | `{entityKind, entityId, folderId: string \| null}` 单归属指派，null = 取消归类 |
 
-前端由 `tags` 的扁平列表自行构建层级树（按 `/` 拆分），无需服务端返回树。
+前端由 `folders` 的扁平列表 + `parentId` 自行组装树，无需服务端返回树。
 
 ## 三、引用（反向索引）API
 
@@ -110,9 +112,16 @@ OR 语义下点父节点 = 看到其整棵子树下的全部内容，与树上�
 ## 五、共享 UI 组件（`src/components/library/`，五个库页面必须复用，不得各写一套）
 
 ```tsx
-// 层级标签树（左栏）。tags 扁平列表按 `/` 构建树；点击节点切换选中；父节点选中含子孙
-// （所以列表 API 的 tags 必须是 OR 语义，见第一节）。
-<TagTree kind={EntityKind} selected={string[]} onChange={(ids:string[])=>void} />
+// 文件夹树（左栏，四个库页用；workflows 列表页无左栏）。Zed 式：树里是文件夹 + 本库
+// 实体叶子，未归类实体是根级散叶子；单选「进入」文件夹（含全部子孙，见第一节），
+// selected=null 即「全部」；点实体叶子 onOpenEntity 在右侧列表定位并高亮；
+// 右键管理（新建子文件夹/重命名/删除），拖实体入文件夹、拖文件夹改层级。
+<FolderTree
+  kind={EntityKind}                       // 只会传四库之一
+  selected={string | null}                // null = 全部
+  onSelect={(folderId: string | null) => void}
+  onOpenEntity={(entity: EntityLeaf) => void}
+/>
 
 // 搜索 + 排序 + 分页状态条，状态写进 URL query（useSearchParams + router.replace，scroll:false）
 <LibraryToolbar
@@ -122,8 +131,13 @@ OR 语义下点父节点 = 看到其整棵子树下的全部内容，与树上�
   right={ReactNode}                                // 「新建」按钮插槽
 />
 
-// 实体上的标签编辑（下拉多选 + 新建标签）
-<TagPicker kind={EntityKind} entityId={string} value={Tag[]} onChange={(t:Tag[])=>void} />
+// 编辑器里的文件夹选择器（备选归类途径，只选择不管理）。触发按钮显示 value?.path ?? "未归类"
+<FolderPicker
+  kind={EntityKind}
+  entityId={string}                 // '' = 新建表单未落库，只改内存态，落库后由页面补指派
+  value={FolderRef | null}
+  onChange={(folder: FolderRef | null) => void}
+/>
 
 // 「被引用」面板：自己 fetch /api/references
 <ReferencesPanel kind={EntityKind} id={string} />
@@ -135,7 +149,8 @@ OR 语义下点父节点 = 看到其整棵子树下的全部内容，与树上�
 <LibraryLayout title={string} subtitle={string} tree={ReactNode} children={ReactNode} />
 ```
 
-URL 参数命名（五个库一致）：`?q=&tags=&sort=&page=`。
+URL 参数命名：四个库页 `?q=&folder=&sort=&page=`（另有 `highlight` 定位并高亮卡片）；
+workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 
 ## 六、引擎改动（阶段一部分）
 
@@ -154,7 +169,7 @@ URL 参数命名（五个库一致）：`?q=&tags=&sort=&page=`。
 
 ## 七、阶段二 / 阶段三 要点（届时细化）
 
-- 阶段二：节点面板接 TagTree+搜索；双击节点 → 复用 Action 编辑器（同一组件）+ ReferencesPanel +
+- 阶段二：节点面板按文件夹路径分组（单归属，未归类沉底）+ 关键词搜索；双击节点 → 复用 Action 编辑器（同一组件）+ ReferencesPanel +
   影响预览 + 「复制为新 Action 并替换本节点」；五态视觉 + 边流动动画 + 自动跟随 + 取消运行
   （`session.abort` + 标记 cancelled + 下游 skipped）。
 - 阶段三：`/monitor` 六标签（总览 / 实时会话 / Trace / 日志检索 / 成本分析 / 系统健康），

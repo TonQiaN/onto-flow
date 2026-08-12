@@ -1,23 +1,23 @@
 "use client";
 
 /**
- * Action 库列表页：左标签树 + 顶部搜索/排序/分页（状态同步 URL）+ 卡片列表。
+ * Action 库列表页：左文件夹树 + 顶部搜索/排序/分页（状态同步 URL）+ 卡片列表。
  * 列表数据读 DESIGN-V2 第一节的信封响应 { items, total, page, pageSize }；
  * 编辑器需要的对象类型 / Skill / Tool 全量清单按页翻完（信封 pageSize 上限 100）。
  */
-import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   DEFAULT_PAGE_SIZE,
+  DND_ENTITY_MIME,
+  type FolderDto,
+  type FolderRef,
+  FOLDERS_CHANGED_EVENT,
+  FolderTree,
   formatTime,
   LibraryLayout,
   LibraryToolbar,
   type ListEnvelope,
   readError,
-  type Tag,
-  tagColor,
-  tagLeafName,
-  TagTree,
   useLibraryQuery,
   type WithLibraryMeta,
 } from "@/components/library";
@@ -50,6 +50,26 @@ async function fetchAllItems<T>(path: string): Promise<T[]> {
   return out;
 }
 
+/** 从扁平文件夹清单还原带完整路径的 FolderRef（新建默认归属用）；拿不到时返回 null */
+function folderRefFrom(
+  folders: FolderDto[],
+  id: string | null,
+): FolderRef | null {
+  if (!id) return null;
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const target = byId.get(id);
+  if (!target) return null;
+  const names: string[] = [];
+  for (
+    let cur: FolderDto | undefined = target;
+    cur;
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined
+  ) {
+    names.unshift(cur.name);
+  }
+  return { id: target.id, name: target.name, path: names.join("/") };
+}
+
 export default function ActionsPage() {
   return (
     <Suspense
@@ -61,9 +81,18 @@ export default function ActionsPage() {
 }
 
 function ActionsLibrary() {
-  const { q, tags, sort, page, setQ, setTags, setSort, setPage } =
-    useLibraryQuery();
-  const highlight = useSearchParams().get("highlight");
+  const {
+    q,
+    folder,
+    sort,
+    page,
+    highlight,
+    setQ,
+    setFolder,
+    setSort,
+    setPage,
+    openEntity,
+  } = useLibraryQuery();
 
   const [data, setData] = useState<ListEnvelope<ActionItem> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,17 +102,24 @@ function ActionsLibrary() {
   const [objectTypes, setObjectTypes] = useState<ObjectTypeRow[] | null>(null);
   const [skills, setSkills] = useState<SkillRow[] | null>(null);
   const [tools, setTools] = useState<ToolRow[] | null>(null);
+  /** 扁平文件夹清单：仅用于把当前选中的 folder id 还原成 FolderRef，作为新建默认归属 */
+  const [folders, setFolders] = useState<FolderDto[]>([]);
   const [editor, setEditor] = useState<
     { mode: "create" } | { mode: "edit"; action: ActionItem } | null
   >(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
 
+  /** 请求序号守卫：只有最新一次 load 的结果才允许落地，防止旧响应后返覆盖新结果 */
+  const loadSeqRef = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     setLoadError(null);
     const params = new URLSearchParams();
     if (q) params.set("q", q);
-    if (tags.length > 0) params.set("tags", tags.join(","));
+    if (folder) params.set("folder", folder);
+    // 树上点实体叶子定位：让服务端反查该实体所在页并覆盖 page（信封返回生效页码）
+    if (highlight) params.set("locate", highlight);
     params.set("sort", sort);
     params.set("page", String(page));
     try {
@@ -91,18 +127,35 @@ function ActionsLibrary() {
         cache: "no-store",
       });
       if (!res.ok) {
-        setLoadError(await readError(res));
+        const message = await readError(res);
+        if (seq !== loadSeqRef.current) return;
+        setLoadError(message);
         setData(null);
         return;
       }
-      setData((await res.json()) as ListEnvelope<ActionItem>);
+      const envelope = (await res.json()) as ListEnvelope<ActionItem>;
+      if (seq !== loadSeqRef.current) return;
+      setData(envelope);
     } catch {
+      if (seq !== loadSeqRef.current) return;
       setLoadError("网络错误，无法加载 Action 列表");
       setData(null);
     } finally {
-      setLoading(false);
+      // 过期请求不许把新请求的 loading 提前关掉
+      if (seq === loadSeqRef.current) setLoading(false);
     }
-  }, [q, tags, sort, page]);
+  }, [q, folder, sort, page, highlight]);
+
+  const loadFolders = useCallback(async () => {
+    try {
+      const res = await fetch("/api/folders", { cache: "no-store" });
+      if (!res.ok) return;
+      const body = (await res.json()) as { folders?: FolderDto[] };
+      setFolders(body.folders ?? []);
+    } catch {
+      // 拿不到就退化为新建时不带默认文件夹
+    }
+  }, []);
 
   /** 编辑器依赖的基础数据，与筛选无关，只在首次与重试时加载 */
   const loadSupport = useCallback(async () => {
@@ -141,6 +194,32 @@ function ActionsLibrary() {
     void loadSupport();
   }, [loadSupport]);
 
+  useEffect(() => {
+    void loadFolders();
+  }, [loadFolders]);
+
+  // 文件夹结构或实体归属变化时重载：卡片上的文件夹徽章、新建默认归属都要跟着变
+  useEffect(() => {
+    const handler = () => {
+      void load();
+      void loadFolders();
+    };
+    window.addEventListener(FOLDERS_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(FOLDERS_CHANGED_EVENT, handler);
+  }, [load, loadFolders]);
+
+  // highlight 定位：列表加载后把高亮卡片滚到视口中央（每个目标只滚一次）
+  const scrolledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlight || data === null || scrolledRef.current === highlight)
+      return;
+    const el = document.getElementById(`entity-${highlight}`);
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      scrolledRef.current = highlight;
+    }
+  }, [highlight, data]);
+
   const items = data?.items ?? [];
   const editorReady =
     models !== null && objectTypes !== null && skills !== null && tools !== null;
@@ -175,14 +254,21 @@ function ActionsLibrary() {
     }
   }
 
-  const filtering = q !== "" || tags.length > 0;
+  const filtering = q !== "" || folder !== null;
 
   return (
     <>
       <LibraryLayout
         title="Action 库"
         subtitle="可复用的原子工作单元：Prompt + Rule + 端口 + 模型 + 引用的 Skill / Tool。"
-        tree={<TagTree kind="action" selected={tags} onChange={setTags} />}
+        tree={
+          <FolderTree
+            kind="action"
+            selected={folder}
+            onSelect={setFolder}
+            onOpenEntity={(e) => openEntity(e.folderId, e.id)}
+          />
+        }
         toolbar={
           <>
             {supportError && (
@@ -202,7 +288,7 @@ function ActionsLibrary() {
               sort={sort}
               onSortChange={setSort}
               total={data?.total ?? 0}
-              page={page}
+              page={data?.page ?? page}
               pageSize={data?.pageSize ?? DEFAULT_PAGE_SIZE}
               onPageChange={setPage}
               right={
@@ -242,6 +328,15 @@ function ActionsLibrary() {
             return (
               <li
                 key={action.id}
+                id={`entity-${action.id}`}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(
+                    DND_ENTITY_MIME,
+                    JSON.stringify({ kind: "action", id: action.id }),
+                  );
+                  e.dataTransfer.effectAllowed = "move";
+                }}
                 className={`rounded-lg border bg-white p-4 ${
                   highlight === action.id
                     ? "border-zinc-900 ring-1 ring-zinc-900"
@@ -313,7 +408,7 @@ function ActionsLibrary() {
                 </div>
 
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
-                  <TagBadges tags={action.tags} onPick={(id) => setTags([id])} />
+                  <FolderBadge folder={action.folder} onEnter={setFolder} />
                   <RefCount count={action.refCount} />
                   {/* ActionDto 目前不含 updatedAt（模块 B 的 DTO），补上后此处自动显示 */}
                   {action.updatedAt && (
@@ -337,7 +432,11 @@ function ActionsLibrary() {
       {editor && models && objectTypes && skills && tools && (
         <ActionEditor
           initial={editor.mode === "edit" ? editor.action : null}
-          initialTags={editor.mode === "edit" ? editor.action.tags : []}
+          initialFolder={
+            editor.mode === "edit"
+              ? editor.action.folder
+              : folderRefFrom(folders, folder)
+          }
           refCount={editor.mode === "edit" ? editor.action.refCount : 0}
           models={models}
           objectTypes={objectTypes}
@@ -355,33 +454,34 @@ function ActionsLibrary() {
   );
 }
 
-/** 标签徽章，点击即按该标签筛选列表 */
-function TagBadges({
-  tags,
-  onPick,
+/** 文件夹徽章，点击即进入该文件夹（列表改按其子树过滤）；未归类不显示 */
+function FolderBadge({
+  folder,
+  onEnter,
 }: {
-  tags: Tag[];
-  onPick: (id: string) => void;
+  folder: FolderRef | null;
+  onEnter: (id: string) => void;
 }) {
-  if (tags.length === 0) return null;
+  if (!folder) return null;
   return (
-    <span className="flex flex-wrap items-center gap-1">
-      {tags.map((tag) => (
-        <button
-          key={tag.id}
-          type="button"
-          title={`按标签「${tag.name}」筛选`}
-          onClick={() => onPick(tag.id)}
-          className="inline-flex items-center gap-1 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 hover:border-zinc-400 hover:text-zinc-900"
-        >
-          <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ backgroundColor: tagColor(tag) }}
-          />
-          {tagLeafName(tag.name)}
-        </button>
-      ))}
-    </span>
+    <button
+      type="button"
+      title={`进入文件夹「${folder.path}」`}
+      onClick={() => onEnter(folder.id)}
+      className="inline-flex items-center gap-1 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 hover:border-zinc-400 hover:text-zinc-900"
+    >
+      <svg
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        className="h-3 w-3 shrink-0 text-zinc-400"
+        aria-hidden
+      >
+        <path d="M1.75 4.25c0-.83.67-1.5 1.5-1.5h2.9c.4 0 .78.16 1.06.44l.86.86h4.68c.83 0 1.5.67 1.5 1.5v6.2c0 .83-.67 1.5-1.5 1.5H3.25c-.83 0-1.5-.67-1.5-1.5v-7.5Z" />
+      </svg>
+      {folder.path}
+    </button>
   );
 }
 
