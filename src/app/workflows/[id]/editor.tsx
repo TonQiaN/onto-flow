@@ -102,10 +102,11 @@ function EditorInner({ workflowId }: { workflowId: string }) {
     let cancelled = false;
     (async () => {
       try {
+        // 库列表是分页信封（DESIGN-V2 第一节），画布要全量，故显式取大页
         const [wfRes, actRes, typeRes] = await Promise.all([
           fetch(`/api/workflows/${workflowId}`),
-          fetch("/api/actions"),
-          fetch("/api/object-types"),
+          fetch("/api/actions?pageSize=100&sort=name_asc"),
+          fetch("/api/object-types?pageSize=100&sort=name_asc"),
         ]);
         const readError = async (res: Response, fallback: string) => {
           const body = (await res.json().catch(() => null)) as {
@@ -119,8 +120,9 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         if (!typeRes.ok)
           throw new Error(await readError(typeRes, "加载对象类型失败"));
         const wf = (await wfRes.json()) as WorkflowDetail;
-        const acts = (await actRes.json()) as ActionDto[];
-        const types = (await typeRes.json()) as ObjectTypeRow[];
+        const acts = ((await actRes.json()) as { items: ActionDto[] }).items;
+        const types = ((await typeRes.json()) as { items: ObjectTypeRow[] })
+          .items;
         if (cancelled) return;
         setActions(acts);
         setObjectTypes(types);

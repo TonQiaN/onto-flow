@@ -1,4 +1,5 @@
 import {
+  index,
   integer,
   primaryKey,
   real,
@@ -21,6 +22,73 @@ const timestamps = {
     .$defaultFn(() => new Date())
     .$onUpdateFn(() => new Date()),
 };
+
+/** 五个库共用的实体种类（标签、修订、引用查询都按它区分） */
+export const ENTITY_KINDS = [
+  "workflow",
+  "action",
+  "skill",
+  "tool",
+  "object_type",
+] as const;
+export type EntityKind = (typeof ENTITY_KINDS)[number];
+
+/**
+ * 标签：跨全部库的分类维度，多归属（ADR-0003）。
+ * name 可用 `/` 表达层级（`采购/集采`），UI 按层级渲染成可折叠树。
+ */
+export const tags = sqliteTable("tags", {
+  id: id(),
+  name: text("name").notNull().unique(),
+  /** 树上的色点，留空则按名字哈希取色 */
+  color: text("color"),
+  ...timestamps,
+});
+
+export const entityTags = sqliteTable(
+  "entity_tags",
+  {
+    entityKind: text("entity_kind", { enum: ENTITY_KINDS }).notNull(),
+    entityId: text("entity_id").notNull(),
+    tagId: text("tag_id")
+      .notNull()
+      .references(() => tags.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.entityKind, t.entityId, t.tagId] }),
+    index("entity_tags_by_tag").on(t.tagId),
+  ],
+);
+
+/**
+ * 修订：实体每次保存留存的完整定义快照，可查看/对比/回滚。
+ * payload 是该实体的完整定义（含关联：端口、skillIds、toolIds、图的 nodes/edges）。
+ */
+export const revisions = sqliteTable(
+  "revisions",
+  {
+    id: id(),
+    entityKind: text("entity_kind", { enum: ENTITY_KINDS }).notNull(),
+    entityId: text("entity_id").notNull(),
+    versionNo: integer("version_no").notNull(),
+    payload: text("payload", { mode: "json" })
+      .$type<Record<string, unknown>>()
+      .notNull(),
+    note: text("note").notNull().default(""),
+    /** 手动标记保留的版本，清理时跳过 */
+    pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (t) => [
+    uniqueIndex("revisions_entity_version").on(
+      t.entityKind,
+      t.entityId,
+      t.versionNo,
+    ),
+  ],
+);
 
 /** 对象类型注册表：端口的 nominal 类型（ADR-0002） */
 export const objectTypes = sqliteTable("object_types", {
@@ -173,9 +241,12 @@ export const runs = sqliteTable("runs", {
   workflowId: text("workflow_id")
     .notNull()
     .references(() => workflows.id, { onDelete: "cascade" }),
+  /** cancelled 是人为中止的独立终态，区别于 failed */
   status: text("status", {
-    enum: ["running", "success", "failed"],
+    enum: ["running", "success", "failed", "cancelled"],
   }).notNull(),
+  /** 冗余快照：运行当时的工作流名，改名后历史仍可读 */
+  workflowName: text("workflow_name").notNull().default(""),
   error: text("error"),
   startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
   finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
@@ -192,8 +263,23 @@ export const runNodes = sqliteTable(
     /** 冗余快照：节点当时的展示名（Action 名/输入输出类型名），历史回看不受后续改名影响 */
     label: text("label").notNull(),
     status: text("status", {
-      enum: ["pending", "running", "success", "failed", "skipped"],
+      enum: ["pending", "running", "success", "failed", "skipped", "cancelled"],
     }).notNull(),
+    /**
+     * 运行快照：该节点本次执行实际使用的完整配置（prompt、rule、各 Skill 与 Tool
+     * 全文、模型、思考强度、端口定义）。不随实体后续修改而改变。
+     */
+    snapshot: text("snapshot", { mode: "json" }).$type<Record<
+      string,
+      unknown
+    > | null>(),
+    /** 会话级用量汇总（由 message.updated 事件累加，来源见 node_usage） */
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    reasoningTokens: integer("reasoning_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    cost: real("cost").notNull().default(0),
     /** PortValue 映射的 JSON：{ [portName]: PortValue } */
     inputs: text("inputs", { mode: "json" }).$type<Record<string, unknown>>(),
     outputs: text("outputs", { mode: "json" }).$type<Record<string, unknown>>(),
@@ -215,6 +301,39 @@ export const runEvents = sqliteTable("run_events", {
   type: text("type").notNull(),
   payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(),
 });
+
+/**
+ * 逐条 assistant 消息的用量明细，由 message.updated 事件实时捕获落库。
+ * 必须自己存：opencode 1.18.16 对用过结构化输出的会话调 session.messages 会 400，
+ * 且 opencode 重启后历史会话不可查——监控页的成本分析只读本表。
+ */
+export const nodeUsage = sqliteTable(
+  "node_usage",
+  {
+    id: id(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    sessionId: text("session_id").notNull(),
+    messageId: text("message_id").notNull(),
+    providerId: text("provider_id").notNull().default(""),
+    modelId: text("model_id").notNull().default(""),
+    variant: text("variant"),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    reasoningTokens: integer("reasoning_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    cost: real("cost").notNull().default(0),
+    finish: text("finish"),
+    ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("node_usage_message").on(t.sessionId, t.messageId),
+    index("node_usage_by_run").on(t.runId),
+  ],
+);
 
 /** 首个案例的业务表：集采计划归档（由 save_purchase_plan tool 经 bun:sqlite 写入） */
 export const purchasePlans = sqliteTable("purchase_plans", {

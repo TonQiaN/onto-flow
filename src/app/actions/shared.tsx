@@ -24,6 +24,7 @@ export interface ActionDto {
   ports: ActionPortDto[];
   skillIds: string[];
   toolIds: string[];
+  updatedAt?: string;
 }
 
 export interface ModelRow {
@@ -74,16 +75,6 @@ export function KindBadge({ kind }: { kind: Kind }) {
       {kind}
     </span>
   );
-}
-
-export async function readError(res: Response): Promise<string> {
-  try {
-    const data = (await res.json()) as { error?: unknown };
-    if (data && typeof data.error === "string") return data.error;
-  } catch {
-    // 响应体不是 JSON
-  }
-  return `请求失败（HTTP ${res.status}）`;
 }
 
 export function formatUsedBy(usedBy: unknown): string {

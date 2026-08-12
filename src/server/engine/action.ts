@@ -7,6 +7,7 @@
  *   file 输入追加 file:// part）。
  * - 单 text 输出取 parts 文本拼接；否则 format json_schema 取 info.structured，
  *   deepseek 思考模式 format 失败时降级为同会话普通 prompt 要求纯 JSON。
+ * - 会话创建前把本次实际使用的完整配置冻结进 run_nodes.snapshot（运行快照）。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -46,6 +47,26 @@ export interface ActionNodeContext {
   inputs: Record<string, PortValue>;
 }
 
+/** 运行快照里的端口定义（只留展示所需，不留 id——实体删了也照样读得懂） */
+export interface RunSnapshotPort {
+  name: string;
+  objectTypeName: string;
+  kind: "text" | "file" | "json";
+}
+
+/** run_nodes.snapshot 的结构：该节点本次执行实际使用的完整配置 */
+export interface RunSnapshot {
+  actionId: string;
+  actionName: string;
+  prompt: string;
+  rule: string;
+  model: { providerId: string; modelId: string; displayName: string };
+  reasoningEffort: "low" | "medium" | "high" | "max";
+  skills: Array<{ name: string; content: string }>;
+  tools: Array<{ name: string; code: string }>;
+  ports: { inputs: RunSnapshotPort[]; outputs: RunSnapshotPort[] };
+}
+
 export async function runActionNode(
   ctx: ActionNodeContext,
 ): Promise<Record<string, PortValue>> {
@@ -77,6 +98,28 @@ export async function runActionNode(
     .innerJoin(tools, eq(actionTools.toolId, tools.id))
     .where(eq(actionTools.actionId, action.id))
     .all();
+
+  // ---------- 运行快照 ----------
+  // 会话创建前落库：即使随后执行失败，也留下「那次运行到底跑了什么」的冻结副本。
+  // Skill 存全文、Tool 存源码，实体后续被改写/删除都不影响历史可解释性。
+  writeSnapshot(ctx, {
+    actionId: action.id,
+    actionName: action.name,
+    prompt: action.prompt,
+    rule: action.rule,
+    model: {
+      providerId: model.providerId,
+      modelId: model.modelId,
+      displayName: model.displayName,
+    },
+    reasoningEffort: action.reasoningEffort,
+    skills: skillRows.map((s) => ({ name: s.name, content: s.content })),
+    tools: toolRows.map((t) => ({ name: t.name, code: t.code })),
+    ports: {
+      inputs: ctx.node.inputs.map(toSnapshotPort),
+      outputs: ctx.node.outputs.map(toSnapshotPort),
+    },
+  });
 
   // ---------- 工作区物化 ----------
   const workspace = path.join(DATA_DIR, "runs", ctx.runId, ctx.node.id);
@@ -232,6 +275,21 @@ export async function runActionNode(
 }
 
 // ---------- helpers ----------
+
+function toSnapshotPort(port: ResolvedPort): RunSnapshotPort {
+  return {
+    name: port.name,
+    objectTypeName: port.objectTypeName,
+    kind: port.kind,
+  };
+}
+
+function writeSnapshot(ctx: ActionNodeContext, snapshot: RunSnapshot): void {
+  db.update(runNodes)
+    .set({ snapshot: snapshot as unknown as Record<string, unknown> })
+    .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
+    .run();
+}
 
 function joinTextParts(parts: Part[]): string {
   return parts

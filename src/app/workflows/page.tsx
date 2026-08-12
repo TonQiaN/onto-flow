@@ -1,188 +1,220 @@
 "use client";
 
 /**
- * 工作流列表页：卡片列表（名称、描述、节点数、更新时间）+ 新建 / 重命名 / 删除。
- * 重命名走「GET 详情 → PUT 整图透传 + 新名称」以满足 PUT 整图替换契约。
+ * 工作流列表页：左标签树 + 顶部搜索/排序/分页（状态同步 URL）+ 卡片网格。
+ * 列表数据读 DESIGN-V2 第一节的信封响应 { items, total, page, pageSize }。
+ * 工作流是顶层实体（refCount 恒为 0），卡片不显示引用计数，改显示节点数。
+ * 卡片点开进画布；「信息」抽屉里改名称/描述/标签、看被引用与修订历史。
  */
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import {
+  DEFAULT_PAGE_SIZE,
+  formatTime,
+  LibraryLayout,
+  LibraryToolbar,
+  type ListEnvelope,
+  readError,
+  ReferencesPanel,
+  RevisionPanel,
+  type Tag,
+  tagColor,
+  TagPicker,
+  tagLeafName,
+  TagTree,
+  useLibraryQuery,
+  type WithLibraryMeta,
+} from "@/components/library";
 
-interface WorkflowListItem {
+interface WorkflowRow {
   id: string;
   name: string;
   description: string;
-  nodeCount?: number;
-  updatedAt?: string | number;
+  nodeCount: number;
+  updatedAt: string;
 }
 
-type ModalState =
-  | { mode: "create" }
-  | { mode: "rename"; id: string }
-  | null;
-
-function formatTime(v?: string | number): string {
-  if (v === undefined || v === null) return "—";
-  const d = new Date(v);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("zh-CN", { hour12: false });
-}
+type WorkflowItem = WorkflowRow & WithLibraryMeta;
 
 export default function WorkflowsPage() {
+  return (
+    <Suspense
+      fallback={<p className="p-8 text-sm text-zinc-400">加载工作流…</p>}
+    >
+      <WorkflowsLibrary />
+    </Suspense>
+  );
+}
+
+function WorkflowsLibrary() {
   const router = useRouter();
-  const [items, setItems] = useState<WorkflowListItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [modal, setModal] = useState<ModalState>(null);
-  const [nameInput, setNameInput] = useState("");
-  const [busy, setBusy] = useState(false);
+  const { q, tags, sort, page, setQ, setTags, setSort, setPage } =
+    useLibraryQuery();
+  const highlight = useSearchParams().get("highlight");
+
+  const [data, setData] = useState<ListEnvelope<WorkflowItem> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+  const [detail, setDetail] = useState<WorkflowItem | null>(null);
+  const [rowError, setRowError] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (tags.length > 0) params.set("tags", tags.join(","));
+    params.set("sort", sort);
+    params.set("page", String(page));
     try {
-      const res = await fetch("/api/workflows");
-      const body = (await res.json().catch(() => null)) as
-        | WorkflowListItem[]
-        | { error?: string }
-        | null;
-      if (!res.ok || !Array.isArray(body)) {
-        throw new Error(
-          (body && !Array.isArray(body) && body.error) || "加载工作流列表失败",
-        );
+      const res = await fetch(`/api/workflows?${params.toString()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        setLoadError(await readError(res));
+        setData(null);
+        return;
       }
-      setItems(body);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setData((await res.json()) as ListEnvelope<WorkflowItem>);
+    } catch {
+      setLoadError("网络错误，无法加载工作流列表");
+      setData(null);
+    } finally {
+      setLoading(false);
     }
-  }, []);
+  }, [q, tags, sort, page]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const openCreate = () => {
-    setNameInput("");
-    setModal({ mode: "create" });
-  };
+  const items = data?.items ?? [];
 
-  const openRename = (w: WorkflowListItem) => {
-    setNameInput(w.name);
-    setModal({ mode: "rename", id: w.id });
-  };
-
-  const submitModal = async () => {
-    const name = nameInput.trim();
-    if (!name || !modal || busy) return;
-    setBusy(true);
-    setError(null);
+  async function create() {
+    const name = createName.trim();
+    if (!name || createBusy) return;
+    setCreateBusy(true);
+    setLoadError(null);
     try {
-      if (modal.mode === "create") {
-        const res = await fetch("/api/workflows", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name, description: "" }),
-        });
-        const body = (await res.json().catch(() => null)) as {
-          id?: string;
-          error?: string;
-        } | null;
-        if (!res.ok || !body?.id) throw new Error(body?.error ?? "创建失败");
-        router.push(`/workflows/${body.id}`);
+      const res = await fetch("/api/workflows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description: "" }),
+      });
+      if (!res.ok) {
+        setLoadError(await readError(res));
         return;
       }
-      // rename：先取整图再透传（PUT 为整图替换）
-      const detailRes = await fetch(`/api/workflows/${modal.id}`);
-      const detail = (await detailRes.json().catch(() => null)) as {
-        workflow?: { description?: string };
-        nodes?: unknown[];
-        edges?: unknown[];
-        error?: string;
-      } | null;
-      if (!detailRes.ok) throw new Error(detail?.error ?? "加载工作流失败");
-      const res = await fetch(`/api/workflows/${modal.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name,
-          description: detail?.workflow?.description ?? "",
-          nodes: detail?.nodes ?? [],
-          edges: detail?.edges ?? [],
-        }),
-      });
-      const body = (await res.json().catch(() => null)) as {
-        error?: string;
-      } | null;
-      if (!res.ok) throw new Error(body?.error ?? "重命名失败");
-      setModal(null);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const created = (await res.json()) as { id?: string };
+      if (!created?.id) {
+        setLoadError("创建失败：服务端未返回工作流 id");
+        return;
+      }
+      router.push(`/workflows/${created.id}`);
+    } catch {
+      setLoadError("网络错误，创建失败");
     } finally {
-      setBusy(false);
+      setCreateBusy(false);
     }
-  };
+  }
 
-  const remove = async (w: WorkflowListItem) => {
-    if (!window.confirm(`确认删除工作流「${w.name}」？该操作不可恢复。`)) {
+  async function remove(workflow: WorkflowItem) {
+    if (!window.confirm(`确认删除工作流「${workflow.name}」？该操作不可恢复。`))
       return;
+    setRowError((prev) => ({ ...prev, [workflow.id]: "" }));
+    try {
+      const res = await fetch(`/api/workflows/${workflow.id}`, {
+        method: "DELETE",
+      });
+      if (res.status === 409) {
+        const body = (await res.json()) as { error?: string; usedBy?: unknown };
+        const detailText = Array.isArray(body.usedBy)
+          ? body.usedBy
+              .map((u) =>
+                u && typeof u === "object" && "name" in u
+                  ? String((u as { name: unknown }).name)
+                  : String(u),
+              )
+              .join("、")
+          : "";
+        setRowError((prev) => ({
+          ...prev,
+          [workflow.id]: `${body.error ?? "该工作流正被引用，无法删除"}${detailText ? `。引用方：${detailText}` : ""}`,
+        }));
+        return;
+      }
+      if (!res.ok) {
+        const message = await readError(res);
+        setRowError((prev) => ({ ...prev, [workflow.id]: message }));
+        return;
+      }
+      if (items.length === 1 && page > 1) setPage(page - 1);
+      else void load();
+    } catch {
+      setRowError((prev) => ({ ...prev, [workflow.id]: "网络错误，删除失败" }));
     }
-    setError(null);
-    const res = await fetch(`/api/workflows/${w.id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as {
-        error?: string;
-      } | null;
-      setError(body?.error ?? "删除失败");
-      return;
-    }
-    await load();
-  };
+  }
+
+  const filtering = q !== "" || tags.length > 0;
 
   return (
-    <div className="p-8">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-zinc-900">工作流</h1>
-          <p className="mt-0.5 text-sm text-zinc-400">
-            编排 Action 的 DAG，点击卡片进入画布编辑器
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white hover:bg-zinc-700"
-        >
-          ＋ 新建工作流
-        </button>
-      </div>
-
-      {error && (
-        <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <span>{error}</span>
-          <button
-            type="button"
-            onClick={() => setError(null)}
-            className="text-red-400 hover:text-red-700"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {items === null ? (
-        <p className="text-sm text-zinc-400">加载中…</p>
-      ) : items.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-6 py-12 text-center text-sm text-zinc-400">
-          还没有工作流，点击右上角「新建工作流」开始
-        </div>
-      ) : (
+    <>
+      <LibraryLayout
+        title="工作流"
+        subtitle="编排 Action 的 DAG，点击卡片进入画布编辑器。"
+        tree={<TagTree kind="workflow" selected={tags} onChange={setTags} />}
+        toolbar={
+          <LibraryToolbar
+            q={q}
+            onQChange={setQ}
+            sort={sort}
+            onSortChange={setSort}
+            total={data?.total ?? 0}
+            page={page}
+            pageSize={data?.pageSize ?? DEFAULT_PAGE_SIZE}
+            onPageChange={setPage}
+            right={
+              <button
+                type="button"
+                onClick={() => {
+                  setCreateName("");
+                  setCreating(true);
+                }}
+                className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white transition-colors hover:bg-zinc-700"
+              >
+                ＋ 新建工作流
+              </button>
+            }
+          />
+        }
+        loading={loading && data === null}
+        error={loadError}
+        onRetry={() => void load()}
+        empty={
+          !loadError && !loading && items.length === 0
+            ? filtering
+              ? "没有符合当前筛选条件的工作流。"
+              : "还没有工作流，点击右上角「新建工作流」开始。"
+            : undefined
+        }
+      >
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {items.map((w) => (
+          {items.map((workflow) => (
             <div
-              key={w.id}
-              onClick={() => router.push(`/workflows/${w.id}`)}
-              className="cursor-pointer rounded-lg border border-zinc-200 bg-white p-4 shadow-sm transition-colors hover:border-zinc-400"
+              key={workflow.id}
+              onClick={() => router.push(`/workflows/${workflow.id}`)}
+              className={`cursor-pointer rounded-lg border bg-white p-4 shadow-sm transition-colors hover:border-zinc-400 ${
+                highlight === workflow.id
+                  ? "border-zinc-900 ring-1 ring-zinc-900"
+                  : "border-zinc-200"
+              }`}
             >
               <div className="flex items-start justify-between gap-2">
                 <h2 className="truncate text-sm font-semibold text-zinc-900">
-                  {w.name}
+                  {workflow.name}
                 </h2>
                 <div
                   className="flex shrink-0 gap-1"
@@ -190,40 +222,68 @@ export default function WorkflowsPage() {
                 >
                   <button
                     type="button"
-                    onClick={() => openRename(w)}
+                    onClick={() => setDetail(workflow)}
                     className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
                   >
-                    重命名
+                    信息
                   </button>
                   <button
                     type="button"
-                    onClick={() => void remove(w)}
+                    onClick={() => void remove(workflow)}
                     className="rounded px-1.5 py-0.5 text-xs text-red-500 hover:bg-red-50 hover:text-red-700"
                   >
                     删除
                   </button>
                 </div>
               </div>
+
               <p className="mt-1 line-clamp-2 min-h-[1.25rem] text-xs text-zinc-500">
-                {w.description || "（无描述）"}
+                {workflow.description || "（无描述）"}
               </p>
+
+              {workflow.tags.length > 0 && (
+                <div
+                  className="mt-2 flex flex-wrap items-center gap-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {workflow.tags.map((tag) => (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      title={`按标签「${tag.name}」筛选`}
+                      onClick={() => setTags([tag.id])}
+                      className="inline-flex items-center gap-1 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 hover:border-zinc-400 hover:text-zinc-900"
+                    >
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ backgroundColor: tagColor(tag) }}
+                      />
+                      {tagLeafName(tag.name)}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="mt-3 flex items-center justify-between text-[11px] text-zinc-400">
-                <span>
-                  节点数：
-                  {typeof w.nodeCount === "number" ? w.nodeCount : "—"}
-                </span>
-                <span>更新于 {formatTime(w.updatedAt)}</span>
+                <span>节点数：{workflow.nodeCount}</span>
+                <span>更新于 {formatTime(workflow.updatedAt)}</span>
               </div>
+
+              {rowError[workflow.id] && (
+                <p className="mt-2 text-xs text-red-600">
+                  {rowError[workflow.id]}
+                </p>
+              )}
             </div>
           ))}
         </div>
-      )}
+      </LibraryLayout>
 
-      {modal && (
+      {creating && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={() => {
-            if (!busy) setModal(null);
+            if (!createBusy) setCreating(false);
           }}
         >
           <div
@@ -231,14 +291,14 @@ export default function WorkflowsPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-base font-semibold text-zinc-900">
-              {modal.mode === "create" ? "新建工作流" : "重命名工作流"}
+              新建工作流
             </h2>
             <input
               autoFocus
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
+              value={createName}
+              onChange={(e) => setCreateName(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void submitModal();
+                if (e.key === "Enter") void create();
               }}
               placeholder="工作流名称"
               className="mt-3 w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
@@ -246,24 +306,251 @@ export default function WorkflowsPage() {
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setModal(null)}
-                disabled={busy}
+                onClick={() => setCreating(false)}
+                disabled={createBusy}
                 className="rounded-md border border-zinc-300 bg-white px-3.5 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
               >
                 取消
               </button>
               <button
                 type="button"
-                onClick={() => void submitModal()}
-                disabled={busy || !nameInput.trim()}
+                onClick={() => void create()}
+                disabled={createBusy || !createName.trim()}
                 className="rounded-md bg-zinc-900 px-3.5 py-1.5 text-sm text-white hover:bg-zinc-700 disabled:opacity-50"
               >
-                {busy ? "处理中…" : "确定"}
+                {createBusy ? "处理中…" : "确定"}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {detail && (
+        <WorkflowDrawer
+          workflow={detail}
+          onClose={() => setDetail(null)}
+          onSaved={() => {
+            setDetail(null);
+            void load();
+          }}
+          onRefresh={() => void load()}
+        />
+      )}
+    </>
+  );
+}
+
+type TabKey = "basic" | "refs" | "revisions";
+
+const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
+  { key: "basic", label: "基本信息" },
+  { key: "refs", label: "被引用" },
+  { key: "revisions", label: "修订历史" },
+];
+
+/**
+ * 工作流信息抽屉。名称/描述保存走「GET 整图 → PUT 整图透传 + 新名称」，
+ * 以满足 PUT 为整图替换的契约（画布结构本身仍在 /workflows/[id] 里编辑）。
+ */
+function WorkflowDrawer({
+  workflow,
+  onClose,
+  onSaved,
+  onRefresh,
+}: {
+  workflow: WorkflowItem;
+  onClose: () => void;
+  onSaved: () => void;
+  onRefresh: () => void;
+}) {
+  const router = useRouter();
+  const [tab, setTab] = useState<TabKey>("basic");
+  const [name, setName] = useState(workflow.name);
+  const [description, setDescription] = useState(workflow.description);
+  const [tags, setTags] = useState<Tag[]>(workflow.tags);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reloadFromServer = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/workflows/${workflow.id}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        workflow?: { name?: string; description?: string };
+      };
+      if (body.workflow?.name !== undefined) setName(body.workflow.name);
+      if (body.workflow?.description !== undefined)
+        setDescription(body.workflow.description);
+    } catch {
+      // 拉取失败保持当前表单
+    }
+  }, [workflow.id]);
+
+  async function save() {
+    if (!name.trim()) {
+      setError("名称不能为空");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const detailRes = await fetch(`/api/workflows/${workflow.id}`, {
+        cache: "no-store",
+      });
+      if (!detailRes.ok) {
+        setError(await readError(detailRes));
+        return;
+      }
+      const detail = (await detailRes.json()) as {
+        nodes?: unknown[];
+        edges?: unknown[];
+      };
+      const res = await fetch(`/api/workflows/${workflow.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          description,
+          nodes: detail.nodes ?? [],
+          edges: detail.edges ?? [],
+        }),
+      });
+      if (!res.ok) {
+        setError(await readError(res));
+        return;
+      }
+      onSaved();
+    } catch {
+      setError("网络错误，保存失败");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex justify-end bg-black/30"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-full w-full max-w-xl flex-col bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
+          <h2 className="text-base font-semibold text-zinc-900">工作流信息</h2>
+          <button
+            onClick={onClose}
+            className="text-sm text-zinc-400 hover:text-zinc-600"
+          >
+            关闭
+          </button>
+        </div>
+
+        <div className="flex gap-1 border-b border-zinc-200 px-6">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
+                tab === t.key
+                  ? "border-zinc-900 text-zinc-900"
+                  : "border-transparent text-zinc-500 hover:text-zinc-800"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
+          {tab === "basic" && (
+            <>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-zinc-700">
+                  名称
+                </span>
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-zinc-700">
+                  描述
+                </span>
+                <input
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="一句话说明这个工作流做什么"
+                  className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
+                />
+              </label>
+              <div>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">
+                  标签
+                </span>
+                <TagPicker
+                  kind="workflow"
+                  entityId={workflow.id}
+                  value={tags}
+                  onChange={(next) => {
+                    setTags(next);
+                    onRefresh();
+                  }}
+                />
+              </div>
+              <p className="text-xs text-zinc-400">
+                节点与连线在画布里编辑：
+                <button
+                  type="button"
+                  onClick={() => router.push(`/workflows/${workflow.id}`)}
+                  className="ml-1 underline hover:text-zinc-700"
+                >
+                  打开画布
+                </button>
+              </p>
+            </>
+          )}
+
+          {tab === "refs" && (
+            <ReferencesPanel kind="workflow" id={workflow.id} />
+          )}
+
+          {tab === "revisions" && (
+            <RevisionPanel
+              kind="workflow"
+              id={workflow.id}
+              onRestored={() => {
+                void reloadFromServer();
+                onRefresh();
+              }}
+            />
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-3 border-t border-zinc-200 px-6 py-4">
+          {error && <p className="mr-auto text-sm text-red-600">{error}</p>}
+          <button
+            onClick={onClose}
+            className="rounded-md border border-zinc-300 px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-50"
+          >
+            {tab === "basic" ? "取消" : "关闭"}
+          </button>
+          {tab === "basic" && (
+            <button
+              onClick={() => void save()}
+              disabled={saving}
+              className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white transition-colors hover:bg-zinc-700 disabled:opacity-50"
+            >
+              {saving ? "保存中…" : "保存"}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

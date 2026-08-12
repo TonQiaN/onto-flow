@@ -1,52 +1,70 @@
 import { NextResponse } from "next/server";
-import { count, desc } from "drizzle-orm";
+import { count, inArray } from "drizzle-orm";
 import { db, workflowNodes, workflows } from "@/db";
-import { handle, jsonError } from "@/lib/http";
+import { handle } from "@/lib/http";
+import "@/server/writers";
+import {
+  listEnvelope,
+  parseListQuery,
+  selectLibraryPage,
+} from "@/server/writers/list";
+import { respond } from "@/server/writers/types";
+import { createWorkflow } from "@/server/writers/workflow";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+interface WorkflowListItem {
+  id: string;
+  name: string;
+  description: string;
+  updatedAt: Date;
+  nodeCount: number;
+}
+
+export async function GET(request: Request) {
   return handle(() => {
-    const rows = db
-      .select()
-      .from(workflows)
-      .orderBy(desc(workflows.updatedAt))
-      .all();
-    const counts = new Map(
-      db
-        .select({ workflowId: workflowNodes.workflowId, n: count() })
-        .from(workflowNodes)
-        .groupBy(workflowNodes.workflowId)
+    const query = parseListQuery(request.url);
+    const page = selectLibraryPage({
+      kind: "workflow",
+      table: workflows,
+      columns: {
+        id: workflows.id,
+        name: workflows.name,
+        description: workflows.description,
+        updatedAt: workflows.updatedAt,
+      },
+      query,
+    });
+
+    let items: WorkflowListItem[] = [];
+    if (page.ids.length > 0) {
+      const nodeCounts = new Map(
+        db
+          .select({ workflowId: workflowNodes.workflowId, n: count() })
+          .from(workflowNodes)
+          .where(inArray(workflowNodes.workflowId, page.ids))
+          .groupBy(workflowNodes.workflowId)
+          .all()
+          .map((r) => [r.workflowId, r.n]),
+      );
+      items = db
+        .select()
+        .from(workflows)
+        .where(inArray(workflows.id, page.ids))
         .all()
-        .map((r) => [r.workflowId, r.n]),
-    );
-    return NextResponse.json(
-      rows.map((w) => ({
-        id: w.id,
-        name: w.name,
-        description: w.description,
-        updatedAt: w.updatedAt,
-        nodeCount: counts.get(w.id) ?? 0,
-      })),
-    );
+        .map((w) => ({
+          id: w.id,
+          name: w.name,
+          description: w.description,
+          updatedAt: w.updatedAt,
+          nodeCount: nodeCounts.get(w.id) ?? 0,
+        }));
+    }
+
+    return NextResponse.json(listEnvelope(page, items));
   });
 }
 
 export async function POST(request: Request) {
-  return handle(async () => {
-    const raw = await request.json();
-    if (typeof raw !== "object" || raw === null)
-      return jsonError(400, "请求体必须是 JSON 对象");
-    const body = raw as Record<string, unknown>;
-    const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (!name) return jsonError(400, "名称不能为空");
-    const description =
-      typeof body.description === "string" ? body.description : "";
-    const row = db
-      .insert(workflows)
-      .values({ name, description })
-      .returning()
-      .get();
-    return NextResponse.json(row);
-  });
+  return handle(async () => respond(createWorkflow(await request.json())));
 }

@@ -1,48 +1,40 @@
 import { NextResponse } from "next/server";
-import { asc } from "drizzle-orm";
+import { inArray } from "drizzle-orm";
 import { db, tools } from "@/db";
-import { handle, jsonError } from "@/lib/http";
+import { handle } from "@/lib/http";
+import "@/server/writers";
+import {
+  listEnvelope,
+  parseListQuery,
+  selectLibraryPage,
+} from "@/server/writers/list";
+import { createTool } from "@/server/writers/tool";
+import { respond } from "@/server/writers/types";
 
 export const dynamic = "force-dynamic";
 
-interface ToolPayload {
-  name: string;
-  description: string;
-  code: string;
-}
-
-function parseToolPayload(
-  raw: unknown,
-): { data: ToolPayload } | { error: NextResponse } {
-  const fail = (msg: string) => ({ error: jsonError(400, msg) });
-  if (typeof raw !== "object" || raw === null)
-    return fail("请求体必须是 JSON 对象");
-  const body = raw as Record<string, unknown>;
-
-  const name = typeof body.name === "string" ? body.name.trim() : "";
-  if (!name) return fail("名称不能为空");
-
-  return {
-    data: {
-      name,
-      description:
-        typeof body.description === "string" ? body.description : "",
-      code: typeof body.code === "string" ? body.code : "",
-    },
-  };
-}
-
-export async function GET() {
-  return handle(() =>
-    NextResponse.json(db.select().from(tools).orderBy(asc(tools.name)).all()),
-  );
+export async function GET(request: Request) {
+  return handle(() => {
+    const query = parseListQuery(request.url);
+    const page = selectLibraryPage({
+      kind: "tool",
+      table: tools,
+      columns: {
+        id: tools.id,
+        name: tools.name,
+        description: tools.description,
+        updatedAt: tools.updatedAt,
+      },
+      query,
+    });
+    const rows =
+      page.ids.length > 0
+        ? db.select().from(tools).where(inArray(tools.id, page.ids)).all()
+        : [];
+    return NextResponse.json(listEnvelope(page, rows));
+  });
 }
 
 export async function POST(request: Request) {
-  return handle(async () => {
-    const parsed = parseToolPayload(await request.json());
-    if ("error" in parsed) return parsed.error;
-    const row = db.insert(tools).values(parsed.data).returning().get();
-    return NextResponse.json(row);
-  });
+  return handle(async () => respond(createTool(await request.json())));
 }

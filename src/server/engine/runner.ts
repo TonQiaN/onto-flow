@@ -4,8 +4,11 @@
  * - 输入节点 → outputs = { value: 用户输入 }；输出节点 → 上游值透传为 outputs；
  *   Action 节点 → runActionNode。
  * - 节点失败 → run_nodes.error + 下游全部 skipped + run failed；全部成功 → run success。
+ * - cancelRun 是人为中止：abort 会话 + 节点 cancelled + 下游 skipped + run cancelled，
+ *   是区别于 failed 的独立终态（run.error 留空）。
  * - 任何异常都落到 run / run_nodes.error，绝不留 running 悬挂。
  */
+import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, runNodes, runs } from "@/db";
 import {
@@ -15,7 +18,8 @@ import {
   type ValidationIssue,
 } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
-import { isWithinData } from "@/server/fs-safety";
+import { DATA_DIR, isWithinData } from "@/server/fs-safety";
+import { getOpencodeClient } from "@/server/opencode/server";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
 import { runActionNode } from "./action";
 
@@ -23,6 +27,25 @@ export type StartRunResult =
   | { ok: true; runId: string }
   | { ok: false; status: 404; error: string }
   | { ok: false; status: 422; error: string; issues: ValidationIssue[] };
+
+export type CancelRunResult =
+  | { ok: true }
+  | { ok: false; status: 404 | 409; error: string };
+
+/**
+ * 进程级取消标记。executeRun 在每个节点开始前查它，已取消则停止调度剩余节点
+ * （挂 globalThis 以免 HMR 重建模块时丢失正在跑的运行的标记）。
+ */
+interface RunnerGlobals {
+  flowforgeCancelledRuns?: Set<string>;
+}
+const g = globalThis as RunnerGlobals;
+const cancelledRuns: Set<string> = g.flowforgeCancelledRuns ?? new Set();
+g.flowforgeCancelledRuns = cancelledRuns;
+
+export function isRunCancelled(runId: string): boolean {
+  return cancelledRuns.has(runId);
+}
 
 /** PortValue 形态校验（前端传入的运行输入不可信） */
 function isPortValue(value: unknown): value is PortValue {
@@ -95,7 +118,14 @@ export async function startRun(
 
   const runId = crypto.randomUUID();
   db.insert(runs)
-    .values({ id: runId, workflowId, status: "running", startedAt: new Date() })
+    .values({
+      id: runId,
+      workflowId,
+      // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
+      workflowName: resolved.workflow.name,
+      status: "running",
+      startedAt: new Date(),
+    })
     .run();
   for (const node of resolved.nodes) {
     db.insert(runNodes)
@@ -122,8 +152,15 @@ async function executeRun(
   const outputsByNode = new Map<string, Record<string, PortValue>>();
   const skipped = new Set<string>();
   let firstError: string | null = null;
+  let cancelled = false;
 
   for (const nodeId of order) {
+    // 取消是人为中止：立刻停止调度剩余节点（收尾由下方终态判定统一处理）
+    if (isRunCancelled(runId)) {
+      cancelled = true;
+      break;
+    }
+
     const node = nodeById.get(nodeId);
     if (!node) continue;
 
@@ -190,6 +227,11 @@ async function executeRun(
           inputs: nodeInputs,
         });
       }
+      // 节点跑完时运行已被取消：cancelRun 已把它标 cancelled，不再翻回 success
+      if (isRunCancelled(runId)) {
+        cancelled = true;
+        break;
+      }
       outputsByNode.set(nodeId, outs);
       updateRunNode(runId, nodeId, {
         status: "success",
@@ -197,6 +239,15 @@ async function executeRun(
         finishedAt: new Date(),
       });
     } catch (err) {
+      // session.abort 会让正在跑的 prompt 抛错——那是被取消而不是失败，不记 error
+      if (isRunCancelled(runId)) {
+        updateRunNode(runId, nodeId, {
+          status: "cancelled",
+          finishedAt: new Date(),
+        });
+        cancelled = true;
+        break;
+      }
       const message = err instanceof Error ? err.message : String(err);
       updateRunNode(runId, nodeId, {
         status: "failed",
@@ -208,14 +259,88 @@ async function executeRun(
     }
   }
 
+  // 终态判定：cancelled 与 failed 是两个独立终态，取消不算失败、run.error 留空
+  const now = new Date();
+  if (cancelled || isRunCancelled(runId)) {
+    db.update(runNodes)
+      .set({ status: "skipped", finishedAt: now })
+      .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
+      .run();
+    db.update(runs)
+      .set({ status: "cancelled", error: null, finishedAt: now })
+      .where(eq(runs.id, runId))
+      .run();
+  } else {
+    db.update(runs)
+      .set(
+        firstError
+          ? { status: "failed", error: firstError, finishedAt: now }
+          : { status: "success", finishedAt: now },
+      )
+      .where(eq(runs.id, runId))
+      .run();
+  }
+  cancelledRuns.delete(runId);
+}
+
+/**
+ * 取消运行：abort 掉所有 running 节点的 opencode 会话，把它们标 cancelled、
+ * 未开始的节点标 skipped、run 标 cancelled。同时立进程级取消标记，让
+ * executeRun 在下一个节点开始前停止调度。HTTP 入口在阶段二接。
+ */
+export async function cancelRun(runId: string): Promise<CancelRunResult> {
+  const run = db
+    .select({ status: runs.status })
+    .from(runs)
+    .where(eq(runs.id, runId))
+    .get();
+  if (!run) return { ok: false, status: 404, error: "运行不存在" };
+  if (run.status !== "running") {
+    return { ok: false, status: 409, error: "该运行已结束，无法取消" };
+  }
+
+  // 先立标记：即使下面的 abort 慢，executeRun 也不会再启动新节点
+  cancelledRuns.add(runId);
+
+  const running = db
+    .select({ nodeId: runNodes.nodeId, sessionId: runNodes.sessionId })
+    .from(runNodes)
+    .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "running")))
+    .all();
+
+  for (const node of running) {
+    if (!node.sessionId) continue;
+    // 事件流与会话都按 directory 作用域隔离，abort 必须带该节点的工作区路径
+    const workspace = path.join(DATA_DIR, "runs", runId, node.nodeId);
+    try {
+      const client = await getOpencodeClient(workspace);
+      const res = await client.session.abort({
+        sessionID: node.sessionId,
+        directory: workspace,
+      });
+      if (res.error) {
+        console.error("[engine] 中止会话失败", node.sessionId, res.error);
+      }
+    } catch (err) {
+      console.error("[engine] 中止会话异常", node.sessionId, err);
+    }
+  }
+
+  const now = new Date();
+  db.update(runNodes)
+    .set({ status: "cancelled", finishedAt: now })
+    .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "running")))
+    .run();
+  db.update(runNodes)
+    .set({ status: "skipped", finishedAt: now })
+    .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
+    .run();
   db.update(runs)
-    .set(
-      firstError
-        ? { status: "failed", error: firstError, finishedAt: new Date() }
-        : { status: "success", finishedAt: new Date() },
-    )
+    .set({ status: "cancelled", error: null, finishedAt: now })
     .where(eq(runs.id, runId))
     .run();
+
+  return { ok: true };
 }
 
 function updateRunNode(
@@ -232,6 +357,15 @@ function updateRunNode(
 /** 兜底：executeRun 自身抛出的异常也不留 running 悬挂 */
 function failWholeRun(runId: string, message: string): void {
   try {
+    cancelledRuns.delete(runId);
+    // 已经写过终态（含被取消）的运行不覆盖：取消不是失败
+    const run = db
+      .select({ status: runs.status })
+      .from(runs)
+      .where(eq(runs.id, runId))
+      .get();
+    if (!run || run.status !== "running") return;
+
     db.update(runNodes)
       .set({ status: "failed", error: message, finishedAt: new Date() })
       .where(

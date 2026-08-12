@@ -3,25 +3,31 @@
  *
  * 运行：npm run db:seed（tsx scripts/seed.ts）；执行前需先 npm run db:push 建表。
  * 幂等：命名实体按 name 查找，存在则 update 内容（id 保持稳定）、不存在则 insert；
- * 关联表（动作端口/技能/工具关联、工作流节点/连线）先删后插，重复执行不产生重复行。
+ * 关联表（动作端口/技能/工具关联、工作流节点/连线、实体标签）先删后插，
+ * 修订只在该实体尚无任何修订时补写第 1 版——重复执行不产生重复行。
  */
 import fs from "node:fs";
 import path from "node:path";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import {
   actionPorts,
   actions,
   actionSkills,
   actionTools,
   db,
+  type EntityKind,
+  entityTags,
   models,
   objectTypes,
+  revisions,
   skills,
+  tags,
   tools,
   workflowEdges,
   workflowNodes,
   workflows,
 } from "../src/db";
+import { recordRevision } from "../src/server/revisions";
 
 // ---------------------------------------------------------------------------
 // 内容常量（全部内联，来源：research/erp-seed.json）
@@ -448,23 +454,51 @@ function upsertWorkflow(input: { name: string; description: string }): string {
   return id;
 }
 
+/** 标签按 name 唯一，已存在则复用（不覆盖用户后来改过的颜色） */
+function upsertTag(name: string): string {
+  const existing = db.select().from(tags).where(eq(tags.name, name)).get();
+  if (existing) return existing.id;
+  const id = crypto.randomUUID();
+  db.insert(tags).values({ id, name, color: null }).run();
+  return id;
+}
+
+/** 整体替换某实体的标签集合：先删该实体已有关联再插 */
+function assignTags(
+  entityKind: EntityKind,
+  entityId: string,
+  tagIds: string[],
+): void {
+  db.delete(entityTags)
+    .where(
+      and(
+        eq(entityTags.entityKind, entityKind),
+        eq(entityTags.entityId, entityId),
+      ),
+    )
+    .run();
+  for (const tagId of Array.from(new Set(tagIds))) {
+    db.insert(entityTags).values({ entityKind, entityId, tagId }).run();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // ① 内置 Object Types + ② 案例 Object Types
 // ---------------------------------------------------------------------------
 
-upsertObjectType({
+const otText = upsertObjectType({
   name: "text",
   kind: "text",
   description: "内置通用文本类型：任意纯文本内容。",
   builtin: true,
 });
-upsertObjectType({
+const otFile = upsertObjectType({
   name: "file",
   kind: "file",
   description: "内置通用文件类型：以文件形式传递的内容（上传或运行产物）。",
   builtin: true,
 });
-upsertObjectType({
+const otJson = upsertObjectType({
   name: "json",
   kind: "json",
   description: "内置通用 JSON 类型：结构化数据，可按需附带 JSON Schema。",
@@ -811,7 +845,209 @@ for (const edge of seedEdges) {
 }
 
 // ---------------------------------------------------------------------------
-// ⑧ 示例需求文件
+// ⑧ 标签体系（ADR-0003：多归属标签，`/` 表达层级，由前端拆成树）
+// ---------------------------------------------------------------------------
+
+const SEED_TAG_NAMES = [
+  "采购/集采",
+  "采购/需求",
+  "能力/整理",
+  "能力/生成",
+  "能力/审核",
+  "能力/归档",
+  "类型/业务对象",
+  "类型/内置",
+  "状态/已验证",
+] as const;
+type SeedTagName = (typeof SEED_TAG_NAMES)[number];
+
+const seedTagIds = new Map<string, string>(
+  SEED_TAG_NAMES.map((name) => [name, upsertTag(name)]),
+);
+
+function tag(name: SeedTagName): string {
+  const id = seedTagIds.get(name);
+  if (!id) throw new Error(`标签未创建：${name}`);
+  return id;
+}
+
+assignTags("workflow", workflowId, [tag("采购/集采"), tag("状态/已验证")]);
+
+assignTags("action", actionTidy, [tag("采购/需求"), tag("能力/整理")]);
+assignTags("action", actionGenerate, [tag("采购/集采"), tag("能力/生成")]);
+assignTags("action", actionReview, [tag("采购/集采"), tag("能力/审核")]);
+assignTags("action", actionArchive, [tag("采购/集采"), tag("能力/归档")]);
+
+assignTags("skill", skillBianzhi, [tag("采购/集采"), tag("能力/生成")]);
+assignTags("skill", skillShenhe, [tag("采购/集采"), tag("能力/审核")]);
+
+assignTags("tool", toolSavePlan, [tag("采购/集采"), tag("能力/归档")]);
+
+assignTags("object_type", otRequirementFile, [tag("类型/业务对象")]);
+assignTags("object_type", otRequirementPrompt, [tag("类型/业务对象")]);
+assignTags("object_type", otPlan, [tag("类型/业务对象"), tag("采购/集采")]);
+assignTags("object_type", otReview, [tag("类型/业务对象"), tag("采购/集采")]);
+assignTags("object_type", otReceipt, [tag("类型/业务对象")]);
+assignTags("object_type", otText, [tag("类型/内置")]);
+assignTags("object_type", otFile, [tag("类型/内置")]);
+assignTags("object_type", otJson, [tag("类型/内置")]);
+
+// ---------------------------------------------------------------------------
+// ⑨ 种子实体的第 1 版修订
+// ---------------------------------------------------------------------------
+
+/**
+ * 从库里回读实体的完整定义作为修订 payload——形状与各库 PUT 载荷一致
+ * （DESIGN.md「API 面」：Action 含 ports/skillIds/toolIds，Workflow 含 nodes/edges），
+ * 保证回滚能走与 PUT 相同的写入路径。
+ */
+function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
+  switch (kind) {
+    case "object_type": {
+      const row = db
+        .select()
+        .from(objectTypes)
+        .where(eq(objectTypes.id, id))
+        .get();
+      if (!row) throw new Error(`对象类型不存在：${id}`);
+      return {
+        name: row.name,
+        kind: row.kind,
+        description: row.description,
+        jsonSchema: row.jsonSchema,
+        builtin: row.builtin,
+      };
+    }
+    case "skill": {
+      const row = db.select().from(skills).where(eq(skills.id, id)).get();
+      if (!row) throw new Error(`技能不存在：${id}`);
+      return {
+        name: row.name,
+        description: row.description,
+        content: row.content,
+      };
+    }
+    case "tool": {
+      const row = db.select().from(tools).where(eq(tools.id, id)).get();
+      if (!row) throw new Error(`工具不存在：${id}`);
+      return {
+        name: row.name,
+        description: row.description,
+        code: row.code,
+      };
+    }
+    case "action": {
+      const row = db.select().from(actions).where(eq(actions.id, id)).get();
+      if (!row) throw new Error(`动作不存在：${id}`);
+      const ports = db
+        .select()
+        .from(actionPorts)
+        .where(eq(actionPorts.actionId, id))
+        .orderBy(asc(actionPorts.direction), asc(actionPorts.position))
+        .all();
+      const skillLinks = db
+        .select()
+        .from(actionSkills)
+        .where(eq(actionSkills.actionId, id))
+        .orderBy(asc(actionSkills.position))
+        .all();
+      const toolLinks = db
+        .select()
+        .from(actionTools)
+        .where(eq(actionTools.actionId, id))
+        .all();
+      return {
+        name: row.name,
+        description: row.description,
+        prompt: row.prompt,
+        rule: row.rule,
+        modelId: row.modelId,
+        reasoningEffort: row.reasoningEffort,
+        ports: ports.map((p) => ({
+          direction: p.direction,
+          name: p.name,
+          objectTypeId: p.objectTypeId,
+          position: p.position,
+        })),
+        skillIds: skillLinks.map((s) => s.skillId),
+        toolIds: toolLinks.map((t) => t.toolId),
+      };
+    }
+    case "workflow": {
+      const row = db.select().from(workflows).where(eq(workflows.id, id)).get();
+      if (!row) throw new Error(`工作流不存在：${id}`);
+      const nodes = db
+        .select()
+        .from(workflowNodes)
+        .where(eq(workflowNodes.workflowId, id))
+        .all();
+      const edges = db
+        .select()
+        .from(workflowEdges)
+        .where(eq(workflowEdges.workflowId, id))
+        .all();
+      return {
+        name: row.name,
+        description: row.description,
+        nodes: nodes.map((n) => ({
+          id: n.id,
+          kind: n.kind,
+          actionId: n.actionId,
+          objectTypeId: n.objectTypeId,
+          label: n.label,
+          x: n.x,
+          y: n.y,
+        })),
+        edges: edges.map((e) => ({
+          id: e.id,
+          sourceNodeId: e.sourceNodeId,
+          sourcePort: e.sourcePort,
+          targetNodeId: e.targetNodeId,
+          targetPort: e.targetPort,
+        })),
+      };
+    }
+  }
+}
+
+/** 幂等：该实体已有任何修订就跳过，只为首次播种补第 1 版 */
+async function seedRevision(kind: EntityKind, id: string): Promise<boolean> {
+  const existing = db
+    .select()
+    .from(revisions)
+    .where(and(eq(revisions.entityKind, kind), eq(revisions.entityId, id)))
+    .get();
+  if (existing) return false;
+  recordRevision(kind, id, entityPayload(kind, id), "种子初始版本");
+  return true;
+}
+
+const seedEntities: Array<{ kind: EntityKind; id: string }> = [
+  { kind: "object_type", id: otText },
+  { kind: "object_type", id: otFile },
+  { kind: "object_type", id: otJson },
+  { kind: "object_type", id: otRequirementFile },
+  { kind: "object_type", id: otRequirementPrompt },
+  { kind: "object_type", id: otPlan },
+  { kind: "object_type", id: otReview },
+  { kind: "object_type", id: otReceipt },
+  { kind: "skill", id: skillBianzhi },
+  { kind: "skill", id: skillShenhe },
+  { kind: "tool", id: toolSavePlan },
+  { kind: "action", id: actionTidy },
+  { kind: "action", id: actionGenerate },
+  { kind: "action", id: actionReview },
+  { kind: "action", id: actionArchive },
+  { kind: "workflow", id: workflowId },
+];
+
+let newRevisions = 0;
+for (const entity of seedEntities) {
+  if (await seedRevision(entity.kind, entity.id)) newRevisions += 1;
+}
+
+// ---------------------------------------------------------------------------
+// ⑩ 示例需求文件
 // ---------------------------------------------------------------------------
 
 const samplesDir = path.join(process.cwd(), "data", "samples");
@@ -835,10 +1071,14 @@ const counts = {
   工作流: db.select().from(workflows).all().length,
   工作流节点: db.select().from(workflowNodes).all().length,
   工作流连线: db.select().from(workflowEdges).all().length,
+  标签: db.select().from(tags).all().length,
+  标签关联: db.select().from(entityTags).all().length,
+  修订: db.select().from(revisions).all().length,
 };
 
 console.log("种子写入完成：");
 for (const [name, count] of Object.entries(counts)) {
   console.log(`  ${name}: ${count}`);
 }
+console.log(`  本次新增修订: ${newRevisions}`);
 console.log(`  示例需求文件: ${samplePath}`);

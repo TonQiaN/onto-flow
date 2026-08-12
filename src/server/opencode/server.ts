@@ -7,15 +7,19 @@
  * - 事件流按 directory 作用域隔离，因此每个会话按其工作区目录单独起事件泵，
  *   sessionID→(runId,nodeId) 路由，text delta 合并节流（≥500ms 或 ≥500 字符），
  *   ToolPart 状态逐条落 run_events，节点结束时 abort。
+ * - message.updated 捕获 assistant 消息的 token/费用明细落 node_usage，
+ *   并重算 run_nodes 的会话级用量汇总。
  */
 import { createOpencodeServer, type ServerOptions } from "@opencode-ai/sdk";
 import {
   createOpencodeClient,
+  type AssistantMessage,
   type OpencodeClient,
   type Event,
 } from "@opencode-ai/sdk/v2/client";
 import path from "node:path";
-import { db, runEvents } from "@/db";
+import { and, eq, sql } from "drizzle-orm";
+import { db, nodeUsage, runEvents, runNodes } from "@/db";
 
 const HOSTNAME = "127.0.0.1";
 const PORT = 4977;
@@ -193,6 +197,13 @@ function handleEvent(ev: Event): void {
       });
       return;
     }
+    case "message.updated": {
+      const { sessionID, info } = ev.properties;
+      const route = sessionRoutes.get(sessionID);
+      if (!route || info.role !== "assistant" || !info.tokens) return;
+      recordUsage(route, sessionID, info);
+      return;
+    }
     case "session.error": {
       const sessionID = ev.properties.sessionID;
       if (!sessionID) return;
@@ -227,6 +238,80 @@ function flushText(sessionID: string): void {
   const route = sessionRoutes.get(sessionID);
   if (route) insertRunEvent(route, "text", { text: buf.text });
   textBuffers.set(sessionID, { text: "", lastFlush: Date.now() });
+}
+
+/**
+ * assistant 消息的用量落库。
+ *
+ * 同一条消息会随生成过程多次 message.updated（tokens 逐步补全），因此明细按
+ * (sessionId, messageId) upsert；run_nodes 的六个汇总字段用 SUM **重算**而不是
+ * 累加——累加会把同一条消息数很多遍。
+ */
+function recordUsage(
+  route: SessionRoute,
+  sessionID: string,
+  info: AssistantMessage,
+): void {
+  const usage = {
+    providerId: info.providerID ?? "",
+    modelId: info.modelID ?? "",
+    variant: info.variant ?? null,
+    finish: info.finish ?? null,
+    inputTokens: info.tokens.input ?? 0,
+    outputTokens: info.tokens.output ?? 0,
+    reasoningTokens: info.tokens.reasoning ?? 0,
+    cacheReadTokens: info.tokens.cache?.read ?? 0,
+    cacheWriteTokens: info.tokens.cache?.write ?? 0,
+    cost: info.cost ?? 0,
+    ts: new Date(info.time.completed ?? info.time.created),
+  };
+
+  try {
+    db.insert(nodeUsage)
+      .values({
+        runId: route.runId,
+        nodeId: route.nodeId,
+        sessionId: sessionID,
+        messageId: info.id,
+        ...usage,
+      })
+      .onConflictDoUpdate({
+        target: [nodeUsage.sessionId, nodeUsage.messageId],
+        set: usage,
+      })
+      .run();
+    rollupNodeUsage(route);
+  } catch (err) {
+    console.error("[opencode] node_usage 写入失败", err);
+  }
+}
+
+/** 重算该 (runId,nodeId) 下全部 node_usage 的合计，写回 run_nodes */
+function rollupNodeUsage(route: SessionRoute): void {
+  const totals = db
+    .select({
+      inputTokens: sql<number>`coalesce(sum(${nodeUsage.inputTokens}), 0)`,
+      outputTokens: sql<number>`coalesce(sum(${nodeUsage.outputTokens}), 0)`,
+      reasoningTokens: sql<number>`coalesce(sum(${nodeUsage.reasoningTokens}), 0)`,
+      cacheReadTokens: sql<number>`coalesce(sum(${nodeUsage.cacheReadTokens}), 0)`,
+      cacheWriteTokens: sql<number>`coalesce(sum(${nodeUsage.cacheWriteTokens}), 0)`,
+      cost: sql<number>`coalesce(sum(${nodeUsage.cost}), 0)`,
+    })
+    .from(nodeUsage)
+    .where(
+      and(
+        eq(nodeUsage.runId, route.runId),
+        eq(nodeUsage.nodeId, route.nodeId),
+      ),
+    )
+    .get();
+  if (!totals) return;
+  db.update(runNodes)
+    .set(totals)
+    .where(
+      and(eq(runNodes.runId, route.runId), eq(runNodes.nodeId, route.nodeId)),
+    )
+    .run();
 }
 
 function insertRunEvent(
