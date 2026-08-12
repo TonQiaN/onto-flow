@@ -7,7 +7,8 @@
  *   file 输入追加 file:// part）。
  * - 单 text 输出取 parts 文本拼接；否则 format json_schema 取 info.structured，
  *   deepseek 思考模式 format 失败时降级为同会话普通 prompt 要求纯 JSON。
- * - 会话创建前把本次实际使用的完整配置冻结进 run_nodes.snapshot（运行快照）。
+ * - 会话创建前把本次实际使用的完整配置冻结进 run_nodes.snapshot（运行快照），
+ *   端口与 prompt/rule/model/skills/tools 一样在**执行时刻**重查，保证快照内部同源同刻。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -20,6 +21,7 @@ import type {
   TextPartInput,
 } from "@opencode-ai/sdk/v2/client";
 import {
+  actionPorts,
   actionSkills,
   actionTools,
   actions,
@@ -39,6 +41,9 @@ import {
   registerSession,
   releaseSession,
 } from "@/server/opencode/server";
+// 循环依赖（runner → action → runner）在 ESM 下安全：isRunCancelled 是函数声明，
+// 且只在 runActionNode 执行期调用，那时 runner 模块体早已求值完毕。
+import { isRunCancelled } from "./runner";
 
 export interface ActionNodeContext {
   runId: string;
@@ -99,8 +104,13 @@ export async function runActionNode(
     .where(eq(actionTools.actionId, action.id))
     .all();
 
+  // 端口在执行时刻重查：prompt/rule/model/skills/tools 都取自此刻的 Action，端口若还沿用
+  // startRun 时刻解析的 ctx.node，运行期间有人改端口就会让快照自相矛盾（见下方一致性校验）。
+  const freshPorts = readActionPorts(action.id);
+
   // ---------- 运行快照 ----------
-  // 会话创建前落库：即使随后执行失败，也留下「那次运行到底跑了什么」的冻结副本。
+  // 会话创建前落库：即使随后执行失败（含下面的端口/占位符校验失败），也留下
+  // 「那次运行到底跑了什么」的冻结副本。
   // Skill 存全文、Tool 存源码，实体后续被改写/删除都不影响历史可解释性。
   writeSnapshot(ctx, {
     actionId: action.id,
@@ -116,10 +126,19 @@ export async function runActionNode(
     skills: skillRows.map((s) => ({ name: s.name, content: s.content })),
     tools: toolRows.map((t) => ({ name: t.name, code: t.code })),
     ports: {
-      inputs: ctx.node.inputs.map(toSnapshotPort),
-      outputs: ctx.node.outputs.map(toSnapshotPort),
+      inputs: freshPorts.inputs.map(toSnapshotPort),
+      outputs: freshPorts.outputs.map(toSnapshotPort),
     },
   });
+
+  // 执行仍以 ctx.node 为准（连线取值依赖 startRun 时刻解析出的端口），因此两者一旦不一致
+  // 就说明 Action 在本次运行途中被改了：宁可终止，也不要拿旧端口跑出与快照对不上的结果。
+  assertPortsUnchanged(action.name, ctx.node.inputs, freshPorts.inputs, "输入");
+  assertPortsUnchanged(action.name, ctx.node.outputs, freshPorts.outputs, "输出");
+
+  // prompt 里的 {{占位符}} 必须能匹配到输入端口名：匹配不上时插值会静默留下原文，
+  // 把 "{{需求文件}}" 这种字面量直接发给模型，白跑一次还拿到答非所问的结果。
+  assertPlaceholdersResolvable(action.name, action.prompt, freshPorts.inputs);
 
   // ---------- 工作区物化 ----------
   const workspace = path.join(DATA_DIR, "runs", ctx.runId, ctx.node.id);
@@ -258,9 +277,13 @@ export async function runActionNode(
     }
     let structured = res.data?.info.structured;
     if (structured === undefined || structured === null) {
+      // 取消后主 prompt 会被 abort 打断而返回空结果，不能顺势滑进降级——那会朝已 abort 的
+      // 会话再发 prompt，白白计费并让取消迟迟不生效。runner 的 catch 会把它认成 cancelled。
+      assertNotCancelled(ctx.runId);
       // deepseek 思考模式不支持 format（session.error 事件 + parts 空）→ 降级
       structured = await fallbackStructured(
         client,
+        ctx.runId,
         sessionID,
         workspace,
         promptBase,
@@ -275,6 +298,80 @@ export async function runActionNode(
 }
 
 // ---------- helpers ----------
+
+/** 已取消就抛错中止：runner 的 catch 见 isRunCancelled 会记 cancelled 而非 failed */
+function assertNotCancelled(runId: string): void {
+  if (isRunCancelled(runId)) throw new Error("运行已取消");
+}
+
+/** 执行时刻重查该 Action 的端口定义（与 prompt/skills/tools 同一时刻，供快照与校验用） */
+function readActionPorts(actionId: string): {
+  inputs: ResolvedPort[];
+  outputs: ResolvedPort[];
+} {
+  const rows = db
+    .select({
+      direction: actionPorts.direction,
+      name: actionPorts.name,
+      objectTypeId: actionPorts.objectTypeId,
+      objectTypeName: objectTypes.name,
+      kind: objectTypes.kind,
+    })
+    .from(actionPorts)
+    .innerJoin(objectTypes, eq(actionPorts.objectTypeId, objectTypes.id))
+    .where(eq(actionPorts.actionId, actionId))
+    .orderBy(asc(actionPorts.position))
+    .all();
+  const toPort = (row: (typeof rows)[number]): ResolvedPort => ({
+    name: row.name,
+    objectTypeId: row.objectTypeId,
+    objectTypeName: row.objectTypeName,
+    kind: row.kind,
+  });
+  return {
+    inputs: rows.filter((r) => r.direction === "input").map(toPort),
+    outputs: rows.filter((r) => r.direction === "output").map(toPort),
+  };
+}
+
+/** startRun 时刻解析的端口 vs 执行时刻重查的端口：不一致说明运行途中 Action 被改了 */
+function assertPortsUnchanged(
+  actionName: string,
+  fromContext: ResolvedPort[],
+  fromDb: ResolvedPort[],
+  label: string,
+): void {
+  const fingerprint = (ports: ResolvedPort[]): string =>
+    ports.map((p) => `${p.name}:${p.objectTypeId}`).join("|");
+  if (fingerprint(fromContext) === fingerprint(fromDb)) return;
+  throw new Error(
+    `Action「${actionName}」的${label}端口在本次运行期间被修改（运行时为 ${
+      fingerprint(fromContext) || "（空）"
+    }，当前为 ${fingerprint(fromDb) || "（空）"}），已中止以免产出与快照不符的结果`,
+  );
+}
+
+/** prompt 里的 {{占位符}} 必须都能匹配到输入端口名，否则原样发给模型 */
+function assertPlaceholdersResolvable(
+  actionName: string,
+  prompt: string,
+  inputs: ResolvedPort[],
+): void {
+  const names = new Set(inputs.map((p) => p.name));
+  const unresolved = new Set<string>();
+  for (const match of prompt.matchAll(/\{\{\s*([^{}]*?)\s*\}\}/g)) {
+    const name = match[1];
+    if (!names.has(name)) unresolved.add(name);
+  }
+  if (unresolved.size === 0) return;
+  throw new Error(
+    `Action「${actionName}」的 prompt 含无法匹配输入端口的占位符：${[...unresolved]
+      .map((n) => `{{${n}}}`)
+      .join("、")}（现有输入端口：${
+      [...names].join("、") || "无"
+    }）`,
+  );
+}
 
 function toSnapshotPort(port: ResolvedPort): RunSnapshotPort {
   return {
@@ -376,6 +473,7 @@ function buildOutputSchema(ports: ResolvedPort[]): Record<string, unknown> {
 /** format 失败降级：同会话普通 prompt 要求纯 JSON，剥围栏解析 + 必填键校验，失败重试一次 */
 async function fallbackStructured(
   client: OpencodeClient,
+  runId: string,
   sessionID: string,
   workspace: string,
   promptBase: {
@@ -395,6 +493,8 @@ async function fallbackStructured(
 
   let lastError = "";
   for (let attempt = 0; attempt < 2; attempt++) {
+    // 每轮发 prompt 前都查一次：取消可能发生在上一轮 prompt 进行中
+    assertNotCancelled(runId);
     const text =
       attempt === 0
         ? ask

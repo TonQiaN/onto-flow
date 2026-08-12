@@ -190,6 +190,7 @@ export function TraceGantt({
               <div key={span.id} className="border-b border-zinc-800/60 last:border-b-0">
                 <button
                   type="button"
+                  data-testid="trace-span-row"
                   onClick={() => setOpenId(open ? null : span.id)}
                   aria-expanded={open}
                   title={`${span.label}\n起点 +${span.startMs} 毫秒（${formatDateTime(

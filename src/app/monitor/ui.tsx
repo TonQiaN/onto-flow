@@ -139,6 +139,8 @@ export function MetricCard({
   const flash = useValueFlash(value);
   return (
     <div
+      data-testid="metric-card"
+      data-label={label}
       className={`rounded-lg border border-zinc-800 px-4 py-3 transition-colors duration-500 ${
         flash ? "border-zinc-700 bg-zinc-800/70" : "bg-zinc-900/60"
       }`}
@@ -147,7 +149,7 @@ export function MetricCard({
         <Dot tone={tone} pulse={tone !== "zinc" && !loading} />
         {label}
       </div>
-      <div className="mt-1.5 flex items-baseline gap-1">
+      <div data-testid="metric-value" className="mt-1.5 flex items-baseline gap-1">
         <Num
           className={`text-2xl leading-none font-semibold ${
             loading ? "text-zinc-700" : TONE_TEXT[tone]

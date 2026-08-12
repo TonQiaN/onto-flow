@@ -422,7 +422,9 @@ interface TraceUsageRow {
  * - 连续的 text 事件合成一个「模型输出」span，session.idle 作为回合分界，
  *   第二回合起标注「结构化输出降级重试」——引擎的降级路径正是同会话再发一轮 prompt；
  * - session.error 单独成一个失败 span。
- * 每个回合的 node_usage 归到该回合的模型输出 span 上（父级 node span 仍是全量合计）。
+ * 每个回合的 node_usage 归到该回合的模型输出 span 上（父级 node span 仍是全量合计）；
+ * 整个节点一条 text 事件都没有时（首轮就报错等），补一个「模型调用（无文本输出）」span
+ * 承接全部用量——各 step 用量之和恒等于 node 合计是硬承诺，不允许有 token 落不到 step 上。
  */
 export function getTrace(runId: string): TracePayload | null {
   const run = db.get<TraceRunRow>(sql`
@@ -541,6 +543,7 @@ export function getTrace(runId: string): TracePayload | null {
         parentId: sessionSpanId,
         nodeId: node.nodeId,
         nodeStart,
+        sessionEnd,
         runStart,
         events: nodeEvents,
         usage: usageByNode.get(node.nodeId) ?? [],
@@ -568,6 +571,8 @@ interface StepContext {
   parentId: string;
   nodeId: string;
   nodeStart: number;
+  /** 父 session span 的收口时刻，用来把兜底 span 夹在父区间内 */
+  sessionEnd: number;
   runStart: number;
   events: TraceEventRow[];
   usage: TraceUsageRow[];
@@ -594,10 +599,13 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
   let seq = 0;
   const nextId = () => `step:${nodeId}:${seq++}`;
 
-  if (events.length === 0) return spans;
+  // 没有事件也可能有用量（首轮就报错、或事件泵没收到 text 就断了），
+  // 这时仍要往下走去补承接 span，否则这些 token 会凭空消失
+  if (events.length === 0 && ctx.usage.length === 0) return spans;
 
-  const firstTs = num(events[0].ts);
-  if (firstTs > nodeStart) {
+  const first = events[0];
+  const firstTs = first ? num(first.ts) : nodeStart;
+  if (first && firstTs > nodeStart) {
     spans.push({
       id: nextId(),
       parentId,
@@ -726,6 +734,30 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
       span.tokens += num(u.tokens);
       span.cost += num(u.cost);
     }
+  } else if (ctx.usage.length > 0) {
+    // 一条 text 事件都没有（例如首轮就 session.error）→ 没有模型输出 span 可承接。
+    // 直接丢弃会让「各 step 用量之和恒等于 node 合计」的承诺失效，所以补一个覆盖整段的
+    // 模型调用 span 把这些用量兜住；末端夹到 session span 的收口时刻，不溢出父区间。
+    let tokens = 0;
+    let cost = 0;
+    let lastTs = nodeStart;
+    for (const u of ctx.usage) {
+      tokens += num(u.tokens);
+      cost += num(u.cost);
+      lastTs = Math.max(lastTs, num(u.ts));
+    }
+    spans.push({
+      id: nextId(),
+      parentId,
+      kind: "step",
+      label: "模型调用（无文本输出）",
+      startMs: Math.max(0, nodeStart - runStart),
+      durMs: Math.max(0, Math.min(lastTs, ctx.sessionEnd) - nodeStart),
+      status: "success",
+      tokens,
+      cost,
+      detail: `${ctx.usage.length} 条 assistant 消息计费，但会话未产出文本`,
+    });
   }
 
   spans.sort((a, b) => a.startMs - b.startMs || a.id.localeCompare(b.id));
@@ -748,6 +780,31 @@ interface LogRow {
 const LOG_LIMIT_DEFAULT = 100;
 const LOG_LIMIT_MAX = 500;
 
+/**
+ * LIKE 的通配符转义：`%` 与 `_` 在 LIKE 里是通配符，不转义的话搜 `save_purchase_plan`
+ * 会把下划线当「任意单字符」，命中一大片无关事件。转义符本身（反斜杠）要先转义。
+ * 与 `@/server/writers/list.ts` 的 escapeLike 同款处理，配套 `escape '\'` 子句使用。
+ */
+function escapeLike(input: string): string {
+  return input.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
+ * 事件类型过滤支持逗号分隔多值（如 `text,tool`）：多选时在同一条 SQL 里用 in 过滤，
+ * 单一游标返回。前端不得为多选各开一条流再归并——那样各流分页深度不一致，
+ * 会让人误判某类事件「不存在」。
+ */
+function parseTypes(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const seen = new Set(
+    raw
+      .split(",")
+      .map((t) => t.trim())
+      .filter((t) => t !== ""),
+  );
+  return [...seen];
+}
+
 /** 按 id 倒序 + 游标分页；q 匹配 payload 文本（sqlite LIKE 对 ASCII 大小写不敏感） */
 export function getLogs(query: LogsQuery): LogsPayload {
   const limit = Math.min(
@@ -758,8 +815,22 @@ export function getLogs(query: LogsQuery): LogsPayload {
   const conds: SQL[] = [];
   if (query.runId) conds.push(sql`run_events.run_id = ${query.runId}`);
   if (query.nodeId) conds.push(sql`run_events.node_id = ${query.nodeId}`);
-  if (query.type) conds.push(sql`run_events.type = ${query.type}`);
-  if (query.q) conds.push(sql`run_events.payload like ${`%${query.q}%`}`);
+  const types = parseTypes(query.type);
+  if (types.length === 1) {
+    conds.push(sql`run_events.type = ${types[0]}`);
+  } else if (types.length > 1) {
+    conds.push(
+      sql`run_events.type in (${sql.join(
+        types.map((t) => sql`${t}`),
+        sql`, `,
+      )})`,
+    );
+  }
+  if (query.q) {
+    conds.push(
+      sql`run_events.payload like ${`%${escapeLike(query.q)}%`} escape '\\'`,
+    );
+  }
   if (query.onlyErrors) {
     conds.push(sql`(
       run_events.type = 'session.error'
@@ -841,7 +912,14 @@ const COST_DAYS_DEFAULT = 7;
 const COST_DAYS_MAX = 90;
 
 /**
- * 成本分析只读 node_usage（逐条 assistant 消息的真实用量）与 run_nodes 汇总。
+ * 成本分析**只读 node_usage**（逐条 assistant 消息的真实用量）。
+ *
+ * 四张表（byModel / byAction / byWorkflow / daily）必须共用同一个窗口谓词
+ * `node_usage.ts >= since`：曾经 byAction/byWorkflow 改用 `runs.started_at >= since`
+ * 过滤 run_nodes 汇总列，同一页的合计互相对不上——跨零点的长运行会被整段算进运行开始
+ * 那一天，而 byModel/daily 按消息时间拆到两天。所以 byAction/byWorkflow 也从 node_usage
+ * 出发，join run_nodes / runs 只为取归集维度（actionName / workflowName），不取用量列。
+ *
  * byAction 的 actionName 从 run_nodes.snapshot 里 json_extract——Action 改名或删除后，
  * 历史成本仍按当时的名字归集。
  */
@@ -864,29 +942,32 @@ export function getCost(daysInput?: number): CostPayload {
     order by cost desc, tokens desc
   `);
 
+  // nodes = 窗口内产生过用量的节点执行次数（run_id + node_id 去重），不是 node_usage 行数
   const byAction = db.all<CostByAction>(sql`
     select
       json_extract(run_nodes.snapshot, '$.actionName') as actionName,
-      count(*) as nodes,
-      coalesce(sum(${NODE_TOKENS}), 0) as tokens,
-      coalesce(sum(run_nodes.cost), 0) as cost
-    from run_nodes
-    join runs on runs.id = run_nodes.run_id
-    where runs.started_at >= ${since}
+      count(distinct node_usage.run_id || ' ' || node_usage.node_id) as nodes,
+      coalesce(sum(${USAGE_TOKENS}), 0) as tokens,
+      coalesce(sum(node_usage.cost), 0) as cost
+    from node_usage
+    join run_nodes
+      on run_nodes.run_id = node_usage.run_id and run_nodes.node_id = node_usage.node_id
+    where node_usage.ts >= ${since}
       and json_extract(run_nodes.snapshot, '$.actionName') is not null
     group by actionName
     order by cost desc, tokens desc
   `);
 
+  // runs = 窗口内产生过用量的运行数；空跑（一条 assistant 消息都没有）本就 0 成本，不列
   const byWorkflow = db.all<CostByWorkflow>(sql`
     select
       runs.workflow_name as workflowName,
-      count(distinct runs.id) as runs,
-      coalesce(sum(${NODE_TOKENS}), 0) as tokens,
-      coalesce(sum(run_nodes.cost), 0) as cost
-    from runs
-    left join run_nodes on run_nodes.run_id = runs.id
-    where runs.started_at >= ${since}
+      count(distinct node_usage.run_id) as runs,
+      coalesce(sum(${USAGE_TOKENS}), 0) as tokens,
+      coalesce(sum(node_usage.cost), 0) as cost
+    from node_usage
+    join runs on runs.id = node_usage.run_id
+    where node_usage.ts >= ${since}
     group by runs.workflow_name
     order by cost desc, runs desc
   `);

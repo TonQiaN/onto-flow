@@ -150,7 +150,13 @@ export interface LogItem {
 export interface LogsQuery {
   runId?: string;
   nodeId?: string;
+  /**
+   * 事件类型过滤，**支持逗号分隔多值**（如 `text,tool`；单值仍是 `text`）。
+   * 服务端把多值合进同一条 SQL 的 `in` 里、返回单一游标——多选时不要在前端各开一条流
+   * 再归并，那样每条流各自分页、深度不一致，会让人误判某类事件不存在。
+   */
   type?: string;
+  /** payload 全文子串；服务端已转义 LIKE 通配符，`_` / `%` 按字面匹配 */
   q?: string;
   onlyErrors?: boolean;
   limit?: number;

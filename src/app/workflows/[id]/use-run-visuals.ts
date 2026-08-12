@@ -561,7 +561,10 @@ export function useRunVisuals(): RunVisualsController {
     if (!followMode || followPaused) return;
     const onPointerDown = (e: Event) => {
       const target = e.target as HTMLElement | null;
-      if (target?.closest?.(".react-flow__pane")) setFollowPaused(true);
+      // 只有按在 pane **本身**才算「开始手动平移」。
+      // .react-flow__pane 是 viewport 的父元素，覆盖整块画布，用 closest 会把
+      // 点节点/连线/控件都误判成平移，运行中点一下节点就静默停掉自动跟随。
+      if (target?.classList?.contains("react-flow__pane")) setFollowPaused(true);
     };
     const onWheel = (e: Event) => {
       const target = e.target as HTMLElement | null;

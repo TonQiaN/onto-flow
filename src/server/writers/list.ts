@@ -106,18 +106,19 @@ export function selectLibraryPage(opts: {
   }
 
   if (query.tagIds.length > 0) {
-    // AND 语义：同时具备全部所选标签
+    // OR 语义：命中任一所选标签即可。
+    // 标签树是文件夹式浏览，点父节点会把「自身 + 全部子孙」的 tag id 一起传上来，
+    // 若按 AND（同时具备全部标签）过滤，点父节点必然返回空列表——所以契约就是 OR。
+    // 见 docs/DESIGN-V2.md 第一节，别改回 group by having count(distinct)。
     const tagged = db
-      .select({ entityId: entityTags.entityId })
+      .selectDistinct({ entityId: entityTags.entityId })
       .from(entityTags)
       .where(
         and(
           eq(entityTags.entityKind, kind),
           inArray(entityTags.tagId, query.tagIds),
         ),
-      )
-      .groupBy(entityTags.entityId)
-      .having(sql`count(distinct ${entityTags.tagId}) = ${query.tagIds.length}`);
+      );
     conditions.push(inArray(columns.id, tagged));
   }
 

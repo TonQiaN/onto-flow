@@ -270,17 +270,24 @@ export function applyActionToNode(
   };
 }
 
-/** 丢弃指向已不存在端口的连线（Action 端口改名/删除后遗留） */
+/** 丢弃已失效的连线：端口被删/改名，或两端 Object Type 不再相同 */
 export function pruneEdges(nodes: FlowNode[], edges: Edge[]): Edge[] {
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   return edges.filter((e) => {
     const source = nodeById.get(e.source);
     const target = nodeById.get(e.target);
     if (!source || !target) return false;
-    return (
-      source.data.outputs.some((p) => p.name === (e.sourceHandle ?? "value")) &&
-      target.data.inputs.some((p) => p.name === (e.targetHandle ?? "value"))
+    const out = source.data.outputs.find(
+      (p) => p.name === (e.sourceHandle ?? "value"),
     );
+    const inp = target.data.inputs.find(
+      (p) => p.name === (e.targetHandle ?? "value"),
+    );
+    if (!out || !inp) return false;
+    // 端口名没变但绑定的 Object Type 改了，连线同样失效（ADR-0002 严格 nominal 类型，
+    // 与 lib/graph.ts validateGraph 的判定一致）。只比端口名会在画布上留下类型不匹配的
+    // 连线，用户看不出问题、保存时才被服务端打回。
+    return out.objectTypeId === inp.objectTypeId;
   });
 }
 

@@ -476,6 +476,7 @@ function LogsConsole() {
                 <div key={row.id} className="border-b border-zinc-800/60">
                   <button
                     type="button"
+                    data-testid="log-row"
                     onClick={() => setOpenId(open ? null : row.id)}
                     aria-expanded={open}
                     className={`flex w-full items-start text-left text-[11px] transition-colors hover:bg-zinc-800/50 ${

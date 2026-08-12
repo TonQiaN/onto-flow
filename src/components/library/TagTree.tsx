@@ -105,7 +105,9 @@ function collectPaths(nodes: TreeNode[], out: string[] = []): string[] {
 
 /**
  * 层级标签树（列表页左栏）。tags 扁平列表按 `/` 构建树；
- * 点击节点切换选中（多选，服务端 AND 过滤）；父节点选中时把全部子孙标签一并加入 selected。
+ * 点击节点切换选中（多选，服务端 **OR** 过滤：命中任一即入选）；
+ * 父节点选中时把全部子孙标签一并加入 selected——文件夹式浏览，点「采购」要看到整棵子树，
+ * 这正是列表 API 的 tags 必须是 OR 语义的原因（DESIGN-V2 第一节）。
  */
 export function TagTree({
   kind,

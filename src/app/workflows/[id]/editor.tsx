@@ -235,7 +235,17 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   }, [dirty]);
 
   // ---------- 改动追踪 ----------
-  const markDirty = useCallback(() => setDirty(true), []);
+  /**
+   * 每次改动自增的版本号。保存是异步的，请求在途期间用户还能继续编辑；
+   * 若返回后无条件 setDirty(false)，这些改动会被静默标记为「已保存」——
+   * 用户以为存上了，离开时也不再提示。所以 persist 出手时记下版本号，
+   * 只有版本号没变（期间没有新改动）才允许清掉 dirty。
+   */
+  const dirtyVersionRef = useRef(0);
+  const markDirty = useCallback(() => {
+    dirtyVersionRef.current += 1;
+    setDirty(true);
+  }, []);
 
   const handleNodesChange = useCallback(
     (changes: NodeChange<FlowNode>[]) => {
@@ -552,6 +562,8 @@ function EditorInner({ workflowId }: { workflowId: string }) {
       setSaving(true);
       setBanner(null);
       const live = graph ?? storeApi.getState();
+      // 快照本次提交对应的改动版本；请求在途期间的新编辑会让它前进
+      const sentVersion = dirtyVersionRef.current;
       try {
         const res = await fetch(`/api/workflows/${workflowId}`, {
           method: "PUT",
@@ -572,7 +584,8 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         }
         const nextIssues = body?.issues ?? [];
         setIssues(nextIssues);
-        setDirty(false);
+        // 只有在途期间没有新改动才算「干净」，否则保留 dirty 等下一次保存
+        if (dirtyVersionRef.current === sentVersion) setDirty(false);
         setSavedAt(new Date());
         return { ok: true, issues: nextIssues };
       } catch {
@@ -605,14 +618,16 @@ function EditorInner({ workflowId }: { workflowId: string }) {
       setNodes(nextNodes);
       const dropped = live.edges.length - nextEdges.length;
       if (dropped > 0) setEdges(nextEdges);
-      setDirty(true);
+      // 走 markDirty 而不是裸 setDirty(true)：它要同时推进改动版本号，
+      // 否则保存在途期间的这次刷新会被返回后的 setDirty(false) 抹掉
+      markDirty();
       setToast(
         dropped > 0
           ? `已保存「${saved.name}」，端口变化让 ${dropped} 条连线失效并已移除，记得重新保存工作流`
           : `已保存「${saved.name}」，画布上引用它的节点都已刷新`,
       );
     },
-    [storeApi, setNodes, setEdges, modelById],
+    [storeApi, setNodes, setEdges, modelById, markDirty],
   );
 
   /** 复制为新 Action 并替换本节点：改指新实体后立刻保存整图 */

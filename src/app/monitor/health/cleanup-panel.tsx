@@ -120,7 +120,8 @@ function CleanupItem({
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  // 天数变了，上次的预览与结果都作废
+  // 天数变了，上次的预览与结果都作废。下限 1 天：服务端要求 beforeDays 是正整数，
+  // 没有「删全部」的入口（0 天会被拒成 400）
   const changeDays = (next: number) => {
     setDays(next);
     setPreview(null);
@@ -163,7 +164,7 @@ function CleanupItem({
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
 
   return (
-    <div className="px-4 py-4">
+    <div data-testid="cleanup-item" data-target={spec.key} className="px-4 py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-medium text-zinc-100">{spec.title}</h3>
@@ -187,12 +188,12 @@ function CleanupItem({
           保留最近
           <input
             type="number"
-            min={0}
+            min={1}
             max={3650}
             value={days}
             onChange={(e) => {
               const v = Number(e.target.value);
-              changeDays(Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+              changeDays(Number.isFinite(v) && v >= 1 ? Math.floor(v) : 1);
             }}
             className="w-20 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-right font-mono text-xs text-zinc-100 outline-none focus:border-zinc-500"
           />
@@ -392,7 +393,9 @@ async function callCleanup(
     res = await fetch("/api/monitor/cleanup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target, days, dryRun }),
+      // 服务端字段名是 beforeDays（/api/monitor/cleanup 硬校验：必须是 ≥1 的整数），
+      // 发 days 会被一律拒成 400——预览与执行六条路径全废，别再改回去
+      body: JSON.stringify({ target, beforeDays: days, dryRun }),
       cache: "no-store",
     });
   } catch {

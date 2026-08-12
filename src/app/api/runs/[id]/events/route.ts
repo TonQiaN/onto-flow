@@ -5,12 +5,19 @@ import { jsonError } from "@/lib/http";
 export const dynamic = "force-dynamic";
 
 const POLL_MS = 500;
+/**
+ * 终态后的静默期（tick 数）：取消/失败会先把 run 写成终态，事件泵此刻还在收尾
+ * （flush 残余 text、补 session.idle、重算最终 token/费用）。若「终态 + 本轮无新事件」
+ * 就立刻 end，前端会丢掉最后一段日志与最终用量。要求连续 3 个 tick（约 1.5s）既无
+ * 新事件、snapshot 指纹也不再变化，才认为收尾真的结束。
+ */
+const QUIET_TICKS = 3;
 
 /**
  * SSE GET /api/runs/[id]/events
  * 连接即发 event: snapshot（{ run, nodes } 全量），之后 ~500ms 轮询 sqlite：
  * 新 run_events 逐条发 event: log；run/nodes 有变化再发 snapshot；
- * run 到终态且事件发完后发 event: end 并关闭。不依赖进程内 pubsub。
+ * run 到终态且静默期内再无任何变化后发 event: end 并关闭。不依赖进程内 pubsub。
  */
 export async function GET(
   request: Request,
@@ -28,6 +35,8 @@ export async function GET(
     start(controller) {
       let lastEventId = 0;
       let lastSnapshot = "";
+      /** 终态后连续「无新事件且 snapshot 未变」的 tick 数，攒够 QUIET_TICKS 才 end */
+      let quietTicks = 0;
 
       const send = (event: string, data: unknown) => {
         if (closed) return;
@@ -77,18 +86,21 @@ export async function GET(
           }
           const snapshot = readSnapshot();
           const serialized = JSON.stringify(snapshot);
+          const changed = events.length > 0 || serialized !== lastSnapshot;
           if (serialized !== lastSnapshot) {
             lastSnapshot = serialized;
             send("snapshot", snapshot);
           }
-          // 终态且本轮没有新事件 → 事件已发完，结束
-          if (
-            snapshot.run &&
-            snapshot.run.status !== "running" &&
-            events.length === 0
-          ) {
-            send("end", {});
-            cleanup();
+          // 终态后进入静默期：只有连续 QUIET_TICKS 轮既无新事件、snapshot 指纹也不变，
+          // 才说明事件泵的收尾（残余 text / session.idle / 最终用量）已经写完，可以结束
+          if (snapshot.run && snapshot.run.status !== "running") {
+            quietTicks = changed ? 0 : quietTicks + 1;
+            if (quietTicks >= QUIET_TICKS) {
+              send("end", {});
+              cleanup();
+            }
+          } else {
+            quietTicks = 0;
           }
         } catch (err) {
           console.error("[sse] 轮询失败", err);

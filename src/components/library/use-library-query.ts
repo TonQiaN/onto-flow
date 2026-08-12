@@ -19,6 +19,10 @@ export interface LibraryQuery {
  * 列表页筛选状态 ↔ URL query 的读写（五个库统一 `?q=&tags=&sort=&page=`）。
  * 写入一律 router.replace(scroll:false)，不往历史栈塞记录；
  * 改 q / tags / sort 时自动回到第 1 页。
+ *
+ * 注意：这里只保证 page ≥ 1，**上界要等拿到信封的 total 才知道**，
+ * 所以越界（例如删到只剩一页却停在 page=3）由 LibraryToolbar 拿到 total 后
+ * 回调 setPage 夹到最后一页；本 hook 不做也做不了这件事。
  */
 export function useLibraryQuery(): LibraryQuery {
   const router = useRouter();

@@ -24,7 +24,7 @@ Query 参数（全部可选，缺省即不过滤）：
 | 参数 | 含义 |
 |---|---|
 | `q` | 关键词，匹配 name + description（大小写不敏感，`LIKE %q%`） |
-| `tags` | 逗号分隔的 tag id，**AND 语义**（同时具备这些标签） |
+| `tags` | 逗号分隔的 tag id，**OR 语义**（命中任一标签即入选） |
 | `sort` | `updated_desc`(默认) / `updated_asc` / `name_asc` / `name_desc` / `refs_desc` |
 | `page` | 从 1 开始，默认 1 |
 | `pageSize` | 默认 30，上限 100 |
@@ -41,6 +41,11 @@ Query 参数（全部可选，缺省即不过滤）：
 tags: Array<{ id: string; name: string; color: string | null }>
 refCount: number   // 被引用次数，见第三节
 ```
+
+`tags` 取 OR 而非 AND 的理由：标签树（第五节）是**文件夹式浏览**，点父节点会把
+「自身 + 全部子孙」的 tag id 一起提交。若按 AND 过滤，点「采购」= 要求实体同时挂着
+`采购`、`采购/集采`、`采购/询价`…，结果必然为空，文件夹式浏览的核心操作直接失效。
+OR 语义下点父节点 = 看到其整棵子树下的全部内容，与树上显示的 `totalCount` 一致。
 
 > 破坏性变更：列表 API 由「裸数组」改为上面的信封形状，前端一并改。不做兼容层（AGENTS.md）。
 
@@ -105,7 +110,8 @@ refCount: number   // 被引用次数，见第三节
 ## 五、共享 UI 组件（`src/components/library/`，五个库页面必须复用，不得各写一套）
 
 ```tsx
-// 层级标签树（左栏）。tags 扁平列表按 `/` 构建树；点击节点切换选中；父节点选中含子孙。
+// 层级标签树（左栏）。tags 扁平列表按 `/` 构建树；点击节点切换选中；父节点选中含子孙
+// （所以列表 API 的 tags 必须是 OR 语义，见第一节）。
 <TagTree kind={EntityKind} selected={string[]} onChange={(ids:string[])=>void} />
 
 // 搜索 + 排序 + 分页状态条，状态写进 URL query（useSearchParams + router.replace，scroll:false）

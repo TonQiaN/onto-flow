@@ -1,14 +1,19 @@
 /**
  * 系统健康页的数据契约与解析工具（模块 D 自用）。
  *
- * 服务端接口由监控 API 模块提供，本文件是**客户端侧的契约声明**：
+ * 服务端接口由监控 API 模块提供，本文件是**客户端侧的契约声明**，
+ * 唯一权威是 `@/server/monitor/types`：
  * - `GET /api/monitor/health` → HealthPayload
- * - `POST /api/monitor/cleanup` `{ target, days, dryRun }` → CleanupResult
+ *   `{ opencode, eventPump:{activeSessions,routes[]}, db:{path,bytes,tables[]}, disk, orphanRuns[], counts }`
+ * - `POST /api/monitor/cleanup` `{ target, beforeDays, dryRun }` → CleanupResult
+ *   `{ target, affected:{count,bytes?}, deleted, detail }`
  * - `GET /api/references/orphans` → `{ items: Array<{kind,id,name,href}> }`（已存在，见 DESIGN-V2 第三节）
  *
- * 解析一律走宽松映射（同 runs/lib.ts 的 asRunSnapshot 风格）：缺字段就给零值，
- * 常见同义键（bytes/sizeBytes、count/items、rows/count）都接受，
- * 这样接口细节微调不会把整页打成白屏。
+ * 解析**只认服务端的真实键名**，不再猜同义键（bytes/sizeBytes、count/items/deleted…）。
+ * 那套「宽松映射」看着是容错，实际是把错层写成了合法解析：猜错的键会静默命中一个
+ * 类型不对的值（如布尔 deleted）并解析成 0，页面照常渲染却全是假数字——清理面板
+ * 长期显示「影响 0 项」、事件泵路由表恒为 0 都是这么来的。缺字段/类型不对时仍退化成
+ * 零值（只为防后端异常把整页打成白屏），但绝不接受第二种形状。
  */
 
 /** 工作区总体积告警阈值：2GB */
@@ -31,6 +36,7 @@ export interface OpencodeHealth {
 /** 事件泵状态：每个活跃会话一个泵，路由表是 sessionID→(runId,nodeId) */
 export interface EventPumpHealth {
   activeSessions: number;
+  /** 服务端 eventPump.routes 是明细数组，这里只留条目数（页面只用计数） */
   routeEntries: number;
 }
 
@@ -45,9 +51,12 @@ export interface DatabaseHealth {
   tables: TableStat[];
 }
 
-/** 磁盘目录统计：count 为目录数（runs）或文件数（uploads/documents） */
+/**
+ * 磁盘目录统计：count 为目录数（runs）或文件数（uploads/documents）。
+ * 服务端 DiskDirStat 只有 { bytes, dirs?, files? }，不带路径，所以这里没有 path 字段
+ * ——曾经声明过一个永远是空串的 path，纯属对着不存在的契约写字段。
+ */
 export interface DiskEntry {
-  path: string;
   sizeBytes: number;
   count: number;
 }
@@ -63,20 +72,29 @@ export interface OrphanRun {
   id: string;
   workflowName: string;
   status: string;
-  startedAt: string | number | null;
+  /** 服务端一律给 epoch 毫秒（见 types.ts 抬头约定），异常数据兜底 null */
+  startedAt: number | null;
   /** 仍停在 running/pending 的节点数（可缺） */
   pendingNodes: number | null;
   reason: string | null;
 }
 
+/** 四张核心表的行数（服务端 counts 字段） */
+export interface HealthCounts {
+  runs: number;
+  runNodes: number;
+  runEvents: number;
+  nodeUsage: number;
+}
+
 export interface HealthPayload {
   opencode: OpencodeHealth;
   eventPump: EventPumpHealth;
+  /** 服务端键名是 db */
   database: DatabaseHealth;
   disk: DiskHealth;
   orphanRuns: OrphanRun[];
-  /** 服务端采样时刻（可缺，缺则前端用收到响应的时刻） */
-  generatedAt: number | null;
+  counts: HealthCounts;
 }
 
 /** 未被任何实体引用的库条目（/api/references/orphans） */
@@ -94,11 +112,11 @@ export interface CleanupResult {
   target: CleanupTarget;
   days: number;
   dryRun: boolean;
-  /** 将删除 / 已删除的条目数（工作区=目录数，事件=事件行数，运行=运行条数） */
+  /** 将删除 / 已删除的条目数（工作区=目录数，事件=事件行数，运行=运行条数），取自 affected.count */
   items: number;
-  /** 将释放 / 已释放的字节数；数据库行删除可能为 0 */
+  /** 将释放 / 已释放的字节数，取自 affected.bytes；事件清理是按 payload 长度的估算 */
   bytes: number;
-  /** 服务端补充说明（如「同时级联删除 12 个节点、340 条事件」） */
+  /** 服务端补充说明 detail（如「级联 12 个节点、340 条事件」） */
   note: string | null;
 }
 
@@ -117,60 +135,43 @@ const strOrNull = (v: unknown): string | null =>
 const num = (v: unknown): number =>
   typeof v === "number" && Number.isFinite(v) ? v : 0;
 
-/** 取第一个存在的同义键 */
-function pick(o: Record<string, unknown>, ...keys: string[]): unknown {
-  for (const k of keys) if (o[k] !== undefined && o[k] !== null) return o[k];
-  return undefined;
-}
-
-/** 对齐 @/server/monitor/types 的 DiskDirStat：{ path, bytes, dirs?, files? } */
+/** 对齐 @/server/monitor/types 的 DiskDirStat：{ bytes, dirs?, files? } */
 function asDiskEntry(value: unknown): DiskEntry {
   const o = rec(value);
   return {
-    path: str(pick(o, "path", "dir")),
-    sizeBytes: num(pick(o, "bytes")),
-    // runs 目录统计的是子目录数（一次运行一个工作区），uploads/documents 统计文件数
-    count: num(pick(o, "dirs", "files")),
+    sizeBytes: num(o.bytes),
+    // 同一个 DiskDirStat 的两种口径：runs 目录只有 dirs 有意义（一次运行一个工作区），
+    // uploads/documents 只带 files。不是同义键猜测，是服务端明确的两种统计维度。
+    count: num(o.dirs ?? o.files),
   };
 }
 
-/** tables 既接受 `[{name,rows}]`，也接受 `{ 表名: 行数 }` */
+/** db.tables 固定是 `[{name, rows}]` */
 function asTables(value: unknown): TableStat[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => {
-      const o = rec(item);
-      const name = str(pick(o, "name", "table"));
-      if (!name) return [];
-      return [{ name, rows: num(pick(o, "rows", "count")) }];
-    });
-  }
-  if (typeof value === "object" && value !== null) {
-    return Object.entries(value as Record<string, unknown>).map(
-      ([name, rows]) => ({ name, rows: num(rows) }),
-    );
-  }
-  return [];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const o = rec(item);
+    const name = str(o.name);
+    if (!name) return [];
+    return [{ name, rows: num(o.rows) }];
+  });
 }
 
 function asOrphanRuns(value: unknown): OrphanRun[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
     const o = rec(item);
-    const id = str(pick(o, "id", "runId"));
+    const id = str(o.id);
     if (!id) return [];
-    const started = pick(o, "startedAt", "startTime");
-    const pending = pick(o, "pendingNodes", "nodeCount", "nodes");
     return [
       {
         id,
-        workflowName: str(pick(o, "workflowName", "workflow")),
+        workflowName: str(o.workflowName),
         status: str(o.status) || "running",
-        startedAt:
-          typeof started === "number" || typeof started === "string"
-            ? started
-            : null,
-        pendingNodes: typeof pending === "number" ? pending : null,
-        reason: strOrNull(pick(o, "reason", "detail")),
+        startedAt: typeof o.startedAt === "number" ? o.startedAt : null,
+        pendingNodes:
+          typeof o.pendingNodes === "number" ? o.pendingNodes : null,
+        reason: strOrNull(o.reason),
       },
     ];
   });
@@ -178,39 +179,46 @@ function asOrphanRuns(value: unknown): OrphanRun[] {
 
 export function asHealth(value: unknown): HealthPayload {
   const o = rec(value);
-  const oc = rec(pick(o, "opencode", "server"));
-  const pump = rec(pick(o, "eventPump", "pump", "events"));
-  const database = rec(pick(o, "database", "db"));
-  const disk = rec(pick(o, "disk", "storage"));
-  const generatedAt = pick(o, "generatedAt", "ts");
+  const oc = rec(o.opencode);
+  const pump = rec(o.eventPump);
+  const database = rec(o.db);
+  const disk = rec(o.disk);
+  const counts = rec(o.counts);
   return {
     opencode: {
-      reachable: pick(oc, "reachable", "ok", "up") === true,
-      url: str(pick(oc, "url", "baseUrl")),
+      reachable: oc.reachable === true,
+      url: str(oc.url),
       version: strOrNull(oc.version),
       error: strOrNull(oc.error),
     },
     eventPump: {
-      activeSessions: num(pick(pump, "activeSessions", "sessions", "pumps")),
-      routeEntries: num(pick(pump, "routeEntries", "routes", "sessionRoutes")),
+      activeSessions: num(pump.activeSessions),
+      // routes 是 {sessionId,runId,nodeId} 的**数组**，不是计数：
+      // 以前直接 num(routes) 恒为 0，页面因此永远显示「路由表 0 条」并误报计数不一致
+      routeEntries: Array.isArray(pump.routes) ? pump.routes.length : 0,
     },
     database: {
-      path: str(pick(database, "path", "file")),
-      sizeBytes: num(pick(database, "sizeBytes", "bytes", "size")),
-      tables: asTables(pick(database, "tables", "rows")),
+      path: str(database.path),
+      sizeBytes: num(database.bytes),
+      tables: asTables(database.tables),
     },
     disk: {
       runs: asDiskEntry(disk.runsDir),
       uploads: asDiskEntry(disk.uploads),
       documents: asDiskEntry(disk.documents),
     },
-    orphanRuns: asOrphanRuns(pick(o, "orphanRuns", "orphans")),
-    generatedAt: typeof generatedAt === "number" ? generatedAt : null,
+    orphanRuns: asOrphanRuns(o.orphanRuns),
+    counts: {
+      runs: num(counts.runs),
+      runNodes: num(counts.runNodes),
+      runEvents: num(counts.runEvents),
+      nodeUsage: num(counts.nodeUsage),
+    },
   };
 }
 
 export function asOrphanEntities(value: unknown): OrphanEntity[] {
-  const items = Array.isArray(value) ? value : rec(value).items;
+  const items = rec(value).items;
   if (!Array.isArray(items)) return [];
   return items.flatMap((item) => {
     const o = rec(item);
@@ -227,6 +235,14 @@ export function asOrphanEntities(value: unknown): OrphanEntity[] {
   });
 }
 
+/**
+ * 解析 CleanupResult。服务端真实形状是
+ * `{ target, affected: { count, bytes? }, deleted, detail }`——影响面在 affected 里，
+ * **顶层没有 items/bytes**。以前在顶层猜 items/count/deleted/affected：布尔的 deleted
+ * 先命中、num() 恒判 0，bytes 四个同义键一个都不存在，于是预览与执行后永远显示
+ * 「影响 0 项」，二次确认框还会写「当前预览为 0 项，执行不会有任何变化」，
+ * 而用户点下去真删了 N 条。改动请只跟着 @/server/monitor/types 的 CleanupResult 走。
+ */
 export function asCleanupResult(
   value: unknown,
   target: CleanupTarget,
@@ -234,13 +250,14 @@ export function asCleanupResult(
   dryRun: boolean,
 ): CleanupResult {
   const o = rec(value);
+  const affected = rec(o.affected);
   return {
     target,
     days,
     dryRun,
-    items: num(pick(o, "items", "count", "deleted", "affected")),
-    bytes: num(pick(o, "bytes", "freedBytes", "sizeBytes", "size")),
-    note: strOrNull(pick(o, "note", "detail", "message")),
+    items: num(affected.count),
+    bytes: num(affected.bytes),
+    note: strOrNull(o.detail),
   };
 }
 

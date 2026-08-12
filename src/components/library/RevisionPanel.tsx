@@ -10,6 +10,138 @@ import {
   type RevisionSummary,
 } from "./types";
 
+/* --------------------------- 定义归一（diff 前置） --------------------------- */
+
+/**
+ * diff 的两边来源不同形状，必须先归一到「同一份定义契约」再比，否则全是假差异：
+ * ① 修订 payload 是各 writer 里 revisionPayload() 写入的**扁平定义**
+ *    （见 src/server/writers/*.ts），也正是回滚时重放给 PUT 的载荷；
+ * ② 「当前定义」来自 GET /api/<库>/[id]，workflow 是信封、action 是带派生字段的 DTO。
+ *
+ * 归一规则 = writer 的 revisionPayload 字段集：
+ * 只保留写入路径真正接受的字段，DTO 派生字段（ports.id/objectTypeName/kind、
+ * tags/refCount）、行主键与时间戳、以及 workflow 的 issues 一律不属于定义。
+ * 两边都过同一个函数，diff 结果才等于「回滚后真正会变的东西」。
+ */
+type Rec = Record<string, unknown>;
+
+const DEFINITION_KEYS: Record<EntityKind, readonly string[]> = {
+  workflow: ["name", "description", "nodes", "edges"],
+  action: [
+    "name",
+    "description",
+    "prompt",
+    "rule",
+    "modelId",
+    "reasoningEffort",
+    "ports",
+    "skillIds",
+    "toolIds",
+  ],
+  skill: ["name", "description", "content"],
+  tool: ["name", "description", "code"],
+  // builtin 不在 parseObjectTypePayload 的接受范围内（内置类型根本不可改），
+  // 不属于定义；早期种子修订里带过它，这里一并裁掉，免得每次都报一条假删除。
+  object_type: ["name", "kind", "description", "jsonSchema"],
+};
+
+const PORT_KEYS = ["direction", "name", "objectTypeId", "position"] as const;
+const NODE_KEYS = [
+  "id",
+  "kind",
+  "actionId",
+  "objectTypeId",
+  "label",
+  "x",
+  "y",
+] as const;
+const EDGE_KEYS = [
+  "id",
+  "sourceNodeId",
+  "sourcePort",
+  "targetNodeId",
+  "targetPort",
+] as const;
+
+function asRecord(value: unknown): Rec | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Rec)
+    : null;
+}
+
+/** 只取存在的键：缺席的键保持缺席，才能如实报「新增/删除」而不是「修改成空」 */
+function pick(src: Rec, keys: readonly string[]): Rec {
+  const out: Rec = {};
+  for (const key of keys) if (key in src) out[key] = src[key];
+  return out;
+}
+
+function projectItems(value: unknown, keys: readonly string[]): unknown[] {
+  return (value as unknown[]).map((item) => {
+    const rec = asRecord(item);
+    return rec ? pick(rec, keys) : item;
+  });
+}
+
+/**
+ * 端口是集合语义（唯一键是 direction+name，position 只在同方向内定序）。
+ * 修订 payload 的顺序是「先全部 input 再全部 output」，而 DTO 是按 position
+ * 全局升序 join 出来的——同 position 的输入输出会交错，顺序天然对不上。
+ * 两边统一按 (direction, position, name) 定序，避免顺序差异被当成字段差异。
+ */
+function comparePorts(a: unknown, b: unknown): number {
+  const ra = asRecord(a) ?? {};
+  const rb = asRecord(b) ?? {};
+  const rank = (v: unknown) => (v === "output" ? 1 : 0);
+  const byDirection = rank(ra.direction) - rank(rb.direction);
+  if (byDirection !== 0) return byDirection;
+  const pa = typeof ra.position === "number" ? ra.position : 0;
+  const pb = typeof rb.position === "number" ? rb.position : 0;
+  if (pa !== pb) return pa - pb;
+  return String(ra.name ?? "").localeCompare(String(rb.name ?? ""));
+}
+
+/** 图的节点/连线同样是集合，落库顺序无语义，两边都按 id 定序 */
+function compareById(a: unknown, b: unknown): number {
+  const ra = asRecord(a) ?? {};
+  const rb = asRecord(b) ?? {};
+  return String(ra.id ?? "").localeCompare(String(rb.id ?? ""));
+}
+
+/** 把一份定义（修订 payload 或当前定义）裁剪并定序成规范形态 */
+function normalizeDefinition(kind: EntityKind, value: unknown): unknown {
+  const rec = asRecord(value);
+  if (!rec) return value;
+  const out = pick(rec, DEFINITION_KEYS[kind]);
+  if (kind === "action" && Array.isArray(out.ports))
+    out.ports = projectItems(out.ports, PORT_KEYS).sort(comparePorts);
+  if (kind === "workflow") {
+    if (Array.isArray(out.nodes))
+      out.nodes = projectItems(out.nodes, NODE_KEYS).sort(compareById);
+    if (Array.isArray(out.edges))
+      out.edges = projectItems(out.edges, EDGE_KEYS).sort(compareById);
+  }
+  return out;
+}
+
+/**
+ * 把 GET /api/<库>/[id] 的响应体摊平成定义形状。
+ * workflow 单独一档：它返回的是信封 { workflow, nodes, edges, issues }，
+ * 直接拿去比会把 name/description 报成删除，还多出 workflow.x 与 issues.x 的假新增。
+ */
+function currentDefinition(kind: EntityKind, body: unknown): unknown {
+  if (kind !== "workflow") return normalizeDefinition(kind, body);
+  const envelope = asRecord(body);
+  const workflow = envelope ? asRecord(envelope.workflow) : null;
+  if (!envelope || !workflow) return null;
+  return normalizeDefinition(kind, {
+    name: workflow.name,
+    description: workflow.description,
+    nodes: envelope.nodes,
+    edges: envelope.edges,
+  });
+}
+
 /* ------------------------------ 字段级 diff ------------------------------ */
 
 type DiffType = "added" | "removed" | "changed";
@@ -217,7 +349,12 @@ export function RevisionPanel({
         | RevisionSummary[]
         | RevisionListResponse;
       setRevisions(Array.isArray(data) ? data : (data.items ?? []));
-      setCurrent(currentRes.ok ? await currentRes.json() : null);
+      // 当前定义先归一成与修订 payload 同一形状再入 state，diff 才有可比性
+      setCurrent(
+        currentRes.ok
+          ? currentDefinition(kind, await currentRes.json())
+          : null,
+      );
     } catch {
       setError("网络错误，无法加载修订历史");
       setRevisions(null);
@@ -304,8 +441,10 @@ export function RevisionPanel({
   const diffCache = useMemo(() => {
     const detail = expanded ? details[expanded] : undefined;
     if (!detail) return null;
-    return diffDefinitions(detail.payload, current);
-  }, [expanded, details, current]);
+    // 修订 payload 也过一遍归一：老版本可能带过已不属于定义的字段（如 object_type
+    // 种子版里的 builtin），且端口/节点顺序要与当前定义用同一套定序规则。
+    return diffDefinitions(normalizeDefinition(kind, detail.payload), current);
+  }, [expanded, details, current, kind]);
 
   return (
     <section className="rounded-lg border border-zinc-200 bg-white">

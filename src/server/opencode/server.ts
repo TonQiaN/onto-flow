@@ -79,18 +79,45 @@ const sessionPumps: Map<string, AbortController> =
   g.flowforgeSessionPumps ?? new Map();
 g.flowforgeSessionPumps = sessionPumps;
 
-/** 启动（或复用）opencode server 单例，返回 baseUrl */
+const BASE_URL = `http://${HOSTNAME}:${PORT}`;
+
+/** 端口上是否已经有一个活着的 opencode server（1 秒探活） */
+async function probeExisting(): Promise<boolean> {
+  try {
+    const res = await fetch(new URL("/doc", BASE_URL), {
+      signal: AbortSignal.timeout(1000),
+    });
+    return res.ok || res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 启动（或复用）opencode server 单例，返回 baseUrl。
+ *
+ * 端口上已有存活实例时直接复用，不再尝试自己 spawn——Next 进程重启（dev 热重启、
+ * 崩溃拉起）后，上一个进程 spawn 的 opencode 往往还占着 4977，此时 createOpencodeServer
+ * 会以 ServerError 失败，整台引擎就此瘫掉直到人工 kill 掉孤儿进程。复用是正确语义：
+ * 这本来就是一台机器共用一个 server（会话级隔离由 session + 工作区目录保证）。
+ */
 export async function getOpencodeUrl(): Promise<string> {
   if (!g.flowforgeOpencodeServer) {
     // custom tools 在 opencode（bun）运行时里靠这两个环境变量定位数据库与备份目录
     process.env.FLOWFORGE_DB_PATH = path.join(DATA_DIR, "flowforge.db");
     process.env.FLOWFORGE_DATA_DIR = DATA_DIR;
-    g.flowforgeOpencodeServer = createOpencodeServer({
-      hostname: HOSTNAME,
-      port: PORT,
-      timeout: 30_000,
-      config: opencodeConfig,
-    }).catch((err) => {
+    g.flowforgeOpencodeServer = (async () => {
+      if (await probeExisting()) {
+        console.log(`[opencode] 复用已在 ${BASE_URL} 运行的 server`);
+        return { url: BASE_URL, close: () => {} };
+      }
+      return createOpencodeServer({
+        hostname: HOSTNAME,
+        port: PORT,
+        timeout: 30_000,
+        config: opencodeConfig,
+      });
+    })().catch((err) => {
       g.flowforgeOpencodeServer = undefined;
       throw err;
     });

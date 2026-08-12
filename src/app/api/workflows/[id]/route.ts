@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { db, workflows } from "@/db";
+import { and, eq } from "drizzle-orm";
+import { db, runs, workflows } from "@/db";
 import { validateGraph } from "@/lib/graph";
 import { handle, jsonError } from "@/lib/http";
 import { resolveWorkflow } from "@/server/resolve";
@@ -53,12 +53,29 @@ export async function PUT(request: Request, { params }: Params) {
 export async function DELETE(_request: Request, { params }: Params) {
   return handle(async () => {
     const { id } = await params;
-    const deleted = db
-      .delete(workflows)
+    const existing = db
+      .select({ id: workflows.id })
+      .from(workflows)
       .where(eq(workflows.id, id))
-      .returning({ id: workflows.id })
       .get();
-    if (!deleted) return jsonError(404, "工作流不存在");
+    if (!existing) return jsonError(404, "工作流不存在");
+
+    // 删除保护：runs.workflow_id 是 onDelete cascade，直接删工作流会连带抹掉在跑的
+    // run 行——cancelRun 随后查不到该 run（运行再也无法中止），data/runs/<runId>
+    // 工作区在清理器眼里变成无归属的非 running 目录可被误删，而引擎线程仍在跑并继续计费。
+    // 因此有 running 运行时拒绝删除，语义与五个库的引用保护一致：409 + { error, usedBy }。
+    const activeRunIds = db
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(eq(runs.workflowId, id), eq(runs.status, "running")))
+      .all()
+      .map((run) => run.id);
+    if (activeRunIds.length > 0)
+      return jsonError(409, "该工作流有正在进行的运行，无法删除", {
+        usedBy: activeRunIds,
+      });
+
+    db.delete(workflows).where(eq(workflows.id, id)).run();
     return NextResponse.json({ ok: true });
   });
 }

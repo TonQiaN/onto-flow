@@ -603,17 +603,20 @@ function scrollToCleanup(): void {
     ?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-/** 清理面板旁常驻的「当前占用」文案，全部取自 health 接口 */
+/**
+ * 清理面板旁常驻的「当前占用」文案，全部取自 health 接口。
+ * 行数走 counts（服务端为此专门提供的字段），不再按表名去 database.tables 里捞：
+ * 那是靠字符串匹配的软引用，表一改名就静默变 0，和清理面板显示 0 项是同一类坑。
+ */
 function cleanupUsage(health: HealthPayload): CleanupUsage {
-  const rows = (name: string): number =>
-    health.database.tables.find((t) => t.name === name)?.rows ?? 0;
+  const { counts } = health;
   return {
     workspaces: `${formatBytes(health.disk.runs.sizeBytes)} · ${formatCount(
       health.disk.runs.count,
     )} 个目录`,
-    events: `${formatCount(rows("run_events"))} 条事件`,
-    runs: `${formatCount(rows("runs"))} 条运行 · ${formatCount(
-      rows("node_usage"),
+    events: `${formatCount(counts.runEvents)} 条事件`,
+    runs: `${formatCount(counts.runs)} 条运行 · ${formatCount(
+      counts.nodeUsage,
     )} 条用量明细`,
   };
 }
