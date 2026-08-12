@@ -483,7 +483,10 @@ function LogsConsole() {
                   </button>
 
                   {open && (
-                    <div className="border-t border-zinc-800/60 bg-zinc-950/60 px-3 py-3">
+                    <div
+                      data-testid="log-row-detail"
+                      className="border-t border-zinc-800/60 bg-zinc-950/60 px-3 py-3"
+                    >
                       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-500">
                         <Num>#{row.id}</Num>
                         <Num>{formatDateTime(row.ts)}</Num>

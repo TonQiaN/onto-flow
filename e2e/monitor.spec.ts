@@ -228,9 +228,18 @@ test.describe("监控台 · 日志检索", () => {
 
     const after = await rows.count();
     expect(after, "该工具确实被调用过，应有命中").toBeGreaterThan(0);
-    // 逐行核对：命中的都真的与这个词有关，不是把全部事件都捞回来了
+    // 逐行核对：命中的都真的与这个词有关，不是把全部事件都捞回来了。
+    // 折叠行的摘要在 JS 里截断过，长消息的命中点可能在截断之后——
+    // 摘要里找不到就展开行，对完整 payload 核对。
     for (let i = 0; i < after; i += 1) {
-      await expect(rows.nth(i)).toContainText("save_purchase_plan");
+      const row = rows.nth(i);
+      const summary = (await row.textContent()) ?? "";
+      if (summary.includes("save_purchase_plan")) continue;
+      await row.click();
+      await expect(page.getByTestId("log-row-detail")).toContainText(
+        "save_purchase_plan",
+      );
+      await row.click();
     }
   });
 
