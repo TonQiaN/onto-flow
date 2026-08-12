@@ -342,7 +342,10 @@ export const FlowNodeView = memo(function FlowNodeView({
                   e.stopPropagation();
                   onEditAction(id);
                 }}
-                className="hidden rounded px-1.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 group-hover:block"
+                // invisible 而非 hidden：按钮常驻占位，hover 只切换可见性。
+                // 用 hidden 会在 hover 瞬间撑高标题行，端口 handle 随之下移，
+                // 正要拖拽 output 时目标就从指针下面挪走了。
+                className="invisible rounded px-1.5 py-0.5 text-[10px] leading-none text-zinc-500 hover:bg-zinc-200 hover:text-zinc-900 group-hover:visible"
               >
                 编辑
               </button>
