@@ -304,8 +304,7 @@ export const runEvents = sqliteTable("run_events", {
 
 /**
  * 逐条 assistant 消息的用量明细，由 message.updated 事件实时捕获落库。
- * 必须自己存：opencode 1.18.16 对用过结构化输出的会话调 session.messages 会 400，
- * 且 opencode 重启后历史会话不可查——监控页的成本分析只读本表。
+ * 必须自己存：opencode 重启后历史会话不可查——监控页的成本分析只读本表。
  */
 export const nodeUsage = sqliteTable(
   "node_usage",

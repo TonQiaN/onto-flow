@@ -69,17 +69,17 @@ src/
 - **注入顺序**：① `session.prompt({ noReply: true, parts: [rule+skills 文本] })`（不触发模型）；
   ② 正式 prompt：`{{端口}}` 占位符插值（file 端口→占位文本），file 输入追加
   `{ type:"file", mime, filename, url:"file://<绝对路径>" }` part。
-- **工具白名单**：先 `tool.ids({ directory })` 取全部工具 id，构造 `tools` map：
-  **未列出的工具默认启用**（实测），所以必须把所有内置工具显式 `false`，仅 Action 引用的
-  custom tools 为 `true`。
+- **工具**：不传 `tools` map——内置工具全开（与 opencode CLI 行为一致），custom tools
+  物化到工作区 `.opencode/tools/` 后由 opencode 自动发现启用（未列出的工具默认启用，实测）。
 - **思考强度**：prompt 顶层 `variant: <low|medium|high|max>`（不在 model 对象里）。
 - **输出提取**：单 text 输出→`parts.filter(p=>p.type==="text").map(p=>p.text).join("")`；
-  多输出或含 json 输出→`format: { type:"json_schema", schema }`，结果在
-  `res.data.info.structured`。**deepseek 思考模式下 format 会失败**（provider 报
-  "Thinking mode does not support this tool_choice"，HTTP 仍 200、parts 为空、错误走
-  session.error 事件）——引擎必须降级：同会话再发一条普通 prompt 要求输出纯 JSON
-  （给出 schema），剥 ```json 围栏后 JSON.parse，校验必填键，失败重试一次。
-- **已知 bug 规避**：用过 format 的 session 不要再调 `session.messages`（1.18.16 返回 400）。
+  多输出或含 json 输出→**prompt 约定纯 JSON**：正式 prompt 末尾追加输出契约
+  （给出 JSON Schema，要求最终回答只输出一个 JSON 对象），解析（全文→最后一个代码
+  围栏→首尾大括号切片）+ 必填键校验，失败同会话反馈重试（共 3 轮）。
+  **禁用 `format: json_schema`**：opencode 的 format 靠「合成工具 + tool_choice:required」
+  实现，DeepSeek 思考模式等 provider 直接 400（"Thinking mode does not support this
+  tool_choice"，HTTP 仍 200、parts 为空、错误走 session.error 事件）；且用过 format 的
+  session 再调 `session.messages` 会 400（1.18.16）。prompt 约定对所有 provider 兼容。
 - **完成/错误判定**：v2 prompt 阻塞到回合结束；`session.idle` 事件是可靠完成信号；错误三通道
   （res.error / session.error 事件 / info.error）都要接。工具调用过程只出现在 events
   （`message.part.updated`，ToolPart state pending→running→completed），prompt 响应只含最终消息。

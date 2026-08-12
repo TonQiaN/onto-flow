@@ -3,10 +3,15 @@
  *
  * - 工作区 data/runs/<runId>/<nodeId>/：引用 tools 物化到 .opencode/tools/、
  *   file 输入拷贝到 inputs/。
+ * - 工具不设白名单：内置工具全开（与 opencode CLI 行为一致），custom tools
+ *   物化到工作区后由 opencode 自动发现启用。
  * - 先 noReply 注入 Rule + Skills 全文，再发正式 prompt（{{端口名}} 插值，
  *   file 输入追加 file:// part）。
- * - 单 text 输出取 parts 文本拼接；否则 format json_schema 取 info.structured，
- *   deepseek 思考模式 format 失败时降级为同会话普通 prompt 要求纯 JSON。
+ * - 单 text 输出取 parts 文本拼接；多输出或含 json 输出在 prompt 里给出
+ *   JSON Schema 要求最终回答输出纯 JSON，解析失败同会话反馈重试。
+ *   刻意不用 format/tool_choice——opencode 的 format 靠合成工具 + 强制
+ *   tool_choice 实现，DeepSeek 思考模式等 provider 直接 400，prompt 约定
+ *   对所有 provider 兼容。
  * - 会话创建前把本次实际使用的完整配置冻结进 run_nodes.snapshot（运行快照），
  *   端口与 prompt/rule/model/skills/tools 一样在**执行时刻**重查，保证快照内部同源同刻。
  */
@@ -144,14 +149,12 @@ export async function runActionNode(
   const workspace = path.join(DATA_DIR, "runs", ctx.runId, ctx.node.id);
   fs.mkdirSync(workspace, { recursive: true });
 
-  const customToolNames: string[] = [];
   if (toolRows.length > 0) {
     const toolDir = path.join(workspace, ".opencode", "tools");
     fs.mkdirSync(toolDir, { recursive: true });
     for (const tool of toolRows) {
       const safeName = tool.name.replace(/[^\w.-]/g, "_");
       fs.writeFileSync(path.join(toolDir, `${safeName}.ts`), tool.code);
-      customToolNames.push(safeName);
     }
   }
 
@@ -203,24 +206,14 @@ export async function runActionNode(
       }
     }
 
-    // ---------- 工具白名单：所有内置工具显式 false，仅引用的 custom tools true ----------
-    const toolIds = await client.tool.ids({ directory: workspace });
-    if (toolIds.error) {
-      throw new Error(`获取工具列表失败：${formatError(toolIds.error)}`);
-    }
-    const enabled = new Set(customToolNames);
-    const toolsMap: Record<string, boolean> = {};
-    for (const id of toolIds.data ?? []) toolsMap[id] = enabled.has(id);
-    for (const name of customToolNames) toolsMap[name] = true;
-
     // ---------- 正式 prompt ----------
     const promptText = interpolate(action.prompt, ctx.node.inputs, ctx.inputs);
-    const parts: Array<TextPartInput | FilePartInput> = [];
+    const fileParts: Array<TextPartInput | FilePartInput> = [];
     for (const port of ctx.node.inputs) {
       const value = ctx.inputs[port.name];
       const absPath = filePaths.get(port.name);
       if (value?.kind === "file" && absPath) {
-        parts.push({
+        fileParts.push({
           type: "file",
           mime: value.file.mime || "text/plain",
           filename: value.file.name,
@@ -228,14 +221,12 @@ export async function runActionNode(
         });
       }
     }
-    parts.push({ type: "text", text: promptText });
 
     const promptBase = {
       sessionID,
       directory: workspace,
       model: { providerID: model.providerId, modelID: model.modelId },
       variant: action.reasoningEffort,
-      tools: toolsMap,
     };
 
     const outPorts = ctx.node.outputs;
@@ -243,7 +234,7 @@ export async function runActionNode(
       // 无输出端口：跑完即可
       const res = await client.session.prompt({
         ...promptBase,
-        parts,
+        parts: [...fileParts, { type: "text", text: promptText }],
       });
       assertPromptOk(res.error, res.data?.info.error, sessionID);
       return {};
@@ -253,7 +244,7 @@ export async function runActionNode(
     if (singleText) {
       const res = await client.session.prompt({
         ...promptBase,
-        parts,
+        parts: [...fileParts, { type: "text", text: promptText }],
       });
       assertPromptOk(res.error, res.data?.info.error, sessionID);
       const text = joinTextParts(res.data?.parts ?? []);
@@ -265,32 +256,16 @@ export async function runActionNode(
       return { [outPorts[0].name]: { kind: "text", text } };
     }
 
-    // ---------- 多输出或含 json 输出：json_schema 结构化 ----------
+    // ---------- 多输出或含 json 输出：prompt 约定纯 JSON（兼容所有 provider） ----------
     const schema = buildOutputSchema(outPorts);
-    const res = await client.session.prompt({
-      ...promptBase,
-      format: { type: "json_schema", schema, retryCount: 1 },
-      parts,
-    });
-    if (res.error) {
-      throw new Error(`模型调用失败：${formatError(res.error)}`);
-    }
-    let structured = res.data?.info.structured;
-    if (structured === undefined || structured === null) {
-      // 取消后主 prompt 会被 abort 打断而返回空结果，不能顺势滑进降级——那会朝已 abort 的
-      // 会话再发 prompt，白白计费并让取消迟迟不生效。runner 的 catch 会把它认成 cancelled。
-      assertNotCancelled(ctx.runId);
-      // deepseek 思考模式不支持 format（session.error 事件 + parts 空）→ 降级
-      structured = await fallbackStructured(
-        client,
-        ctx.runId,
-        sessionID,
-        workspace,
-        promptBase,
-        schema,
-        outPorts,
-      );
-    }
+    const structured = await promptStructured(
+      client,
+      ctx.runId,
+      promptBase,
+      schema,
+      outPorts,
+      [...fileParts, { type: "text", text: withJsonContract(promptText, schema) }],
+    );
     return extractOutputs(structured, outPorts);
   } finally {
     releaseSession(sessionID);
@@ -470,43 +445,57 @@ function buildOutputSchema(ports: ResolvedPort[]): Record<string, unknown> {
   };
 }
 
-/** format 失败降级：同会话普通 prompt 要求纯 JSON，剥围栏解析 + 必填键校验，失败重试一次 */
-async function fallbackStructured(
+/** 给正式 prompt 追加输出契约：最终回答只输出符合 schema 的纯 JSON */
+function withJsonContract(
+  promptText: string,
+  schema: Record<string, unknown>,
+): string {
+  return [
+    promptText,
+    "---",
+    "## 输出格式要求",
+    "完成上述任务后，最终回答只输出一个 JSON 对象——不要解释、不要前后缀（允许 ```json 围栏）。",
+    "该 JSON 对象必须符合以下 JSON Schema：",
+    "```json",
+    JSON.stringify(schema, null, 2),
+    "```",
+  ].join("\n\n");
+}
+
+/**
+ * 多输出/json 输出的取数路径：prompt 约定纯 JSON，解析失败同会话反馈重试（共 3 轮）。
+ * 刻意不用 opencode 的 format——它靠「合成工具 + tool_choice:required」实现，
+ * DeepSeek 思考模式等 provider 会直接 400；prompt 约定对所有 provider 兼容。
+ */
+async function promptStructured(
   client: OpencodeClient,
   runId: string,
-  sessionID: string,
-  workspace: string,
   promptBase: {
+    sessionID: string;
+    directory: string;
     model: { providerID: string; modelID: string };
     variant: string;
-    tools: Record<string, boolean>;
   },
   schema: Record<string, unknown>,
   ports: ResolvedPort[],
+  firstParts: Array<TextPartInput | FilePartInput>,
 ): Promise<unknown> {
   const required = ports.map((p) => p.name);
-  const ask = [
-    "上一步未能产生结构化输出。请现在只输出一个 JSON 对象，不要输出任何解释、前后缀或 Markdown 代码围栏。",
-    "该 JSON 对象必须符合以下 JSON Schema：",
-    JSON.stringify(schema, null, 2),
-  ].join("\n\n");
-
   let lastError = "";
-  for (let attempt = 0; attempt < 2; attempt++) {
-    // 每轮发 prompt 前都查一次：取消可能发生在上一轮 prompt 进行中
+  for (let attempt = 0; attempt < 3; attempt++) {
+    // 每轮发 prompt 前都查一次：取消可能发生在上一轮 prompt 进行中，
+    // 朝已 abort 的会话再发 prompt 会白白计费并让取消迟迟不生效。
     assertNotCancelled(runId);
-    const text =
+    const parts: Array<TextPartInput | FilePartInput> =
       attempt === 0
-        ? ask
-        : `${ask}\n\n上一次输出解析失败（${lastError}），请严格按要求重新输出纯 JSON。`;
-    const res = await client.session.prompt({
-      sessionID,
-      directory: workspace,
-      model: promptBase.model,
-      variant: promptBase.variant,
-      tools: promptBase.tools,
-      parts: [{ type: "text", text }],
-    });
+        ? firstParts
+        : [
+            {
+              type: "text",
+              text: `上一次输出未能解析（${lastError}）。请重新输出：只输出一个符合先前给出的 JSON Schema 的 JSON 对象，不要输出任何解释或其他文字。`,
+            },
+          ];
+    const res = await client.session.prompt({ ...promptBase, parts });
     if (res.error) {
       lastError = formatError(res.error);
       continue;
@@ -515,15 +504,9 @@ async function fallbackStructured(
       lastError = formatError(res.data.info.error);
       continue;
     }
-    const raw = joinTextParts(res.data?.parts ?? []);
     try {
-      const parsed: unknown = JSON.parse(stripFences(raw));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error("结果不是 JSON 对象");
-      }
-      const missing = required.filter(
-        (key) => (parsed as Record<string, unknown>)[key] === undefined,
-      );
+      const parsed = parseJsonObject(joinTextParts(res.data?.parts ?? []));
+      const missing = required.filter((key) => parsed[key] === undefined);
       if (missing.length > 0) {
         throw new Error(`缺少必填键：${missing.join("、")}`);
       }
@@ -533,15 +516,34 @@ async function fallbackStructured(
     }
   }
   throw new Error(
-    `结构化输出降级失败：${lastError}${sessionErrorSuffix(sessionID)}`,
+    `结构化输出失败：${lastError}${sessionErrorSuffix(promptBase.sessionID)}`,
   );
 }
 
-function stripFences(raw: string): string {
-  let text = raw.trim();
-  const fence = text.match(/^```[\w-]*\s*\n([\s\S]*?)\n?```\s*$/);
-  if (fence) text = fence[1].trim();
-  return text;
+/**
+ * 从模型文本里解析 JSON 对象。内置工具全开后，最终回答前可能夹杂过程性文字，
+ * 因此依次尝试：全文 → 最后一个代码围栏内容 → 首尾大括号切片。
+ */
+function parseJsonObject(raw: string): Record<string, unknown> {
+  const trimmed = raw.trim();
+  if (!trimmed) throw new Error("模型未返回文本输出");
+  const candidates = [trimmed];
+  const fences = [...trimmed.matchAll(/```[\w-]*\s*\n([\s\S]*?)\n?```/g)];
+  if (fences.length > 0) candidates.push(fences[fences.length - 1][1].trim());
+  const first = trimmed.indexOf("{");
+  const last = trimmed.lastIndexOf("}");
+  if (first !== -1 && last > first) candidates.push(trimmed.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // 换下一个候选
+    }
+  }
+  throw new Error("输出中没有可解析的 JSON 对象");
 }
 
 function extractOutputs(

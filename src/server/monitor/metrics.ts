@@ -420,7 +420,7 @@ interface TraceUsageRow {
  * - 节点开始到首条事件之间 → 「会话准备与上下文注入」（覆盖建会话、noReply 注入规则技能、发 prompt）；
  * - tool 事件按 callID 聚合成一个 span（状态取最后一次更新）；
  * - 连续的 text 事件合成一个「模型输出」span，session.idle 作为回合分界，
- *   第二回合起标注「结构化输出降级重试」——引擎的降级路径正是同会话再发一轮 prompt；
+ *   第二回合起标注「JSON 解析重试」——引擎对结构化输出解析失败时正是同会话再发一轮 prompt；
  * - session.error 单独成一个失败 span。
  * 每个回合的 node_usage 归到该回合的模型输出 span 上（父级 node span 仍是全量合计）；
  * 整个节点一条 text 事件都没有时（首轮就报错等），补一个「模型调用（无文本输出）」span
@@ -634,8 +634,8 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
       id: nextId(),
       parentId,
       kind: "step",
-      // 第二轮起必定是引擎的结构化输出降级重试：同会话再发一条要求纯 JSON 的 prompt
-      label: round === 0 ? "模型输出" : `模型输出（第 ${round + 1} 轮 · 结构化降级重试）`,
+      // 第二轮起必定是引擎的 JSON 解析重试：同会话再发一条要求纯 JSON 的 prompt
+      label: round === 0 ? "模型输出" : `模型输出（第 ${round + 1} 轮 · JSON 解析重试）`,
       startMs: Math.max(0, acc.start - runStart),
       durMs: Math.max(0, acc.end - acc.start),
       status: "success",
