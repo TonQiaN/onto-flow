@@ -1,4 +1,4 @@
-# FlowForge 设计契约
+# OntoFlow 设计契约
 
 实现阶段所有模块共同遵守的契约。领域语义见 [CONTEXT.md](../CONTEXT.md)，架构决策见 [adr/](./adr/)。
 
@@ -61,7 +61,7 @@ src/
   挂 globalThis 防 HMR 重启。`config` 经 OPENCODE_CONFIG_CONTENT 与全局配置**合并**：在其中为
   deepseek/deepseek-v4-flash 与 newapi/openai/gpt-5.6-luna 定义 low/medium/high/max 四个
   variants（`variants.<name> = { reasoningEffort }`）。spawn 前设置
-  `process.env.FLOWFORGE_DB_PATH`（flowforge.db 绝对路径）与 `FLOWFORGE_DATA_DIR`
+  `process.env.ONTOFLOW_DB_PATH`（ontoflow.db 绝对路径）与 `ONTOFLOW_DATA_DIR`
   （data/ 绝对路径），custom tools 靠它们定位数据库与备份目录。端口不要用 0（实测不生效）。
 - **会话绑定工作区**：`createOpencodeClient({ baseUrl, directory })` 或 per-call `directory`；
   `session.create({ directory: <workspace> })`。custom tools 按 **session 目录**发现：
@@ -109,8 +109,8 @@ src/
 - Models：DeepSeek V4 Flash (deepseek/deepseek-v4-flash)、GPT-5.6 Luna (newapi/openai/gpt-5.6-luna)。
 - Skills：集采计划编制规范、集采计划审核要点（全文见 erp-seed.json）。
 - Tool：save_purchase_plan——**在 opencode（bun）运行时执行**，用 `bun:sqlite` 打开
-  `process.env.FLOWFORGE_DB_PATH` 写 purchase_plans（17 字段见 schema.ts），备份 Markdown 写
-  `FLOWFORGE_DATA_DIR/documents/集采计划-<planNo>-<日期>.md`，返回 { id, planNo, backupPath }。
+  `process.env.ONTOFLOW_DB_PATH` 写 purchase_plans（17 字段见 schema.ts），备份 Markdown 写
+  `ONTOFLOW_DATA_DIR/documents/集采计划-<planNo>-<日期>.md`，返回 { id, planNo, backupPath }。
 - Actions（prompt/rule 全文见 erp-seed.json）：需求整理(deepseek, low)、集采计划生成(deepseek, high)、
   集采计划审核(deepseek, high；输出 审核评价+集采计划透传)、集采计划归档(deepseek, low；引用 save_purchase_plan)。
 - Workflow「采购集采计划生成」：输入节点(需求文件) → 需求整理 → 集采计划生成 → 集采计划审核 →

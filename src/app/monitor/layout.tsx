@@ -38,7 +38,7 @@ export default function MonitorLayout({ children }: { children: ReactNode }) {
             监控台
           </h1>
           <span className="font-mono text-[11px] text-zinc-600">
-            flowforge://monitor
+            ontoflow://monitor
           </span>
           <span className="ml-auto text-[11px] text-zinc-500">
             {active?.hint}

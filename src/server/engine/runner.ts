@@ -37,11 +37,11 @@ export type CancelRunResult =
  * （挂 globalThis 以免 HMR 重建模块时丢失正在跑的运行的标记）。
  */
 interface RunnerGlobals {
-  flowforgeCancelledRuns?: Set<string>;
+  ontoflowCancelledRuns?: Set<string>;
 }
 const g = globalThis as RunnerGlobals;
-const cancelledRuns: Set<string> = g.flowforgeCancelledRuns ?? new Set();
-g.flowforgeCancelledRuns = cancelledRuns;
+const cancelledRuns: Set<string> = g.ontoflowCancelledRuns ?? new Set();
+g.ontoflowCancelledRuns = cancelledRuns;
 
 export function isRunCancelled(runId: string): boolean {
   return cancelledRuns.has(runId);
@@ -314,10 +314,12 @@ export async function cancelRun(runId: string): Promise<CancelRunResult> {
     const workspace = path.join(DATA_DIR, "runs", runId, node.nodeId);
     try {
       const client = await getOpencodeClient(workspace);
-      const res = await client.session.abort({
-        sessionID: node.sessionId,
-        directory: workspace,
-      });
+      // 客户端 fetch 已全局不设超时（见 longHaulFetch）：abort 这类控制面调用
+      // 必须自带有界 signal，否则 opencode 卡死时取消运行会永远挂起
+      const res = await client.session.abort(
+        { sessionID: node.sessionId, directory: workspace },
+        { signal: AbortSignal.timeout(10_000) },
+      );
       if (res.error) {
         console.error("[engine] 中止会话失败", node.sessionId, res.error);
       }

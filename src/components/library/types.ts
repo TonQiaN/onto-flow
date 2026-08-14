@@ -115,7 +115,7 @@ export interface RevisionDetail extends RevisionSummary {
 }
 
 /** 文件夹结构或实体归属变化时广播：FolderTree 刷新，列表页重载 */
-export const FOLDERS_CHANGED_EVENT = "flowforge:folders-changed";
+export const FOLDERS_CHANGED_EVENT = "ontoflow:folders-changed";
 
 export function notifyFoldersChanged(): void {
   if (typeof window === "undefined") return;
@@ -123,8 +123,8 @@ export function notifyFoldersChanged(): void {
 }
 
 /** 拖拽 MIME：实体 payload 是 JSON {kind, id}；文件夹 payload 是 folder id 字符串 */
-export const DND_ENTITY_MIME = "application/x-flowforge-entity";
-export const DND_FOLDER_MIME = "application/x-flowforge-folder";
+export const DND_ENTITY_MIME = "application/x-ontoflow-entity";
+export const DND_FOLDER_MIME = "application/x-ontoflow-folder";
 
 export async function readError(res: Response): Promise<string> {
   try {

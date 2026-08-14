@@ -1,7 +1,7 @@
 /**
  * folders 服务层测试：跑在内存 SQLite 上。
- * src/db/index.ts 会优先复用 globalThis 上已有的 flowforgeDb 单例，
- * 所以必须在（动态）import 服务层之前把内存库塞进全局，避免碰真实 data/flowforge.db。
+ * src/db/index.ts 会优先复用 globalThis 上已有的 ontoflowDb 单例，
+ * 所以必须在（动态）import 服务层之前把内存库塞进全局，避免碰真实 data/ontoflow.db。
  */
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
@@ -29,7 +29,7 @@ CREATE TABLE entity_folders (
 );
 CREATE INDEX entity_folders_by_folder ON entity_folders (folder_id);
 `);
-(globalThis as unknown as { flowforgeDb?: unknown }).flowforgeDb = drizzle(
+(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(
   sqlite,
   { schema },
 );

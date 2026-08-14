@@ -281,7 +281,7 @@ function EventPumpCard({ health }: { health: HealthPayload }) {
           value={formatCount(routeEntries)}
           unit="条"
           tone={mismatch ? "amber" : "zinc"}
-          hint="flowforgeSessionRoutes"
+          hint="ontoflowSessionRoutes"
         />
       </div>
       <p className="mt-3 text-xs leading-5 text-zinc-500">
@@ -300,7 +300,7 @@ function DatabaseCard({ health }: { health: HealthPayload }) {
   return (
     <Panel
       title="数据库"
-      subtitle={database.path || "data/flowforge.db"}
+      subtitle={database.path || "data/ontoflow.db"}
       right={
         <Num className="text-[11px] text-zinc-400">
           {formatBytes(database.sizeBytes)}

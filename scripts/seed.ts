@@ -1,5 +1,5 @@
 /**
- * FlowForge 种子脚本：首个案例「采购集采计划生成」。
+ * OntoFlow 种子脚本：首个案例「采购集采计划生成」。
  *
  * 运行：npm run db:seed（tsx scripts/seed.ts）；执行前需先 npm run db:push 建表。
  * 幂等：命名实体按 name 查找，存在则 update 内容（id 保持稳定）、不存在则 insert；
@@ -111,7 +111,7 @@ const REVIEW_JSON_SCHEMA = `{"type":"object","properties":{"conclusion":{"type":
 /**
  * save_purchase_plan：完整的 opencode custom tool 源码。
  * 运行在 opencode 的 bun 环境（物化为 <workspace>/.opencode/tools/save_purchase_plan.ts），
- * 不能 import 本项目内任何模块；数据库与备份目录靠 FLOWFORGE_DB_PATH / FLOWFORGE_DATA_DIR 定位。
+ * 不能 import 本项目内任何模块；数据库与备份目录靠 ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR 定位。
  */
 const SAVE_PURCHASE_PLAN_CODE = `import { tool } from "@opencode-ai/plugin";
 import { Database } from "bun:sqlite";
@@ -154,13 +154,13 @@ export default tool({
   },
   async execute(args) {
     try {
-      const dbPath = process.env.FLOWFORGE_DB_PATH;
-      const dataDir = process.env.FLOWFORGE_DATA_DIR;
+      const dbPath = process.env.ONTOFLOW_DB_PATH;
+      const dataDir = process.env.ONTOFLOW_DATA_DIR;
       if (!dbPath) {
-        return JSON.stringify({ ok: false, error: "缺少环境变量 FLOWFORGE_DB_PATH，无法定位数据库" });
+        return JSON.stringify({ ok: false, error: "缺少环境变量 ONTOFLOW_DB_PATH，无法定位数据库" });
       }
       if (!dataDir) {
-        return JSON.stringify({ ok: false, error: "缺少环境变量 FLOWFORGE_DATA_DIR，无法定位备份目录" });
+        return JSON.stringify({ ok: false, error: "缺少环境变量 ONTOFLOW_DATA_DIR，无法定位备份目录" });
       }
       const createdAt = new Date().toISOString();
       const dateStr = createdAt.slice(0, 10).replace(/-/g, "");

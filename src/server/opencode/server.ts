@@ -3,10 +3,12 @@
  *
  * - createOpencodeServer 固定 127.0.0.1:4977，config 为两个白名单模型定义
  *   low/medium/high/max variants（variant 是 v2 prompt 唯一的思考强度机制）。
- * - spawn 前设置 FLOWFORGE_DB_PATH / FLOWFORGE_DATA_DIR（custom tools 依赖）。
+ * - spawn 前设置 ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR（custom tools 依赖）。
  * - 事件流按 directory 作用域隔离，因此每个会话按其工作区目录单独起事件泵，
- *   sessionID→(runId,nodeId) 路由，text delta 合并节流（≥500ms 或 ≥500 字符），
- *   ToolPart 状态逐条落 run_events，节点结束时 abort。
+ *   sessionID→(runId,nodeId) 路由，text/reasoning delta 分开合并节流（≥500ms
+ *   或 ≥500 字符），ToolPart 状态逐条落 run_events，节点结束时 abort。
+ * - 所有发往 opencode 的请求走 longHaulFetch：不设 headers/body 超时，
+ *   否则超过 5 分钟的模型轮次会被 undici 默认 300s 超时掐断。
  * - message.updated 捕获 assistant 消息的 token/费用明细落 node_usage，
  *   并重算 run_nodes 的会话级用量汇总。
  */
@@ -17,6 +19,11 @@ import {
   type OpencodeClient,
   type Event,
 } from "@opencode-ai/sdk/v2/client";
+import {
+  Agent,
+  fetch as undiciFetch,
+  type RequestInit as UndiciRequestInit,
+} from "undici";
 import path from "node:path";
 import { and, eq, sql } from "drizzle-orm";
 import { db, nodeUsage, runEvents, runNodes } from "@/db";
@@ -24,6 +31,41 @@ import { db, nodeUsage, runEvents, runNodes } from "@/db";
 const HOSTNAME = "127.0.0.1";
 const PORT = 4977;
 const DATA_DIR = path.join(process.cwd(), "data");
+
+/**
+ * 发往 opencode server 的请求一律不设 headers/body 超时。
+ *
+ * session.prompt 是长活 POST——opencode 在整轮生成结束后才回响应，而 Node 内置
+ * fetch（undici）默认 headersTimeout/bodyTimeout 均为 300s：模型一轮思考超过
+ * 5 分钟时请求会以 UND_ERR_HEADERS_TIMEOUT（表层是 "fetch failed"）被掐断，
+ * 节点被误判失败。模型轮次本就无界，超时语义交给用户的「取消运行」。
+ * （SDK 自带的默认 fetch 用 `req.timeout = false` 关超时——那是 Bun 专属属性，
+ * Node 下是空操作，所以必须自供 fetch。）
+ *
+ * 必须用 npm undici 的 fetch 而不是全局 fetch：Next 给 globalThis.fetch 打了
+ * 缓存补丁，fetch(Request, init) 形态会被合并成 `new Request(input, overrides)`，
+ * 非标准的 dispatcher 字段在合并时被静默丢弃，Agent 配置根本到不了网络层。
+ * undici 的 Request 与内置 Request 不同类（跨副本 instanceof 不成立），
+ * 所以 Request 入参先拆成 (url, init) 再转发；body 物化为字节（请求体都是
+ * 小 JSON），headers/signal 是同一批全局类，可直接传。
+ */
+const longHaulAgent = new Agent({ headersTimeout: 0, bodyTimeout: 0 });
+const longHaulFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  if (input instanceof Request) {
+    const body = input.body == null ? undefined : await input.arrayBuffer();
+    return undiciFetch(input.url, {
+      method: input.method,
+      headers: [...input.headers],
+      body,
+      signal: input.signal,
+      dispatcher: longHaulAgent,
+    });
+  }
+  return undiciFetch(input as string | URL, {
+    ...(init as UndiciRequestInit),
+    dispatcher: longHaulAgent,
+  });
+}) as unknown as typeof fetch;
 
 const effortVariants = {
   low: { reasoningEffort: "low" },
@@ -54,30 +96,41 @@ interface TextBuffer {
   lastFlush: number;
 }
 
+/** 增量种类：模型正文与思考过程分开缓冲，事件日志里分别记为 text / reasoning */
+type DeltaKind = "text" | "reasoning";
+type SessionBuffers = Partial<Record<DeltaKind, TextBuffer>>;
+
 interface OpencodeGlobals {
-  flowforgeOpencodeServer?: Promise<{ url: string; close(): void }>;
-  flowforgeSessionRoutes?: Map<string, SessionRoute>;
-  flowforgeTextBuffers?: Map<string, TextBuffer>;
-  flowforgeSessionErrors?: Map<string, unknown>;
-  flowforgeSessionPumps?: Map<string, AbortController>;
+  ontoflowOpencodeServer?: Promise<{ url: string; close(): void }>;
+  ontoflowSessionRoutes?: Map<string, SessionRoute>;
+  ontoflowTextBuffers?: Map<string, SessionBuffers>;
+  ontoflowPartKinds?: Map<string, Map<string, DeltaKind>>;
+  ontoflowSessionErrors?: Map<string, unknown>;
+  ontoflowSessionPumps?: Map<string, AbortController>;
 }
 
 const g = globalThis as OpencodeGlobals;
 
 const sessionRoutes: Map<string, SessionRoute> =
-  g.flowforgeSessionRoutes ?? new Map();
-g.flowforgeSessionRoutes = sessionRoutes;
+  g.ontoflowSessionRoutes ?? new Map();
+g.ontoflowSessionRoutes = sessionRoutes;
 
-const textBuffers: Map<string, TextBuffer> = g.flowforgeTextBuffers ?? new Map();
-g.flowforgeTextBuffers = textBuffers;
+const textBuffers: Map<string, SessionBuffers> =
+  g.ontoflowTextBuffers ?? new Map();
+g.ontoflowTextBuffers = textBuffers;
+
+/** sessionID → partID → 种类。message.part.delta 只带 partID 不带类型，靠它区分思考与正文 */
+const partKinds: Map<string, Map<string, DeltaKind>> =
+  g.ontoflowPartKinds ?? new Map();
+g.ontoflowPartKinds = partKinds;
 
 const sessionErrors: Map<string, unknown> =
-  g.flowforgeSessionErrors ?? new Map();
-g.flowforgeSessionErrors = sessionErrors;
+  g.ontoflowSessionErrors ?? new Map();
+g.ontoflowSessionErrors = sessionErrors;
 
 const sessionPumps: Map<string, AbortController> =
-  g.flowforgeSessionPumps ?? new Map();
-g.flowforgeSessionPumps = sessionPumps;
+  g.ontoflowSessionPumps ?? new Map();
+g.ontoflowSessionPumps = sessionPumps;
 
 const BASE_URL = `http://${HOSTNAME}:${PORT}`;
 
@@ -102,11 +155,11 @@ async function probeExisting(): Promise<boolean> {
  * 这本来就是一台机器共用一个 server（会话级隔离由 session + 工作区目录保证）。
  */
 export async function getOpencodeUrl(): Promise<string> {
-  if (!g.flowforgeOpencodeServer) {
+  if (!g.ontoflowOpencodeServer) {
     // custom tools 在 opencode（bun）运行时里靠这两个环境变量定位数据库与备份目录
-    process.env.FLOWFORGE_DB_PATH = path.join(DATA_DIR, "flowforge.db");
-    process.env.FLOWFORGE_DATA_DIR = DATA_DIR;
-    g.flowforgeOpencodeServer = (async () => {
+    process.env.ONTOFLOW_DB_PATH = path.join(DATA_DIR, "ontoflow.db");
+    process.env.ONTOFLOW_DATA_DIR = DATA_DIR;
+    g.ontoflowOpencodeServer = (async () => {
       if (await probeExisting()) {
         console.log(`[opencode] 复用已在 ${BASE_URL} 运行的 server`);
         return { url: BASE_URL, close: () => {} };
@@ -118,20 +171,20 @@ export async function getOpencodeUrl(): Promise<string> {
         config: opencodeConfig,
       });
     })().catch((err) => {
-      g.flowforgeOpencodeServer = undefined;
+      g.ontoflowOpencodeServer = undefined;
       throw err;
     });
   }
-  const server = await g.flowforgeOpencodeServer;
+  const server = await g.ontoflowOpencodeServer;
   return server.url;
 }
 
-/** 取绑定到指定工作区目录的 v2 客户端 */
+/** 取绑定到指定工作区目录的 v2 客户端（fetch 不设超时，见 longHaulFetch） */
 export async function getOpencodeClient(
   directory?: string,
 ): Promise<OpencodeClient> {
   const url = await getOpencodeUrl();
-  return createOpencodeClient({ baseUrl: url, directory });
+  return createOpencodeClient({ baseUrl: url, directory, fetch: longHaulFetch });
 }
 
 /**
@@ -157,6 +210,7 @@ export function releaseSession(sessionID: string): void {
   sessionPumps.delete(sessionID);
   sessionRoutes.delete(sessionID);
   textBuffers.delete(sessionID);
+  partKinds.delete(sessionID);
   sessionErrors.delete(sessionID);
 }
 
@@ -172,7 +226,7 @@ async function pumpEvents(
   while (!signal.aborted) {
     try {
       const url = await getOpencodeUrl();
-      const client = createOpencodeClient({ baseUrl: url });
+      const client = createOpencodeClient({ baseUrl: url, fetch: longHaulFetch });
       const result = await client.event.subscribe({ directory }, { signal });
       for await (const ev of result.stream as AsyncGenerator<Event>) {
         if (signal.aborted) return;
@@ -193,24 +247,36 @@ async function pumpEvents(
 function handleEvent(ev: Event): void {
   switch (ev.type) {
     case "message.part.delta": {
-      const { sessionID, field, delta } = ev.properties;
+      const { sessionID, partID, field, delta } = ev.properties;
       if (field !== "text") return;
       if (!sessionRoutes.has(sessionID)) return;
-      const buf = textBuffers.get(sessionID) ?? {
-        text: "",
-        lastFlush: Date.now(),
-      };
+      // reasoning part 的增量同样走 field:"text"，不区分就会把思考过程混进正文日志
+      const kind = partKinds.get(sessionID)?.get(partID) ?? "text";
+      // run_events 没有序号语义，插入顺序就是日志顺序：换类时先清掉另一类的
+      // 残余缓冲，否则前一段的尾巴会被写到后一段之后（顺序反转）
+      const other: DeltaKind = kind === "text" ? "reasoning" : "text";
+      if (textBuffers.get(sessionID)?.[other]?.text) flushDelta(sessionID, other);
+      const buffers = textBuffers.get(sessionID) ?? {};
+      const buf = buffers[kind] ?? { text: "", lastFlush: Date.now() };
       buf.text += delta;
-      textBuffers.set(sessionID, buf);
+      buffers[kind] = buf;
+      textBuffers.set(sessionID, buffers);
       if (buf.text.length >= 500 || Date.now() - buf.lastFlush >= 500) {
-        flushText(sessionID);
+        flushDelta(sessionID, kind);
       }
       return;
     }
     case "message.part.updated": {
       const { sessionID, part } = ev.properties;
       const route = sessionRoutes.get(sessionID);
-      if (!route || part.type !== "tool") return;
+      if (!route) return;
+      if (part.type === "text" || part.type === "reasoning") {
+        const kinds = partKinds.get(sessionID) ?? new Map<string, DeltaKind>();
+        kinds.set(part.id, part.type);
+        partKinds.set(sessionID, kinds);
+        return;
+      }
+      if (part.type !== "tool") return;
       const state = part.state;
       insertRunEvent(route, "tool", {
         tool: part.tool,
@@ -259,12 +325,19 @@ function handleEvent(ev: Event): void {
   }
 }
 
+/** flush 该会话的全部残余增量（思考在前——它总是先于正文产生） */
 function flushText(sessionID: string): void {
-  const buf = textBuffers.get(sessionID);
+  flushDelta(sessionID, "reasoning");
+  flushDelta(sessionID, "text");
+}
+
+function flushDelta(sessionID: string, kind: DeltaKind): void {
+  const buf = textBuffers.get(sessionID)?.[kind];
   if (!buf || buf.text.length === 0) return;
   const route = sessionRoutes.get(sessionID);
-  if (route) insertRunEvent(route, "text", { text: buf.text });
-  textBuffers.set(sessionID, { text: "", lastFlush: Date.now() });
+  if (route) insertRunEvent(route, kind, { text: buf.text });
+  buf.text = "";
+  buf.lastFlush = Date.now();
 }
 
 /**

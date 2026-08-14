@@ -1,4 +1,4 @@
-# FlowForge 工作台
+# OntoFlow 工作台
 
 低代码 workflow 编排工作台：以 **Action** 为原子单位，通过拖拽连线把 Action 的输入输出编排为
 DAG，每次运行经 [opencode](https://opencode.ai) 以全新会话真实执行（模型推理 + 工具调用）。
@@ -60,7 +60,7 @@ opencode 会安装依赖，磁盘增长很快——这是需要定期查看系�
 
 ```bash
 npm install
-npm run db:push     # 建表（./data/flowforge.db）
+npm run db:push     # 建表（./data/ontoflow.db）
 npm run db:seed     # 灌入采购集采计划案例（幂等）
 npm run dev
 ```

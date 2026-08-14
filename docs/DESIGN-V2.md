@@ -1,4 +1,4 @@
-# FlowForge v2 实现契约
+# OntoFlow v2 实现契约
 
 v1 契约见 [DESIGN.md](./DESIGN.md)（执行引擎、opencode 集成规范仍然有效）。
 领域语义见 [../CONTEXT.md](../CONTEXT.md)，本轮新决策见 ADR-0004（画布编辑共享 Action）、

@@ -72,12 +72,14 @@ export interface NodeVisual {
   error: string | null;
 }
 
-export type ActivityKind = "tool" | "text" | "idle" | "error";
+export type ActivityKind = "tool" | "text" | "reasoning" | "idle" | "error";
 
 /** 节点的实时活动（来自 SSE log 事件，只在运行中有意义） */
 export interface NodeActivity {
   /** 累计输出字数（type=text 的 payload.text 长度合计） */
   chars: number;
+  /** 累计思考字数（type=reasoning 的 payload.text 长度合计） */
+  reasoningChars: number;
   /** 最近一次工具调用的名字与状态（type=tool） */
   tool: string | null;
   toolStatus: string | null;
@@ -275,6 +277,7 @@ function parseSnapshot(raw: string): SnapshotPatch {
 
 const EMPTY_ACTIVITY: NodeActivity = {
   chars: 0,
+  reasoningChars: 0,
   tool: null,
   toolStatus: null,
   lastKind: null,
@@ -283,7 +286,8 @@ const EMPTY_ACTIVITY: NodeActivity = {
 
 /**
  * SSE log 帧（run_events 行）→ activity。
- * 事件类型由 src/server/opencode/server.ts 产出：text / tool / session.idle / session.error。
+ * 事件类型由 src/server/opencode/server.ts 产出：
+ * text / reasoning / tool / session.idle / session.error。
  * 纯函数：去重（按 run_events.id）在调用处完成，避免在 setState 更新器里写副作用。
  */
 function applyLogRow(prev: RunState, row: Record<string, unknown>): RunState {
@@ -302,6 +306,14 @@ function applyLogRow(prev: RunState, row: Record<string, unknown>): RunState {
   if (type === "text") {
     const text = typeof payload.text === "string" ? payload.text : "";
     next = { ...base, chars: base.chars + text.length, lastKind: "text", updatedAt: at };
+  } else if (type === "reasoning") {
+    const text = typeof payload.text === "string" ? payload.text : "";
+    next = {
+      ...base,
+      reasoningChars: base.reasoningChars + text.length,
+      lastKind: "reasoning",
+      updatedAt: at,
+    };
   } else if (type === "tool") {
     next = {
       ...base,
@@ -330,6 +342,9 @@ export function activitySummary(activity: NodeActivity | undefined): string | nu
   }
   if (activity.lastKind === "error") return "会话报错，处理中…";
   if (activity.lastKind === "idle") return "本轮已收尾";
+  if (activity.lastKind === "reasoning") {
+    return `思考中…（已思考 ${activity.reasoningChars} 字）`;
+  }
   if (activity.chars > 0) return `已输出 ${activity.chars} 字`;
   return "思考中…";
 }

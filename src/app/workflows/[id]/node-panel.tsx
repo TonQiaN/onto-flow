@@ -16,7 +16,7 @@ import {
   type ObjectTypeRow,
 } from "./types";
 
-export const ACTION_DRAG_MIME = "application/flowforge-action";
+export const ACTION_DRAG_MIME = "application/ontoflow-action";
 
 // 前置空格保证 key 不会与叫「未归类」的真实文件夹路径撞车
 const UNFILED = " 未归类";

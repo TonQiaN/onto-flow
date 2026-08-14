@@ -8,17 +8,17 @@ const DATA_DIR = path.join(process.cwd(), "data");
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const globalForDb = globalThis as unknown as {
-  flowforgeDb?: ReturnType<typeof createDb>;
+  ontoflowDb?: ReturnType<typeof createDb>;
 };
 
 function createDb() {
-  const sqlite = new Database(path.join(DATA_DIR, "flowforge.db"));
+  const sqlite = new Database(path.join(DATA_DIR, "ontoflow.db"));
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("foreign_keys = ON");
   return drizzle(sqlite, { schema });
 }
 
-export const db = globalForDb.flowforgeDb ?? createDb();
-globalForDb.flowforgeDb = db;
+export const db = globalForDb.ontoflowDb ?? createDb();
+globalForDb.ontoflowDb = db;
 
 export * from "./schema";

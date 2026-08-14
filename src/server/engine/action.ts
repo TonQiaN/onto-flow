@@ -177,10 +177,12 @@ export async function runActionNode(
 
   // ---------- 会话 ----------
   const client = await getOpencodeClient(workspace);
-  const created = await client.session.create({
-    directory: workspace,
-    title: `${action.name} · ${ctx.runId}`,
-  });
+  // 客户端 fetch 已全局不设超时（见 longHaulFetch）：只有模型轮次该无界，
+  // create/注入/abort 这类应当秒回的调用一律自带有界 signal 兜底
+  const created = await client.session.create(
+    { directory: workspace, title: `${action.name} · ${ctx.runId}` },
+    { signal: AbortSignal.timeout(30_000) },
+  );
   if (created.error || !created.data) {
     throw new Error(`创建会话失败：${formatError(created.error)}`);
   }
@@ -195,12 +197,16 @@ export async function runActionNode(
     // ---------- noReply 注入 Rule + Skills ----------
     const injection = buildInjection(action.rule, skillRows);
     if (injection) {
-      const injected = await client.session.prompt({
-        sessionID,
-        directory: workspace,
-        noReply: true,
-        parts: [{ type: "text", text: injection }],
-      });
+      // noReply 只追加消息不触发生成，应当秒回，同样加有界 signal
+      const injected = await client.session.prompt(
+        {
+          sessionID,
+          directory: workspace,
+          noReply: true,
+          parts: [{ type: "text", text: injection }],
+        },
+        { signal: AbortSignal.timeout(60_000) },
+      );
       if (injected.error) {
         throw new Error(`注入规则与技能失败：${formatError(injected.error)}`);
       }
@@ -267,6 +273,16 @@ export async function runActionNode(
       [...fileParts, { type: "text", text: withJsonContract(promptText, schema) }],
     );
     return extractOutputs(structured, outPorts);
+  } catch (err) {
+    // 客户端侧失败（如网络错误）不代表 opencode 侧的生成停了：不中止会话，
+    // 模型会在后台继续生成、继续计费。尽力 abort，失败不掩盖原始错误。
+    void client.session
+      .abort(
+        { sessionID, directory: workspace },
+        { signal: AbortSignal.timeout(10_000) },
+      )
+      .catch(() => {});
+    throw err;
   } finally {
     releaseSession(sessionID);
   }

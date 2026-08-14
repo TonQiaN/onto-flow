@@ -28,8 +28,8 @@ const PROBE_TIMEOUT_MS = 2000;
 
 /** 事件泵与会话路由挂在 globalThis（见 src/server/opencode/server.ts） */
 interface OpencodeGlobals {
-  flowforgeSessionRoutes?: Map<string, SessionRoute>;
-  flowforgeSessionPumps?: Map<string, AbortController>;
+  ontoflowSessionRoutes?: Map<string, SessionRoute>;
+  ontoflowSessionPumps?: Map<string, AbortController>;
 }
 
 export async function getHealth(): Promise<HealthPayload> {
@@ -98,17 +98,17 @@ async function readVersion(res: Response): Promise<string | undefined> {
 function readEventPump(): HealthEventPump {
   const g = globalThis as OpencodeGlobals;
   const routes: EventPumpRoute[] = [];
-  for (const [sessionId, route] of g.flowforgeSessionRoutes ?? []) {
+  for (const [sessionId, route] of g.ontoflowSessionRoutes ?? []) {
     routes.push({ sessionId, runId: route.runId, nodeId: route.nodeId });
   }
   return {
-    activeSessions: g.flowforgeSessionPumps?.size ?? 0,
+    activeSessions: g.ontoflowSessionPumps?.size ?? 0,
     routes,
   };
 }
 
 function readDb(): HealthDb {
-  const dbPath = path.join(DATA_DIR, "flowforge.db");
+  const dbPath = path.join(DATA_DIR, "ontoflow.db");
   let bytes = 0;
   try {
     bytes = fs.statSync(dbPath).size;

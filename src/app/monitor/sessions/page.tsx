@@ -227,7 +227,10 @@ export default function MonitorSessionsPage() {
 function eventSummary(row: RunEventRow): string {
   const payload = row.payload;
   if (!payload) return "";
-  if (row.type === "text" && typeof payload.text === "string") {
+  if (
+    (row.type === "text" || row.type === "reasoning") &&
+    typeof payload.text === "string"
+  ) {
     return payload.text;
   }
   if (row.type === "tool") {
@@ -247,6 +250,7 @@ function eventSummary(row: RunEventRow): string {
 
 const EVENT_TONE: Record<string, string> = {
   text: "text-zinc-300",
+  reasoning: "text-zinc-500",
   tool: "text-violet-300",
   "session.error": "text-red-300",
   "session.idle": "text-emerald-300",

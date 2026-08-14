@@ -278,7 +278,7 @@ function LogsConsole() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `flowforge-logs-${fileStamp()}.json`;
+    a.download = `ontoflow-logs-${fileStamp()}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
