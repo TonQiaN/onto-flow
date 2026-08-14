@@ -84,3 +84,7 @@ npm run test:e2e   # Playwright E2E（25 个用例，复用 3000 端口的 dev s
 Action 引用的 custom tools；思考强度经 per-prompt variant；多输出走 JSON Schema 结构化返回
 （DeepSeek 思考模式不支持时自动降级为同会话纯 JSON 追问）；事件流按工作区目录订阅落库
 `run_events`，前端经 SSE 实时呈现。
+
+## 许可证
+
+[MIT](LICENSE) © 2026 Ryan Fu
