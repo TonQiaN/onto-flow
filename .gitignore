@@ -1,0 +1,15 @@
+node_modules/
+.next/
+_reference/
+.data/
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env*
+!.env.example
+.DS_Store
+tsconfig.tsbuildinfo
+test-results/
+playwright-report/

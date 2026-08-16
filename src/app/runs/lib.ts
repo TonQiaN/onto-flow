@@ -1,0 +1,274 @@
+/**
+ * 运行历史 UI 的共享类型与格式化工具。
+ * 时间字段经 JSON 序列化后可能是 ISO 字符串或毫秒数，统一用 toMillis 归一。
+ */
+import type { PortValue } from "@/lib/values";
+
+/** cancelled 是人为中止的独立终态，区别于 failed */
+export type RunStatus = "running" | "success" | "failed" | "cancelled";
+export type NodeStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+/** 列表页状态筛选：空串代表「全部」，其余写进 URL 的 ?status= */
+export const RUN_STATUS_FILTERS: Array<{ value: "" | RunStatus; label: string }> =
+  [
+    { value: "", label: "全部" },
+    { value: "success", label: "成功" },
+    { value: "failed", label: "失败" },
+    { value: "cancelled", label: "已取消" },
+    { value: "running", label: "进行中" },
+  ];
+
+export function asStatusFilter(value: string | null): "" | RunStatus {
+  const hit = RUN_STATUS_FILTERS.find((f) => f.value !== "" && f.value === value);
+  return hit ? hit.value : "";
+}
+
+/** GET /api/runs 列表项（用量为该次运行全部节点的合计） */
+export interface RunListItem {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  status: RunStatus;
+  startedAt: string | number;
+  finishedAt: string | number | null;
+  totalTokens: number;
+  totalCost: number;
+}
+
+/** runs 表行（GET /api/runs/[id] 与 SSE snapshot 中的 run） */
+export interface RunRow {
+  id: string;
+  workflowId: string;
+  workflowName: string;
+  status: RunStatus;
+  error: string | null;
+  startedAt: string | number;
+  finishedAt: string | number | null;
+}
+
+/** run_nodes 的六个用量字段 */
+export interface NodeUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+}
+
+/** run_nodes 表行 */
+export interface RunNodeRow extends NodeUsage {
+  id: string;
+  runId: string;
+  nodeId: string;
+  label: string;
+  status: NodeStatus;
+  /** 运行快照：本次执行实际使用的完整配置，可能为 null（输入/输出节点无快照） */
+  snapshot?: unknown;
+  inputs?: Record<string, unknown> | null;
+  outputs?: Record<string, unknown> | null;
+  sessionId?: string | null;
+  error?: string | null;
+  startedAt: string | number | null;
+  finishedAt: string | number | null;
+}
+
+/** run_events 表行（SSE event: log 的 data） */
+export interface RunEventRow {
+  id: number;
+  runId: string;
+  nodeId: string | null;
+  ts: string | number;
+  type: string;
+  payload: Record<string, unknown> | null;
+}
+
+/** 时间归一：接受毫秒数 / ISO 字符串 / Date，其余返回 null */
+export function toMillis(value: unknown): number | null {
+  if (value == null) return null;
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const t = Date.parse(value);
+    return Number.isNaN(t) ? null : t;
+  }
+  if (value instanceof Date) return value.getTime();
+  return null;
+}
+
+const pad = (n: number, len = 2) => String(n).padStart(len, "0");
+
+/** yyyy-MM-dd HH:mm:ss */
+export function formatDateTime(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
+    d.getHours(),
+  )}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** HH:mm:ss.SSS（事件日志时间戳） */
+export function formatClock(ms: number): string {
+  const d = new Date(ms);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(
+    d.getSeconds(),
+  )}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+export function formatDuration(ms: number): string {
+  if (ms < 0) ms = 0;
+  if (ms < 1000) return `${Math.round(ms)} 毫秒`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)} 秒`;
+  const m = Math.floor(s / 60);
+  const restSec = Math.round(s % 60);
+  if (m < 60) return `${m} 分 ${restSec} 秒`;
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
+
+/** 耗时展示：未开始 → “—”；进行中 → 已耗时 + “…”；已结束 → 总耗时 */
+export function durationText(startedAt: unknown, finishedAt: unknown): string {
+  const start = toMillis(startedAt);
+  if (start == null) return "—";
+  const end = toMillis(finishedAt);
+  if (end == null) return `${formatDuration(Date.now() - start)}…`;
+  return formatDuration(end - start);
+}
+
+/** 用量合计：五类 token 全部计入「总 token」 */
+export function sumTokens(usage: Partial<NodeUsage> | null | undefined): number {
+  if (!usage) return 0;
+  return (
+    (usage.inputTokens ?? 0) +
+    (usage.outputTokens ?? 0) +
+    (usage.reasoningTokens ?? 0) +
+    (usage.cacheReadTokens ?? 0) +
+    (usage.cacheWriteTokens ?? 0)
+  );
+}
+
+/** 多个节点的用量求和 */
+export function totalUsage(nodes: Array<Partial<NodeUsage>>): {
+  tokens: number;
+  cost: number;
+} {
+  return nodes.reduce<{ tokens: number; cost: number }>(
+    (acc, n) => ({
+      tokens: acc.tokens + sumTokens(n),
+      cost: acc.cost + (n.cost ?? 0),
+    }),
+    { tokens: 0, cost: 0 },
+  );
+}
+
+export function formatTokens(n: number): string {
+  return Math.round(n).toLocaleString("zh-CN");
+}
+
+/** 费用为美元，保留 4 位；极小的非零值不显示成 $0.0000 */
+export function formatCost(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "$0";
+  if (n < 0.0001) return "<$0.0001";
+  return `$${n.toFixed(4)}`;
+}
+
+/** run_nodes.snapshot 的展示形态（服务端 RunSnapshot 的宽松镜像） */
+export interface RunSnapshotPortView {
+  name: string;
+  objectTypeName: string;
+  kind: string;
+}
+
+export interface RunSnapshotView {
+  actionName: string;
+  prompt: string;
+  rule: string;
+  model: string;
+  reasoningEffort: string;
+  skills: Array<{ name: string; content: string }>;
+  tools: Array<{ name: string; code: string }>;
+  inputs: RunSnapshotPortView[];
+  outputs: RunSnapshotPortView[];
+}
+
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+
+function asNamedText(
+  value: unknown,
+  field: "content" | "code",
+): Array<{ name: string; content: string; code: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const o = item as Record<string, unknown>;
+    const text = str(o[field]);
+    return [{ name: str(o.name), content: text, code: text }];
+  });
+}
+
+function asPorts(value: unknown): RunSnapshotPortView[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const o = item as Record<string, unknown>;
+    return [
+      {
+        name: str(o.name),
+        objectTypeName: str(o.objectTypeName),
+        kind: str(o.kind),
+      },
+    ];
+  });
+}
+
+/** 宽松解析 run_nodes.snapshot（历史行可能缺字段，缺什么就空什么） */
+export function asRunSnapshot(value: unknown): RunSnapshotView | null {
+  if (typeof value !== "object" || value === null) return null;
+  const o = value as Record<string, unknown>;
+  const model = o.model as Record<string, unknown> | undefined;
+  const ports = (o.ports ?? {}) as Record<string, unknown>;
+  return {
+    actionName: str(o.actionName),
+    prompt: str(o.prompt),
+    rule: str(o.rule),
+    model: model
+      ? str(model.displayName) ||
+        [str(model.providerId), str(model.modelId)].filter(Boolean).join("/")
+      : "",
+    reasoningEffort: str(o.reasoningEffort),
+    skills: asNamedText(o.skills, "content"),
+    tools: asNamedText(o.tools, "code"),
+    inputs: asPorts(ports.inputs),
+    outputs: asPorts(ports.outputs),
+  };
+}
+
+/** 宽松校验 run_nodes.inputs/outputs 里的值是否为 PortValue */
+export function asPortValue(value: unknown): PortValue | null {
+  if (typeof value !== "object" || value === null) return null;
+  const o = value as Record<string, unknown>;
+  if (o.kind === "text" && typeof o.text === "string") {
+    return { kind: "text", text: o.text };
+  }
+  if (o.kind === "json" && "json" in o) {
+    return { kind: "json", json: o.json };
+  }
+  if (o.kind === "file" && typeof o.file === "object" && o.file !== null) {
+    const f = o.file as Record<string, unknown>;
+    if (typeof f.name === "string" && typeof f.path === "string") {
+      return {
+        kind: "file",
+        file: {
+          path: f.path,
+          name: f.name,
+          mime: typeof f.mime === "string" ? f.mime : "",
+        },
+      };
+    }
+  }
+  return null;
+}

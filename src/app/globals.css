@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+body {
+  @apply bg-zinc-100 text-zinc-900 antialiased;
+}
+
+/* ==========================================================================
+ * OntoFlow 画布动画层
+ *
+ * 本段由【模块 B】定义并维护，是全站唯一的 keyframes 出处。
+ * 【模块 C（运行态可视化）】只需要在节点/连线上挂类名，不要在这里再定义任何东西：
+ *
+ *   .ff-edge-flow    连线流动虚线 —— 挂在 Edge 上（`edge.className = "ff-edge-flow"`，
+ *                    或自定义边的 <BaseEdge className>）。选择器同时覆盖元素自身与
+ *                    其后代 <path>，所以挂在 .react-flow__edge 分组上也生效。
+ *                    描边颜色仍由 edge.style.stroke 控制，动画不干预配色。
+ *   .ff-node-running 呼吸光晕 —— 挂在节点卡片外层 div 上，表示「正在执行」。
+ *                    用 box-shadow 扩散实现，不改变盒模型，不会让节点抖动。
+ *   .ff-node-pulse   一次性完成脉冲 —— 挂在节点卡片外层 div 上，触发一次即结束
+ *                    （animation-iteration-count: 1）。要重放请先移除类名再于下一帧加回。
+ *
+ * 其余 .ff-* 类是模块 B 自用的界面进出场动画。
+ * ========================================================================== */
+
+/* ---- 连线流动虚线 ---- */
+@keyframes ff-edge-dash {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.ff-edge-flow,
+.ff-edge-flow path {
+  stroke-dasharray: 8 4;
+  animation: ff-edge-dash 0.7s linear infinite;
+}
+
+/* ---- 运行中呼吸光晕 ---- */
+@keyframes ff-node-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgb(59 130 246 / 0.45),
+      0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+  50% {
+    box-shadow:
+      0 0 0 8px rgb(59 130 246 / 0),
+      0 1px 2px 0 rgb(0 0 0 / 0.05);
+  }
+}
+
+.ff-node-running {
+  animation: ff-node-breathe 1.6s ease-in-out infinite;
+}
+
+/* ---- 完成时的一次性脉冲 ---- */
+@keyframes ff-node-pop {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgb(16 185 129 / 0.55);
+  }
+  45% {
+    transform: scale(1.03);
+    box-shadow: 0 0 0 10px rgb(16 185 129 / 0.12);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 16px rgb(16 185 129 / 0);
+  }
+}
+
+.ff-node-pulse {
+  animation: ff-node-pop 0.7s ease-out 1;
+}
+
+/* ---- 模块 B 自用：面板/抽屉/提示的进出场 ---- */
+@keyframes ff-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes ff-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes ff-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.ff-fade-in {
+  animation: ff-fade-in 0.15s ease-out;
+}
+
+.ff-slide-in-right {
+  animation: ff-slide-in-right 0.18s ease-out;
+}
+
+.ff-rise-in {
+  animation: ff-rise-in 0.14s ease-out;
+}
+
+/* ==========================================================================
+ * 画布基础观感（React Flow 皮肤，zinc 工作台风格）
+ * ========================================================================== */
+
+.react-flow__edge-path {
+  stroke: #a1a1aa;
+  stroke-width: 1.75;
+}
+
+.react-flow__edge.selected .react-flow__edge-path,
+.react-flow__edge:hover .react-flow__edge-path {
+  stroke: #18181b;
+  stroke-width: 2.5;
+}
+
+.react-flow__connection-path {
+  stroke: #52525b;
+  stroke-width: 2;
+}
+
+.react-flow__handle {
+  transition:
+    transform 0.12s ease-out,
+    box-shadow 0.12s ease-out;
+}
+
+.react-flow__handle:hover {
+  transform: scale(1.35);
+}
+
+/* 连线拖拽中：不兼容的端口整体淡出，兼容的端口在下面用 .ff-handle-ok 放大 */
+.ff-handle-dim {
+  opacity: 0.18 !important;
+}
+
+.ff-handle-ok {
+  transform: scale(1.3);
+  box-shadow:
+    0 0 0 4px rgb(59 130 246 / 0.25),
+    0 0 0 1px rgb(0 0 0 / 0.2) !important;
+}
+
+.react-flow__minimap {
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.react-flow__controls-button {
+  border-bottom: 1px solid #e4e4e7;
+  background: #ffffff;
+  color: #52525b;
+}
+
+.react-flow__controls-button:hover {
+  background: #f4f4f5;
+}
+
+.react-flow__selection {
+  background: rgb(24 24 27 / 0.06);
+  border: 1px solid #71717a;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ff-edge-flow,
+  .ff-edge-flow path,
+  .ff-node-running,
+  .ff-node-pulse,
+  .ff-fade-in,
+  .ff-slide-in-right,
+  .ff-rise-in {
+    animation: none !important;
+  }
+}
