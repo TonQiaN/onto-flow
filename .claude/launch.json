@@ -8,12 +8,12 @@
         "run",
         "dev"
       ],
-      "port": 3000
+      "port": 3592
     },
     {
-      "name": "attach-3000",
-      "url": "http://localhost:3000",
-      "port": 3000
+      "name": "attach-3592",
+      "url": "http://localhost:3592",
+      "port": 3592
     },
     {
       "name": "prod",
@@ -22,7 +22,7 @@
         "run",
         "start"
       ],
-      "port": 3000
+      "port": 3592
     }
   ]
 }

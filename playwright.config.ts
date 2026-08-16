@@ -6,13 +6,13 @@ export default defineConfig({
   retries: 0,
   workers: 1,
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL: "http://localhost:3592",
     trace: "retain-on-failure",
   },
-  // Next 16 不允许同一目录起第二个 dev server，因此固定复用 3000 上的那个
+  // Next 16 不允许同一目录起第二个 dev server，因此固定复用 3592 上的那个
   webServer: {
     command: "npm run dev",
-    url: "http://localhost:3000",
+    url: "http://localhost:3592",
     reuseExistingServer: true,
     timeout: 120_000,
   },

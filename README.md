@@ -65,7 +65,7 @@ npm run db:seed     # 灌入采购集采计划案例（幂等）
 npm run dev
 ```
 
-打开 http://localhost:3000 ，进入「工作流 → 采购集采计划生成」，点「运行」并上传
+打开 http://localhost:3592 ，进入「工作流 → 采购集采计划生成」，点「运行」并上传
 `data/samples/采购需求示例.txt`，即可看到四个 Action 依次真实执行：
 需求整理 → 集采计划生成 → 集采计划审核（结构化 JSON 评价）→ 集采计划归档
 （经 `save_purchase_plan` 工具写入 `purchase_plans` 表 + 备份 Markdown 到 `data/documents/`）。
@@ -74,7 +74,7 @@ npm run dev
 
 ```bash
 npm test           # vitest 单测（图校验/拓扑）
-npm run test:e2e   # Playwright E2E（25 个用例，复用 3000 端口的 dev server）
+npm run test:e2e   # Playwright E2E（25 个用例，复用 3592 端口的 dev server）
 ```
 
 ## 执行语义速览
