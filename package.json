@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start -p 3592",
     "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx scripts/seed.ts",
     "test": "vitest run",
@@ -21,8 +22,7 @@
     "next": "^16.3.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "undici": "^6.28.0",
-    "zustand": "^5.0.14"
+    "undici": "^6.28.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
