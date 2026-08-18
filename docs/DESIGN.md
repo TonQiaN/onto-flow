@@ -46,10 +46,10 @@ src/
 
 - 所有 route handler 顶部 `export const dynamic = "force-dynamic"`（sqlite 本地读写，禁静态化）。
 - 服务端校验：name 非空且唯一冲突返回 409；未知 id 返回 404。
-- 前端数据获取：Server Component 直接读 DB（列表页）；交互页（画布、表单）走 fetch API + client component。
+- 前端数据获取：凡是要数据的页面都是 client component（`"use client"` 起手），一律 `fetch` 打 `/api/*` 后在 `useEffect` 里取数。没有 Server Action，也没有任何 Server Component 读 DB——只有根 `app/page.tsx`（仅 redirect）与 `app/layout.tsx`（静态外壳）不带 `"use client"`。
 - UI 文案全部中文；Tailwind 工具类直接写，不引组件库；整体风格与既有外壳（zinc 系工作台）一致。
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
-- 执行引擎：拓扑序串行；每节点一个全新 opencode session；工作区 `data/runs/<runId>/<nodeId>/`；file 输入物化到工作区 `inputs/`；引用 tools 物化到 `.opencode/tools/`；rule+skills 以 noReply 上下文注入；多输出或 json 输出走 json_schema 结构化返回（schema 按输出端口生成，json 端口有自定义 schema 则内嵌）。
+- 执行引擎：拓扑序串行；每节点一个全新 opencode session；工作区 `data/runs/<runId>/<nodeId>/`；file 输入物化到工作区 `inputs/`；引用 tools 物化到 `.opencode/tools/`；rule+skills 以 noReply 上下文注入；多输出或含 json 输出**一律用 prompt 约定纯 JSON**（schema 按输出端口生成、json 端口有自定义 schema 则内嵌，写进 prompt 末尾的输出契约），**禁用 `format: json_schema`**（理由见下方引擎实现规范的「输出提取」）。
 - 运行期间每个节点的 opencode 事件写 run_events（节流：文本增量可合并），SSE 转发。
 
 ## 引擎实现规范（opencode SDK 1.18.16 实测定稿）
