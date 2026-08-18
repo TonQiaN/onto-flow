@@ -182,28 +182,55 @@ test.describe("监控台 · Trace", () => {
   });
 });
 
+/**
+ * 日志页每次筛选变化都会清空列表再拉第一页（PAGE_SIZE=50）。
+ * 「筛选生效」不能靠「行数比筛选前少」判断：命中数一旦 ≥ 一页（库里运行越多越容易），
+ * 筛选前后都是满页，行数根本不变。改为等带该筛选参数的接口响应落地，
+ * 以响应里的条数为准等 DOM 渲染出同样多的行——确定性，且与命中数无关。
+ * 返回筛选后的行数。
+ */
+async function applyLogFilter(
+  page: Page,
+  urlParam: string,
+  apply: () => Promise<void>,
+): Promise<number> {
+  const responded = page.waitForResponse(
+    (res) =>
+      res.url().includes("/api/monitor/logs?") &&
+      res.url().includes(urlParam) &&
+      res.request().method() === "GET",
+    { timeout: 15_000 },
+  );
+  await apply();
+  const res = await responded;
+  expect(res.ok(), `筛选请求应成功（HTTP ${res.status()}）`).toBe(true);
+  const payload = (await res.json()) as { items: unknown[] };
+  const rows = page.getByTestId("log-row");
+  await expect(rows).toHaveCount(payload.items.length, { timeout: 15_000 });
+  return payload.items.length;
+}
+
 test.describe("监控台 · 日志检索", () => {
   test("默认列出事件行，「只看错误」收窄结果", async ({ page }) => {
     await page.goto("/monitor/logs");
 
     const rows = page.getByTestId("log-row");
     await expect(rows.first()).toBeVisible({ timeout: 15_000 });
-    const before = await rows.count();
-    expect(before, "库里应有历史事件").toBeGreaterThan(0);
+    expect(await rows.count(), "库里应有历史事件").toBeGreaterThan(0);
 
-    await page.getByText("只看错误").click();
-    await expect(page).toHaveURL(/errors=1/);
+    const after = await applyLogFilter(page, "onlyErrors=true", async () => {
+      await page.getByText("只看错误").click();
+      await expect(page).toHaveURL(/errors=1/);
+    });
 
-    // 行数变少，或者干脆空态（当前库里没有错误事件）
-    const empty = page.getByText("没有匹配的事件");
-    await expect(rows.first().or(empty)).toBeVisible({ timeout: 15_000 });
-    const after = await rows.count();
-    expect(after, "「只看错误」后行数应变化").toBeLessThan(before);
-    if (after > 0) {
-      // 剩下的都应是错误类事件（session.error 或 tool 的 error 状态）
-      for (let i = 0; i < after; i += 1) {
-        await expect(rows.nth(i)).toContainText(/session\.error|error/);
-      }
+    if (after === 0) {
+      // 库里没有错误事件 → 明确的空态
+      await expect(page.getByText("没有匹配的事件")).toBeVisible();
+      return;
+    }
+    // 剩下的都应是错误类事件（session.error 或 tool 的 error 状态）
+    for (let i = 0; i < after; i += 1) {
+      await expect(rows.nth(i)).toContainText(/session\.error|error/);
     }
   });
 
@@ -214,19 +241,13 @@ test.describe("监控台 · 日志检索", () => {
 
     const rows = page.getByTestId("log-row");
     await expect(rows.first()).toBeVisible({ timeout: 15_000 });
-    const before = await rows.count();
 
-    await page
-      .getByPlaceholder("关键词：匹配 payload 全文")
-      .fill("save_purchase_plan");
-    await expect(page).toHaveURL(/q=save_purchase_plan/, { timeout: 15_000 });
-
-    await expect(rows.first()).toBeVisible({ timeout: 15_000 });
-    await expect
-      .poll(() => rows.count(), { timeout: 15_000 })
-      .toBeLessThan(before);
-
-    const after = await rows.count();
+    const after = await applyLogFilter(page, "q=save_purchase_plan", async () => {
+      await page
+        .getByPlaceholder("关键词：匹配 payload 全文")
+        .fill("save_purchase_plan");
+      await expect(page).toHaveURL(/q=save_purchase_plan/, { timeout: 15_000 });
+    });
     expect(after, "该工具确实被调用过，应有命中").toBeGreaterThan(0);
     // 逐行核对：命中的都真的与这个词有关，不是把全部事件都捞回来了。
     // 折叠行的摘要在 JS 里截断过，长消息的命中点可能在截断之后——
