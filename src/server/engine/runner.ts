@@ -178,7 +178,7 @@ export async function startRun(
 }
 
 /** 一次运行内同时执行的 Action 上限。扇出宽了也不会把并发无限放大。 */
-const MAX_CONCURRENT_NODES = 4;
+const MAX_CONCURRENT_NODES = 10;
 
 type NodeStatus = "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
 

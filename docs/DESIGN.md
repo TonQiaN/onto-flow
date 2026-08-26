@@ -49,7 +49,7 @@ src/
 - 前端数据获取：凡是要数据的页面都是 client component（`"use client"` 起手），一律 `fetch` 打 `/api/*` 后在 `useEffect` 里取数。没有 Server Action，也没有任何 Server Component 读 DB——只有根 `app/page.tsx`（仅 redirect）与 `app/layout.tsx`（静态外壳）不带 `"use client"`。
 - UI 文案全部中文；Tailwind 工具类直接写，不引组件库；整体风格与既有外壳（zinc 系工作台）一致。
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
-- 执行引擎：就绪节点并行、并发上限 4；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
+- 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。文件输入物化到 `workspace/inputs/`，Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
 - 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。
 
