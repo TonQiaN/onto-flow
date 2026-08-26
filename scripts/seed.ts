@@ -109,67 +109,129 @@ const SKILL_SHENHE_CONTENT = `# 集采计划审核要点
 const REVIEW_JSON_SCHEMA = `{"type":"object","properties":{"conclusion":{"type":"string","enum":["通过","有保留通过","退回"],"description":"审核总结论"},"summary":{"type":"string","description":"总体意见，一段话概括计划质量与主要问题"},"issues":{"type":"array","description":"问题清单，无问题时为空数组","items":{"type":"object","properties":{"checklist_item":{"type":"string","description":"对应审核要点的检查项编号与名称，如「4 汇总-明细一致」"},"category":{"type":"string","enum":["完整性","口径一致性","合规性","可执行性"]},"location":{"type":"string","description":"问题所在章节或明细行位置"},"description":{"type":"string","description":"问题描述"},"suggestion":{"type":"string","description":"修改建议"},"severity":{"type":"string","enum":["高","中","低"],"description":"严重程度，数字错误一律为高"}},"required":["category","location","description","severity"]}}},"required":["conclusion","summary","issues"]}`;
 
 /**
- * save_purchase_plan：完整的 opencode custom tool 源码。
- * 运行在 opencode 的 bun 环境（物化为 <workspace>/.opencode/tools/save_purchase_plan.ts），
- * 不能 import 本项目内任何模块；数据库与备份目录靠 ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR 定位。
+ * save_purchase_plan：一个 cordis 插件（ADR-0006）。
+ * 运行时物化为 <运行目录>/plugins/save_purchase_plan.ts 并由每运行组合 include；
+ * 数据库与备份目录靠 ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR 定位，两者由引擎注入。
  */
-const SAVE_PURCHASE_PLAN_CODE = `import { tool } from "@opencode-ai/plugin";
-import { Database } from "bun:sqlite";
+const SAVE_PURCHASE_PLAN_CODE = `/**
+ * 集采计划归档：写入 purchase_plans 表并把计划全文备份为 Markdown。
+ *
+ * 这是一个 cordis 插件（ADR-0006）：运行时物化到 <运行目录>/plugins/ 并由每运行
+ * 组合 include。数据库走 node:sqlite（Node 22+ 内置），路径与备份目录由引擎经
+ * ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR 注入。
+ *
+ * 与 Next 进程共用同一个数据库文件，因此设 busy_timeout 并保持写入轻量。
+ */
+import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
+import type { Context } from "@deepseek-ai/cordis";
 
-export default tool({
-  description:
-    "把审核完成的集采计划归档入库：写入 purchase_plans 表（plan_no 冲突时覆盖更新），并把计划全文备份为 Markdown 文件，返回入库记录标识与备份路径。",
-  args: {
-    plan_no: tool.schema.string().describe("集采计划编号，如 CPP-2027-001"),
-    plan_title: tool.schema.string().describe("计划标题"),
-    plan_type: tool.schema
-      .string()
-      .optional()
-      .describe("集采分类（一级集采/二三级集采/自定义集采；依据不明时含「待确认」原文）"),
-    plan_year: tool.schema.string().optional().describe("计划年度或周期，如 2027"),
-    org_units: tool.schema.string().optional().describe("涉及需求部门/单位清单，逗号分隔"),
-    category_summary: tool.schema
-      .string()
-      .optional()
-      .describe("品类划分摘要（各品类及其数量/金额分布）"),
-    item_count: tool.schema.number().optional().describe("合并后需求明细行数"),
-    total_budget: tool.schema.number().optional().describe("预算总额（元），口径见 budget_note"),
-    budget_note: tool.schema
-      .string()
-      .optional()
-      .describe("预算与价格口径说明（是否含税、预算类型、是否超上限提示等）"),
-    schedule_summary: tool.schema
-      .string()
-      .optional()
-      .describe("时间安排摘要（采购批次与关键到货节点）"),
-    pending_issues: tool.schema.string().optional().describe("风险与待确认事项摘要"),
-    review_conclusion: tool.schema
-      .string()
-      .optional()
-      .describe("审核总结论（通过/有保留通过/退回）"),
-    review_feedback: tool.schema.string().optional().describe("审核评价 JSON 全文"),
-    plan_content: tool.schema.string().describe("集采计划 Markdown 全文"),
-  },
-  async execute(args) {
-    try {
+interface Args {
+  plan_no: string;
+  plan_title: string;
+  plan_type?: string;
+  plan_year?: string;
+  org_units?: string;
+  category_summary?: string;
+  item_count?: number;
+  total_budget?: number;
+  budget_note?: string;
+  schedule_summary?: string;
+  pending_issues?: string;
+  review_conclusion?: string;
+  review_feedback?: string;
+  plan_content: string;
+}
+
+interface Result {
+  ok: boolean;
+  id?: number;
+  planNo?: string;
+  backupPath?: string;
+  error?: string;
+}
+
+const INSERT = \`INSERT INTO purchase_plans (
+  plan_no, plan_title, plan_type, plan_year, org_units, category_summary,
+  item_count, total_budget, budget_note, schedule_summary, review_conclusion,
+  review_feedback, plan_content, pending_issues, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(plan_no) DO UPDATE SET
+  plan_title = excluded.plan_title, plan_type = excluded.plan_type,
+  plan_year = excluded.plan_year, org_units = excluded.org_units,
+  category_summary = excluded.category_summary, item_count = excluded.item_count,
+  total_budget = excluded.total_budget, budget_note = excluded.budget_note,
+  schedule_summary = excluded.schedule_summary,
+  review_conclusion = excluded.review_conclusion,
+  review_feedback = excluded.review_feedback, plan_content = excluded.plan_content,
+  pending_issues = excluded.pending_issues, created_at = excluded.created_at\`;
+
+export const name = "save_purchase_plan";
+export const inject = ["tools"];
+
+export function apply(ctx: Context): void {
+  ctx.tools.register({
+    name: "save_purchase_plan",
+    description:
+      "把审核完成的集采计划归档入库：写入 purchase_plans 表（plan_no 冲突时覆盖更新），" +
+      "并把计划全文备份为 Markdown 文件，返回入库记录标识与备份路径。",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        plan_no: { type: "string", description: "集采计划编号，如 CPP-2027-001" },
+        plan_title: { type: "string", description: "计划标题" },
+        plan_type: { type: "string", description: "集采分类；依据不明时含「待确认」原文" },
+        plan_year: { type: "string", description: "计划年度或周期，如 2027" },
+        org_units: { type: "string", description: "涉及需求部门/单位清单，逗号分隔" },
+        category_summary: { type: "string", description: "品类划分摘要" },
+        item_count: { type: "integer", description: "合并后需求明细行数" },
+        total_budget: { type: "number", description: "预算总额（元），口径见 budget_note" },
+        budget_note: { type: "string", description: "预算与价格口径说明" },
+        schedule_summary: { type: "string", description: "时间安排摘要" },
+        pending_issues: { type: "string", description: "风险与待确认事项摘要" },
+        review_conclusion: { type: "string", description: "审核总结论（通过/有保留通过/退回）" },
+        review_feedback: { type: "string", description: "审核评价全文" },
+        plan_content: { type: "string", description: "集采计划 Markdown 全文" },
+      },
+      required: ["plan_no", "plan_title", "plan_content"],
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: true,
+        properties: {
+          ok: { type: "boolean" },
+          // 上游的 JSON Schema 子集不接受类型数组，写 ["integer","null"] 会让
+          // 插件加载失败、整次运行起不来；空值直接省略这个字段。
+          id: { type: "integer" },
+          planNo: { type: "string" },
+          backupPath: { type: "string" },
+          error: { type: "string" },
+        },
+        required: ["ok"],
+      },
+      // 签名是 (args, value)：第一个参数是调用参数，第二个才是返回值。
+      render: (_args: unknown, value: Result) => [
+        { type: "text", text: JSON.stringify(value) },
+      ],
+    },
+    execute(args: Args): Promise<Result> {
       const dbPath = process.env.ONTOFLOW_DB_PATH;
       const dataDir = process.env.ONTOFLOW_DATA_DIR;
-      if (!dbPath) {
-        return JSON.stringify({ ok: false, error: "缺少环境变量 ONTOFLOW_DB_PATH，无法定位数据库" });
-      }
-      if (!dataDir) {
-        return JSON.stringify({ ok: false, error: "缺少环境变量 ONTOFLOW_DATA_DIR，无法定位备份目录" });
+      if (!dbPath || !dataDir) {
+        return Promise.resolve({
+          ok: false,
+          error: "缺少 ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR，无法定位数据库与备份目录",
+        });
       }
       const createdAt = new Date().toISOString();
-      const dateStr = createdAt.slice(0, 10).replace(/-/g, "");
-      const db = new Database(dbPath);
+      const db = new DatabaseSync(dbPath);
       try {
+        // 与 Next 进程共用同一个库文件，写入前先给足等待窗口。
         db.exec("PRAGMA busy_timeout = 5000;");
-        db.prepare(
-          "INSERT INTO purchase_plans (plan_no, plan_title, plan_type, plan_year, org_units, category_summary, item_count, total_budget, budget_note, schedule_summary, review_conclusion, review_feedback, plan_content, pending_issues, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_no) DO UPDATE SET plan_title = excluded.plan_title, plan_type = excluded.plan_type, plan_year = excluded.plan_year, org_units = excluded.org_units, category_summary = excluded.category_summary, item_count = excluded.item_count, total_budget = excluded.total_budget, budget_note = excluded.budget_note, schedule_summary = excluded.schedule_summary, review_conclusion = excluded.review_conclusion, review_feedback = excluded.review_feedback, plan_content = excluded.plan_content, pending_issues = excluded.pending_issues, created_at = excluded.created_at",
-        ).run(
+        db.prepare(INSERT).run(
           args.plan_no,
           args.plan_title,
           args.plan_type ?? null,
@@ -186,36 +248,36 @@ export default tool({
           args.pending_issues ?? null,
           createdAt,
         );
-        const backupDir = path.join(dataDir, "documents");
-        fs.mkdirSync(backupDir, { recursive: true });
-        // plan_no 由模型输出，净化后再拼文件名，防目录穿越写出 documents/ 之外
-        const safePlanNo = String(args.plan_no).replace(/[^\\w.-]/g, "_") || "plan";
-        const backupPath = path.join(backupDir, "集采计划-" + safePlanNo + "-" + dateStr + ".md");
-        fs.writeFileSync(backupPath, args.plan_content, "utf8");
+
+        const dir = path.join(dataDir, "documents");
+        fs.mkdirSync(dir, { recursive: true });
+        const stamp = createdAt.slice(0, 10).replace(/-/g, "");
+        const backupPath = path.join("documents", \`\${args.plan_no}-\${stamp}.md\`);
+        fs.writeFileSync(path.join(dataDir, backupPath), args.plan_content, "utf8");
         db.prepare("UPDATE purchase_plans SET backup_path = ? WHERE plan_no = ?").run(
           backupPath,
           args.plan_no,
         );
-        const row = db.prepare("SELECT id FROM purchase_plans WHERE plan_no = ?").get(args.plan_no) as
-          | { id: number }
-          | null;
-        return JSON.stringify({
+        const row = db
+          .prepare("SELECT id FROM purchase_plans WHERE plan_no = ?")
+          .get(args.plan_no) as { id: number } | undefined;
+        return Promise.resolve({
           ok: true,
-          id: row ? row.id : null,
+          ...(row ? { id: row.id } : {}),
           planNo: args.plan_no,
           backupPath,
+        });
+      } catch (err) {
+        return Promise.resolve({
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
         });
       } finally {
         db.close();
       }
-    } catch (err) {
-      return JSON.stringify({
-        ok: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  },
-});
+    },
+  });
+}
 `;
 
 const SAMPLE_REQUIREMENT_TXT = `华远新材科技有限公司 2027年度办公与IT设备采购需求汇总（各部门上报初稿）
@@ -611,11 +673,9 @@ const actionTidy = upsertAction({
   name: "需求整理",
   description:
     "把原始采购需求文件整理成结构化的需求Prompt：逐行抽取需求要素，标注缺失项并给出同类需求归组提示。",
-  prompt: `你收到一份采购需求文件，内容如下：
+  prompt: `你收到一份采购需求文件，路径见下面「你要读的东西」——先把它整个读进来再动手。
 
-{{需求文件}}
-
-请把它整理成结构化的采购需求描述（需求Prompt），供后续集采计划生成使用。要求：
+请把它整理成结构化的采购需求描述（需求Prompt），写进你声明的产物文件。要求：
 1. 逐条列出需求行，每行包含：需求部门/单位、品目名称与规格、数量、计量单位、预估单价或预算金额、期望到货时间；文件中未给出的要素填「未提供」，严禁编造或估算；
 2. 保留文件中关于价格口径（如是否含税）、分批交付、统一型号、收货地点、联系人等备注信息，原样归入「备注与口径说明」；
 3. 对跨部门的同类物资（品目与规格一致或明显可统一型号）做初步归组提示，只提示、不改动任何原始数据；
@@ -635,9 +695,7 @@ const actionGenerate = upsertAction({
   name: "集采计划生成",
   description:
     "依据《集采计划编制规范》，基于整理后的需求Prompt 编制完整的集采计划 Markdown 文档。",
-  prompt: `请依据《集采计划编制规范》skill 的要求，基于以下整理后的采购需求，编制一份完整的集采计划文档（Markdown 格式）：
-
-{{需求Prompt}}
+  prompt: `请依据《集采计划编制规范》技能的要求，基于上游整理好的采购需求（路径见「你要读的东西」，先整份读进来），编制一份完整的集采计划文档（Markdown 格式）写进产物。
 
 要求：
 1. 严格按编制规范的七个章节组织文档：计划概述、需求汇总总览、需求明细与合并结果、品类划分与集采分类、数量与预算口径、时间安排、风险与待确认事项；
@@ -660,9 +718,7 @@ const actionReview = upsertAction({
   name: "集采计划审核",
   description:
     "依据《集采计划审核要点》逐条审核集采计划，输出结构化审核评价，并把计划原文原样透传。",
-  prompt: `请依据《集采计划审核要点》skill，对下面这份集采计划进行审核：
-
-{{集采计划}}
+  prompt: `请依据《集采计划审核要点》技能，对上游产出的集采计划进行审核——计划全文的路径见「你要读的东西」，先整份读进来。
 
 要求：
 1. 逐条执行审核要点清单中的全部检查项，每条给出「通过/不通过/不适用」判定；重点核算汇总数与明细的一致性、合并行的可追溯性；
@@ -685,13 +741,7 @@ const actionArchive = upsertAction({
   name: "集采计划归档",
   description:
     "提取归档字段并调用 save_purchase_plan 工具，把集采计划与审核评价写入 purchase_plans 并生成备份，输出归档回执。",
-  prompt: `请把审核完成的集采计划归档入库。
-
-集采计划全文：
-{{集采计划}}
-
-审核评价：
-{{审核评价}}
+  prompt: `请把审核完成的集采计划归档入库。集采计划全文与审核评价都在工作区里，路径见「你要读的东西」，两份都要先整份读进来。
 
 请执行：
 1. 从集采计划正文提取归档字段：plan_no（计划编号；正文未给出时按「CPP-年度-三位序号」格式生成，并在回执中注明为系统生成）、plan_title（计划标题）、plan_type（集采分类，含「待确认」时如实保留）、plan_year（计划年度/周期）、org_units（涉及部门/单位，逗号分隔）、category_summary（品类划分摘要）、item_count（合并后明细行数）、total_budget（预算总额，数值，单位元）、budget_note（预算与价格口径说明）、schedule_summary（时间安排摘要）、pending_issues（待确认事项摘要）；

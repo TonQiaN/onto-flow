@@ -5,6 +5,7 @@
  * 不落组合配置、不落日志、不落运行目录（ADR-0006）。
  */
 import path from "node:path";
+import { DATA_DIR } from "@/server/fs-safety";
 import { DEEPSEEK_PROVIDER, DEFAULT_CREDENTIAL_ENV, DEFAULT_DEEPSEEK_MODEL } from "./entries";
 import { RunProcess } from "./runtime";
 import { writeRunComposition, type RunCompositionOptions } from "./composition";
@@ -60,8 +61,15 @@ export async function launchRun(
     runnerEntry: options.runnerEntry ?? defaultRunnerEntry(),
     compositionPath: workspace.compositionPath,
     cwd: workspace.workspaceDir,
-    // DSH_HOME 恒指向运行目录内的隔离 home，不可被凭据白名单覆盖。
-    env: { ...collectCredentialEnv(refs), DSH_HOME: workspace.homeDir },
+    env: {
+      ...collectCredentialEnv(refs),
+      // 下面三个不是凭据而是运行上下文，因此排在白名单之后、不可被它覆盖：
+      // DSH_HOME 把 harness 的用户级根钉进运行目录（隔离）；另两个让 Tool 插件
+      // 够得着工作台自己的数据——归档类工具正是靠它写库与落备份文件。
+      DSH_HOME: workspace.homeDir,
+      ONTOFLOW_DB_PATH: path.join(DATA_DIR, "ontoflow.db"),
+      ONTOFLOW_DATA_DIR: DATA_DIR,
+    },
     stderrLogPath: path.join(workspace.logsDir, "harness.stderr.log"),
     ...(options.requestTimeoutMs === undefined
       ? {}
