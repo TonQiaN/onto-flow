@@ -205,7 +205,7 @@ function ToolsLibrary() {
     <>
       <LibraryLayout
         title="Tool 库"
-        subtitle="opencode custom tool 脚本，被 Action 引用后在执行时供模型调用。"
+        subtitle="cordis 插件源码，被引用后物化进运行目录并注册到工具面，供模型调用。"
         tree={
           <FolderTree
             kind="tool"

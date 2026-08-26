@@ -276,6 +276,14 @@ export class OntoflowRpcServer {
     if (nodeOptions.outputSchema !== undefined) {
       structured = attachStructuredRuntime(agentCtx, nodeOptions.outputSchema);
     }
+    if (nodeOptions.maxSteps !== undefined) {
+      // pre-step 是进入下一步前的裁决点：超预算就拒绝进入，本回合当场收束。
+      // 会话没交出结构化输出，节点因此判失败——这正是我们要的结果。
+      const limit = nodeOptions.maxSteps;
+      agentCtx.on("agent/pre-step", async (payload, next) =>
+        payload.step > limit ? { kind: "reject" } : next(),
+      );
+    }
     if (nodeOptions.reasoningEffort !== undefined) {
       // 思考强度到达模型的唯一通道（ADR-0006）。上游 AgentOptions 只有
       // provider/model/maxTokens；llm/stream 那层的 options 是冻结的，改不动。

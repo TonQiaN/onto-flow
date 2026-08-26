@@ -33,6 +33,7 @@ import {
 } from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
 import { runActionNode } from "./action";
+import { collectCapabilities, materializeToolPlugins } from "./capabilities";
 import { recordSessionEvent, type EventSinkContext } from "./events";
 
 export type StartRunResult =
@@ -196,10 +197,13 @@ async function executeRun(
   let cancelled = false;
 
   // 工作区先建：它是这次运行全部 Action 的共同工作场所与唯一交流场所。
+  // 技能以 symlink 指向全局库活目录，摘要写进 runs.imports（ADR-0007）。
+  const capabilities = collectCapabilities(resolved);
   const workspace = await createRunWorkspace({
     workflowId: resolved.workflow.id,
     runId,
     instructions: workflowInstructions(resolved),
+    skills: capabilities.skills,
   });
   db.update(runs)
     .set({
@@ -216,6 +220,9 @@ async function executeRun(
   // 即时写成 run_events / node_usage。
   const sinks = new Map<string, EventSinkContext>();
   const proc = await launchRun(workspace, {
+    composition: {
+      toolPlugins: materializeToolPlugins(workspace, capabilities.tools),
+    },
     onCrash: (message) => {
       firstError ??= message;
     },

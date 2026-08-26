@@ -133,8 +133,9 @@ export const tools = sqliteTable("tools", {
   name: text("name").notNull().unique(),
   description: text("description").notNull().default(""),
   /**
-   * 工具源码。目前仍是旧引擎留下的 opencode custom tool 形态且不进入任何运行——
-   * M3 把它改成 cordis 插件源码，物化进 <run>/plugins/ 并由每运行组合 include。
+   * 工具源码：一个 cordis 插件（导出 name / inject / apply）。运行时物化到
+   * <运行目录>/plugins/<工具名>.ts，由每运行组合 include 进去（ADR-0006）。
+   * 模块解析从运行目录向上走到仓库根，因此它能 import node: 内置模块与仓库依赖。
    */
   code: text("code").notNull(),
   ...timestamps,

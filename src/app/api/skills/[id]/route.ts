@@ -5,6 +5,7 @@ import { handle, jsonError } from "@/lib/http";
 import "@/server/writers";
 import { writeSkill } from "@/server/writers/skill";
 import { respond } from "@/server/writers/types";
+import { removeSkill } from "@/server/skill-library";
 import { usedByNames } from "@/server/writers/used-by";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +39,8 @@ export async function DELETE(_request: Request, { params }: Params) {
       return jsonError(409, "该技能正被 Action 引用，无法删除", { usedBy });
 
     db.delete(skills).where(eq(skills.id, id)).run();
+    // 库里没了，磁盘投影也要没：否则 skill-filesystem 还会发现它。
+    removeSkill(row);
     return NextResponse.json({ ok: true });
   });
 }

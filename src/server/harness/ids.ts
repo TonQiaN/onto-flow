@@ -7,11 +7,36 @@ import { randomBytes } from "node:crypto";
 
 const SAFE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** 校验将用作目录名的标识；拒绝路径分隔符、前导点等不安全形状。 */
+/**
+ * 校验机器生成的标识（运行 id、工作流 id）。这类值本就是 ASCII，
+ * 收得死一点没有代价。
+ */
 export function assertSafeId(kind: string, value: string): void {
   if (!SAFE_ID_PATTERN.test(value)) {
     throw new Error(
       `${kind}「${value}」不能用作目录名：只允许字母数字开头，后接字母数字、点、下划线或连字符`,
+    );
+  }
+}
+
+/**
+ * 校验**用户起的名字**将用作目录名或文件名。本仓库的实体名一律是中文
+ * （见 AGENTS.md 的 Conventions），所以这里不能限制字符集，只能挡住真正
+ * 危险的形状：路径分隔符、控制字符、前导点、`..`、首尾空白。
+ */
+export function assertSafeName(kind: string, value: string): void {
+  const bad =
+    value === "" ||
+    value !== value.trim() ||
+    value.startsWith(".") ||
+    value === ".." ||
+    /[/\\]/.test(value) ||
+    // eslint 无关：显式匹配控制字符，它们在文件名里是货真价实的坑
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    value.length > 120;
+  if (bad) {
+    throw new Error(
+      `${kind}「${value}」不能用作目录名：不能为空或含路径分隔符、控制字符、前导点，也不能超过 120 字`,
     );
   }
 }

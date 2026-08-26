@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, skills } from "@/db";
 import { recordRevision } from "@/server/revisions";
+import { materializeSkill, removeSkill } from "@/server/skill-library";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
 
 export interface SkillPayload {
@@ -40,6 +41,8 @@ export function createSkill(raw: unknown): WriteResult<SkillRow> {
     recordRevision("skill", inserted.id, revisionPayload(p), "", tx);
     return inserted;
   });
+  // 磁盘投影跟着落：运行工作区里的技能是指向它的 symlink。
+  materializeSkill(row);
   return writeOk(row);
 }
 
@@ -62,5 +65,8 @@ export function writeSkill(id: string, raw: unknown): WriteResult<SkillRow> {
     recordRevision("skill", id, revisionPayload(p), "", tx);
     return updated;
   });
+  // 改名会换 slug，旧目录要一并移除，否则磁盘上留下一个没人引用却仍被发现的技能。
+  removeSkill(existing);
+  materializeSkill(row);
   return writeOk(row);
 }
