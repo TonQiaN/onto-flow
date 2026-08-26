@@ -39,7 +39,6 @@ interface SettingsDoc {
 interface CompositionEntry {
   id: string;
   name: string;
-  disabled: boolean;
 }
 
 const EMPTY: SettingsDoc = {
@@ -63,6 +62,7 @@ async function readError(res: Response): Promise<string> {
 export default function SettingsPage() {
   const [doc, setDoc] = useState<SettingsDoc>(EMPTY);
   const [entries, setEntries] = useState<CompositionEntry[]>([]);
+  const [disabledEntries, setDisabledEntries] = useState<CompositionEntry[]>([]);
   const [lastYaml, setLastYaml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
@@ -73,9 +73,11 @@ export default function SettingsPage() {
     if (!res.ok) return;
     const data = (await res.json()) as {
       entries: CompositionEntry[];
+      disabledEntries: CompositionEntry[];
       lastComposition: { runId: string; yaml: string } | null;
     };
     setEntries(data.entries);
+    setDisabledEntries(data.disabledEntries);
     setLastYaml(data.lastComposition?.yaml ?? null);
   }, []);
 
@@ -317,17 +319,33 @@ export default function SettingsPage() {
                     {entry.name}
                   </td>
                   <td className="px-3 py-1.5 text-xs">
-                    {entry.disabled ? (
-                      <span className="text-zinc-400">已停用</span>
-                    ) : (
-                      <span className="text-emerald-600">会挂载</span>
-                    )}
+                    <span className="text-emerald-600">会挂载</span>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
+        {disabledEntries.length > 0 && (
+          <div className="mt-4">
+            <h3 className="text-xs font-medium text-zinc-600">已停用的 MCP（不会进入组合）</h3>
+            <div className="mt-2 overflow-hidden rounded-md border border-zinc-200">
+              <table className="w-full text-sm">
+                <tbody>
+                  {disabledEntries.map((entry) => (
+                    <tr key={entry.id} className="border-t border-zinc-100 first:border-t-0">
+                      <td className="px-3 py-1.5 font-mono text-xs text-zinc-700">{entry.id}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs break-all text-zinc-500">
+                        {entry.name}
+                      </td>
+                      <td className="px-3 py-1.5 text-xs text-zinc-400">已停用</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
         {lastYaml && (
           <details className="mt-3">
             <summary className="cursor-pointer text-xs text-zinc-500">

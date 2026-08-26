@@ -87,8 +87,8 @@ export function runCompositionEntries(
     { id: "agent", name: "@deepseek-ai/dsh-agent" },
     { id: "agent-loop", name: "@deepseek-ai/dsh-agent-loop", config: { agents: [] } },
     ...(options.mcpServers ?? []).filter((s) => s.enabled).map(mcpCompositionEntry),
-    // Tool 插件排在 tools 服务之后、RPC 之前：它们注册到全局工具面，
-    // 每个 Action 会话继承得到（能力不再按 Action 收窄，见 CONTEXT.md「引用」）。
+    // Tool 插件排在 tools 服务之后、RPC 之前：先把工作流并集注册到全局工具面，
+    // 每个 Action 会话再按自己的 action_tools 引用收窄继承面。
     ...(options.toolPlugins ?? []).map((tool) => ({ id: tool.id, name: tool.modulePath })),
     { id: "ontoflow-rpc", name: rpcPluginModulePath() },
   ];

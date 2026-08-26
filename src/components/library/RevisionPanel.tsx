@@ -42,7 +42,7 @@ const DEFINITION_KEYS: Record<EntityKind, readonly string[]> = {
   tool: ["name", "description", "code"],
   // builtin 不在 parseObjectTypePayload 的接受范围内（内置类型根本不可改），
   // 不属于定义；早期种子修订里带过它，这里一并裁掉，免得每次都报一条假删除。
-  object_type: ["name", "kind", "description", "jsonSchema"],
+  object_type: ["name", "kind", "description", "jsonSchema", "filePreprocessor"],
 };
 
 const PORT_KEYS = ["direction", "name", "objectTypeId", "position"] as const;

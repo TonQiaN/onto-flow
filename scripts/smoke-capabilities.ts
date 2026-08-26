@@ -207,7 +207,7 @@ async function main(): Promise<void> {
   const dir = path.join(process.cwd(), runRow!.runDir!);
   const link = path.join(dir, "workspace", ".agents", "skills", slug);
   console.log(`技能链接：${fs.existsSync(link) ? `→ ${fs.readlinkSync(link)}` : "不存在 ✗"}`);
-  const plugin = path.join(dir, "plugins", `${toolName}.ts`);
+  const plugin = path.join(dir, "plugins", `tool-${tool!.id}.ts`);
   console.log(`工具插件：${fs.existsSync(plugin) ? "已物化 ✓" : "不存在 ✗"}`);
 
   const receipt = path.join(dir, "workspace", "receipt.md");

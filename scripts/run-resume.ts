@@ -1,22 +1,31 @@
 /**
  * 跑一次「简历匹配评分」（M4 第二个验收案例）。
  *
- * 运行：DEEPSEEK_API_KEY=... npx tsx scripts/run-resume.ts
+ * 运行：DEEPSEEK_API_KEY=... npx tsx scripts/run-resume.ts [data内岗位路径] [data内简历路径]
  * 会真实调用模型（解析 1 次 + 评委 6 次 + 汇总 1 次）并产生费用。
+ * 只打印脱敏指标，不回显岗位、简历或报告正文。
  */
 import fs from "node:fs";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { db, runNodes, runs, workflowNodes, workflows } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
-import { DATA_DIR } from "../src/server/fs-safety";
+import { DATA_DIR, resolveWithinData } from "../src/server/fs-safety";
 
-function fileInput(name: string) {
-  const abs = path.join(DATA_DIR, "samples", name);
-  if (!fs.existsSync(abs)) throw new Error(`样例不存在：${abs}`);
+function fileInput(dataRelativePath: string) {
+  const abs = resolveWithinData(dataRelativePath);
+  if (!fs.existsSync(abs)) throw new Error("样例不存在");
+  const name = path.basename(abs);
+  const extension = path.extname(name).toLowerCase();
+  const mime =
+    extension === ".pdf"
+      ? "application/pdf"
+      : extension === ".md" || extension === ".markdown"
+        ? "text/markdown"
+        : "text/plain";
   return {
     kind: "file" as const,
-    file: { path: path.relative(DATA_DIR, abs), name, mime: "text/markdown" },
+    file: { path: path.relative(DATA_DIR, abs), name, mime },
   };
 }
 
@@ -35,9 +44,12 @@ async function main(): Promise<void> {
   const resume = inputs.find((n) => n.label === "简历");
   if (!jd || !resume) throw new Error("输入节点缺失");
 
+  const jdPath = process.argv[2] ?? path.join("samples", "岗位JD示例.md");
+  const resumePath = process.argv[3] ?? path.join("samples", "简历示例.md");
+
   const started = await startRun(wf.id, {
-    [jd.id]: fileInput("岗位JD示例.md"),
-    [resume.id]: fileInput("简历示例.md"),
+    [jd.id]: fileInput(jdPath),
+    [resume.id]: fileInput(resumePath),
   });
   if (!started.ok) throw new Error(`启动失败：${JSON.stringify(started)}`);
   console.log(`运行已启动：${started.runId}`);
@@ -50,35 +62,82 @@ async function main(): Promise<void> {
     if (Date.now() - t0 > 1_800_000) throw new Error("超时");
     await new Promise((r) => setTimeout(r, 3000));
   }
-  console.log(`\n终态：${row!.status}${row!.error ? `（${row!.error}）` : ""}`);
+  console.log(`\n终态：${row!.status}${row!.error ? "（有错误，正文不回显）" : ""}`);
   console.log(`运行目录：${row!.runDir}`);
 
-  let total = 0;
-  for (const n of db.select().from(runNodes).where(eq(runNodes.runId, started.runId)).all()) {
-    total += n.inputTokens + n.outputTokens;
+  let totalTokens = 0;
+  let totalCost = 0;
+  const nodeRows = db.select().from(runNodes).where(eq(runNodes.runId, started.runId)).all();
+  for (const n of nodeRows) {
+    const nodeTokens =
+      n.inputTokens +
+      n.outputTokens +
+      n.reasoningTokens +
+      n.cacheReadTokens +
+      n.cacheWriteTokens;
+    totalTokens += nodeTokens;
+    totalCost += n.cost;
     console.log(
-      `  ${n.label.padEnd(10)} ${n.status.padEnd(8)} tokens=${n.inputTokens + n.outputTokens}` +
-        `${n.error ? `\n      错误=${n.error}` : ""}`,
+      `  ${n.label.padEnd(10)} ${n.status.padEnd(8)} tokens=${nodeTokens}` +
+        `${n.error ? " error=yes" : ""}`,
     );
   }
-  console.log(`  合计 tokens=${total}`);
+  console.log(`  合计 tokens=${totalTokens} cost=${totalCost.toFixed(6)}`);
 
-  const ws = path.join(process.cwd(), row!.runDir!, "workspace");
-  const walk = (dir: string, prefix = ""): void => {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith(".")) continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(full, `${prefix}${entry.name}/`);
-      else console.log(`  ${prefix}${entry.name}  ${fs.statSync(full).size} 字节`);
-    }
-  };
-  console.log("\n工作区产物：");
-  walk(ws);
+  const ws = row!.runDir ? path.join(process.cwd(), row!.runDir, "workspace") : null;
+  const expectedArtifacts = [
+    "job.md",
+    "resume.md",
+    "scores/must-have.md",
+    "scores/skill-match.md",
+    "scores/experience-depth.md",
+    "scores/domain-fit.md",
+    "scores/stability.md",
+    "scores/red-flag.md",
+    "report.md",
+  ];
+  const artifacts = expectedArtifacts.map((relativePath) => {
+    const absolutePath = ws ? path.join(ws, relativePath) : "";
+    return {
+      path: relativePath,
+      present: absolutePath !== "" && fs.existsSync(absolutePath),
+      bytes: absolutePath !== "" && fs.existsSync(absolutePath) ? fs.statSync(absolutePath).size : 0,
+    };
+  });
+  const pageImages = ws && fs.existsSync(path.join(ws, "inputs"))
+    ? fs
+        .readdirSync(path.join(ws, "inputs"), { recursive: true })
+        .filter((entry) => typeof entry === "string" && /pages\/page-\d+\.png$/.test(entry))
+        .length
+    : 0;
+  console.log(
+    JSON.stringify(
+      {
+        runId: started.runId,
+        status: row!.status,
+        nodes: {
+          total: nodeRows.length,
+          success: nodeRows.filter((node) => node.status === "success").length,
+          failed: nodeRows.filter((node) => node.status === "failed").length,
+          skipped: nodeRows.filter((node) => node.status === "skipped").length,
+        },
+        totalTokens,
+        totalCost,
+        pdfPageImages: pageImages,
+        artifacts,
+      },
+      null,
+      2,
+    ),
+  );
 
-  const report = path.join(ws, "report.md");
-  if (fs.existsSync(report)) {
-    console.log("\n=== 评分报告（前 40 行） ===");
-    console.log(fs.readFileSync(report, "utf8").split("\n").slice(0, 40).join("\n"));
+  const invalidArtifacts = artifacts.filter((artifact) => !artifact.present || artifact.bytes === 0);
+  if (row!.status !== "success" || invalidArtifacts.length > 0) {
+    throw new Error(
+      `验收未通过：status=${row!.status} invalidArtifacts=${invalidArtifacts
+        .map((artifact) => artifact.path)
+        .join(",") || "none"}`,
+    );
   }
 }
 

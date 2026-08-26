@@ -109,7 +109,8 @@ function readDb(): HealthDb {
 }
 
 function readDisk(): HealthDisk {
-  const runsDir = dirStat(path.join(DATA_DIR, "runs"));
+  // 运行目录布局是 data/runs/<workflowId>/<runId>，健康页要数第二层叶子而不是工作流。
+  const runsDir = dirStat(path.join(DATA_DIR, "runs"), 2);
   const uploads = dirStat(path.join(DATA_DIR, "uploads"));
   const documents = dirStat(path.join(DATA_DIR, "documents"));
   return {

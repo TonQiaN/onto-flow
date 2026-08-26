@@ -288,6 +288,11 @@ function ObjectTypesLibrary() {
                         含 Schema
                       </span>
                     )}
+                    {type.filePreprocessor === "pdf" && (
+                      <span className="inline-flex items-center rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
+                        PDF 预处理
+                      </span>
+                    )}
                   </div>
                   <p className="mt-1 text-sm text-zinc-500">
                     {type.description || "（无描述）"}

@@ -29,6 +29,8 @@ import {
   workflows,
 } from "../src/db";
 import { recordRevision } from "../src/server/revisions";
+import { PURCHASE_PLAN_PATH_HELPERS_SOURCE } from "./purchase-plan-path";
+import { writeResumeSamples } from "./resume-samples";
 
 // ---------------------------------------------------------------------------
 // 内容常量（全部内联，来源：research/erp-seed.json）
@@ -126,6 +128,8 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
+
+${PURCHASE_PLAN_PATH_HELPERS_SOURCE}
 
 interface Args {
   plan_no: string;
@@ -249,13 +253,12 @@ export function apply(ctx: Context): void {
           createdAt,
         );
 
-        const dir = path.join(dataDir, "documents");
-        fs.mkdirSync(dir, { recursive: true });
         const stamp = createdAt.slice(0, 10).replace(/-/g, "");
-        const backupPath = path.join("documents", \`\${args.plan_no}-\${stamp}.md\`);
-        fs.writeFileSync(path.join(dataDir, backupPath), args.plan_content, "utf8");
+        const backup = purchasePlanBackupLocation(path, dataDir, args.plan_no, stamp);
+        fs.mkdirSync(path.dirname(backup.absolutePath), { recursive: true });
+        fs.writeFileSync(backup.absolutePath, args.plan_content, "utf8");
         db.prepare("UPDATE purchase_plans SET backup_path = ? WHERE plan_no = ?").run(
-          backupPath,
+          backup.relativePath,
           args.plan_no,
         );
         const row = db
@@ -265,7 +268,7 @@ export function apply(ctx: Context): void {
           ok: true,
           ...(row ? { id: row.id } : {}),
           planNo: args.plan_no,
-          backupPath,
+          backupPath: backup.relativePath,
         });
       } catch (err) {
         return Promise.resolve({
@@ -1107,6 +1110,7 @@ const samplesDir = path.join(process.cwd(), "data", "samples");
 fs.mkdirSync(samplesDir, { recursive: true });
 const samplePath = path.join(samplesDir, "采购需求示例.txt");
 fs.writeFileSync(samplePath, SAMPLE_REQUIREMENT_TXT, "utf8");
+writeResumeSamples();
 
 // ---------------------------------------------------------------------------
 // 计数汇总
@@ -1135,3 +1139,7 @@ for (const [name, count] of Object.entries(counts)) {
 }
 console.log(`  本次新增修订: ${newRevisions}`);
 console.log(`  示例需求文件: ${samplePath}`);
+console.log(
+  `  虚构岗位/简历样例: ${path.join(samplesDir, "岗位JD示例.md")}、` +
+    path.join(samplesDir, "简历示例.md"),
+);

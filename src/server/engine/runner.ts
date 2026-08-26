@@ -1,5 +1,5 @@
 /**
- * 运行编排：startRun（校验 + 建 run + 异步执行）与 executeRun（拓扑序串行）。
+ * 运行编排：startRun（校验 + 建 run + 异步执行）与 executeRun（就绪驱动并行）。
  *
  * 一次运行 = 一个独立工作区 + 一个 harness 子进程（ADR-0007）。executeRun 建工作区、
  * 物化文件输入、起子进程，然后按拓扑序驱动节点，最后无论成败都把子进程收束到静止。
@@ -22,8 +22,10 @@ import {
   type ResolvedNode,
   type ValidationIssue,
 } from "@/lib/graph";
-import type { PortValue } from "@/lib/values";
-import { DATA_DIR, isWithinData, safeBasename } from "@/server/fs-safety";
+import { MAX_FILE_INPUT_BYTES, type PortValue } from "@/lib/values";
+import { DATA_DIR, isWithinData, resolveWithinData, safeBasename } from "@/server/fs-safety";
+import { claimsPdf, hasPdfSignature, preprocessPdfInput } from "@/server/pdf-input";
+import { assertSafeId } from "@/server/harness/ids";
 import { launchRun } from "@/server/harness/launch";
 import type { RunProcess } from "@/server/harness/runtime";
 import {
@@ -34,7 +36,11 @@ import {
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
 import { readSettings } from "@/server/settings";
 import { runActionNode } from "./action";
-import { collectCapabilities, materializeToolPlugins } from "./capabilities";
+import {
+  collectCapabilities,
+  materializeToolPlugins,
+  toolFilterForAction,
+} from "./capabilities";
 import { recordSessionEvent, type EventSinkContext } from "./events";
 
 export type StartRunResult =
@@ -53,6 +59,7 @@ export type CancelRunResult =
 interface RunnerGlobals {
   ontoflowCancelledRuns?: Set<string>;
   ontoflowRunProcesses?: Map<string, RunProcess>;
+  ontoflowInputControllers?: Map<string, AbortController>;
 }
 const g = globalThis as RunnerGlobals;
 const cancelledRuns: Set<string> = g.ontoflowCancelledRuns ?? new Set();
@@ -60,6 +67,10 @@ g.ontoflowCancelledRuns = cancelledRuns;
 /** 在跑运行的子进程句柄；cancelRun 要拿它去取消会话（挂 globalThis 以免 HMR 丢失）。 */
 const runProcesses: Map<string, RunProcess> = g.ontoflowRunProcesses ?? new Map();
 g.ontoflowRunProcesses = runProcesses;
+/** 输入物化阶段的取消句柄；这时 harness 还没启动，cancelRun 要直接终止 Poppler。 */
+const inputControllers: Map<string, AbortController> =
+  g.ontoflowInputControllers ?? new Map();
+g.ontoflowInputControllers = inputControllers;
 
 export function isRunCancelled(runId: string): boolean {
   return cancelledRuns.has(runId);
@@ -91,6 +102,13 @@ export async function startRun(
   if (!resolved) return { ok: false, status: 404, error: "工作流不存在" };
 
   const issues = validateGraph(resolved.nodes, resolved.edges);
+  for (const node of resolved.nodes) {
+    try {
+      assertSafeId("节点 id", node.id);
+    } catch {
+      issues.push({ nodeId: node.id, message: `节点「${node.label}」的 id 不能安全用于运行目录` });
+    }
+  }
 
   // 每个输入节点都要有值，且 PortValue.kind 与节点 Object Type 的 kind 一致
   const runInputs: Record<string, PortValue> = {};
@@ -215,7 +233,29 @@ async function executeRun(
     .run();
 
   // 文件输入落进工作区：模型的 cwd 是工作区，上传目录在它之外读不到。
-  const runInputs = materializeFileInputs(rawInputs, workspace);
+  // 预处理单独登记 AbortController；此阶段尚无 harness 会话可供 cancel。
+  if (isRunCancelled(runId)) {
+    cancelledRuns.delete(runId);
+    return;
+  }
+  const inputController = new AbortController();
+  inputControllers.set(runId, inputController);
+  let runInputs: Record<string, PortValue>;
+  try {
+    runInputs = await materializeFileInputs(
+      rawInputs,
+      workspace,
+      nodes,
+      inputController.signal,
+    );
+  } finally {
+    inputControllers.delete(runId);
+  }
+  // 预处理期间取消入口仍可响应；若用户已经取消，就不要再启动本次运行的子进程。
+  if (isRunCancelled(runId)) {
+    cancelledRuns.delete(runId);
+    return;
+  }
 
   // 每个 Action 在开跑前把自己的落库上下文登记进来，事件回调据此把 dsh 事件
   // 即时写成 run_events / node_usage。
@@ -443,8 +483,15 @@ async function executeRun(
       workspace,
       sinks,
       round: state.round,
-      disabledTools: globalSettings.disabledTools,
+      toolFilter: toolFilterForAction(
+        capabilities,
+        nodeRow.actionId,
+        globalSettings.disabledTools,
+      ),
     });
+    // cancelRun 可能在 Action 已产出、但会话仍在收束的 await 窗口落下终态。
+    // 这里必须在写成功前再查一次，否则晚到的 Action 返回会把 cancelled 覆盖成 success。
+    if (isRunCancelled(runId)) throw new Error("运行已取消");
     state.outputs = result.outputs;
     state.selectedExit = result.selectedExit;
     onNodeSuccess(state);
@@ -560,6 +607,7 @@ export async function cancelRun(runId: string): Promise<CancelRunResult> {
 
   // 先立标记：即使下面的 abort 慢，executeRun 也不会再启动新节点
   cancelledRuns.add(runId);
+  inputControllers.get(runId)?.abort();
 
   const running = db
     .select({ nodeId: runNodes.nodeId, sessionId: runNodes.sessionId })
@@ -609,7 +657,9 @@ function updateRunNode(
 /** 兜底：executeRun 自身抛出的异常也不留 running 悬挂 */
 function failWholeRun(runId: string, message: string): void {
   try {
+    const wasCancelled = cancelledRuns.has(runId);
     cancelledRuns.delete(runId);
+    if (wasCancelled) return;
     // 已经写过终态（含被取消）的运行不覆盖：取消不是失败
     const run = db
       .select({ status: runs.status })
@@ -668,24 +718,59 @@ function workflowInstructions(resolved: ResolvedWorkflow): string {
  * 把文件类运行输入拷进工作区的 inputs/ 并改写它的 PortValue 路径。
  * 上传目录在工作区之外，模型的 cwd 是工作区，不搬进来它根本读不到。
  */
-function materializeFileInputs(
+async function materializeFileInputs(
   inputs: Record<string, PortValue>,
   workspace: RunWorkspace,
-): Record<string, PortValue> {
+  nodes: readonly ResolvedNode[],
+  signal?: AbortSignal,
+): Promise<Record<string, PortValue>> {
   const out: Record<string, PortValue> = {};
   for (const [nodeId, value] of Object.entries(inputs)) {
+    if (signal?.aborted) throw new Error("运行已取消");
     if (value.kind !== "file") {
       out[nodeId] = value;
       continue;
     }
+    // nodeId 来自持久化工作流；writer 已校验，这里在真正进入路径前再守一次旧数据。
+    assertSafeId("输入节点 id", nodeId);
     const name = safeBasename(value.file.name || value.file.path);
     const destDir = path.join(workspace.workspaceDir, WORKSPACE_INPUTS_SUBDIR, nodeId);
-    fs.mkdirSync(destDir, { recursive: true });
-    const dest = path.join(destDir, name);
-    fs.copyFileSync(path.join(DATA_DIR, value.file.path), dest);
+    const sourceDir = path.join(destDir, "source");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const dest = path.join(sourceDir, name);
+    const source = resolveWithinData(value.file.path);
+    if (fs.statSync(source).size > MAX_FILE_INPUT_BYTES) {
+      throw new Error(`输入节点「${nodeId}」的文件超过 32 MiB`);
+    }
+    fs.copyFileSync(source, dest);
+    const node = nodes.find((candidate) => candidate.id === nodeId);
+    const filePreprocessor = node?.kind === "input" ? node.outputs[0]?.filePreprocessor : null;
+    let preprocessed: Extract<PortValue, { kind: "file" }>["file"]["preprocessed"];
+    if (filePreprocessor === "pdf") {
+      const pdf = hasPdfSignature(dest);
+      if (!pdf && claimsPdf(name, value.file.mime)) {
+        throw new Error(`输入节点「${node?.label ?? nodeId}」收到的文件不是合法 PDF`);
+      }
+      if (pdf) {
+        const derived = await preprocessPdfInput(dest, path.join(destDir, "derived"), {
+          signal,
+        });
+        preprocessed = {
+          kind: "pdf",
+          pageCount: derived.pageCount,
+          textPath: path.relative(DATA_DIR, derived.textPath),
+          pageImagePaths: derived.pageImagePaths.map((page) => path.relative(DATA_DIR, page)),
+        };
+      }
+    }
     out[nodeId] = {
       kind: "file",
-      file: { ...value.file, path: path.relative(DATA_DIR, dest), name },
+      file: {
+        path: path.relative(DATA_DIR, dest),
+        name,
+        mime: value.file.mime,
+        ...(preprocessed === undefined ? {} : { preprocessed }),
+      },
     };
   }
   return out;

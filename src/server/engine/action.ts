@@ -10,7 +10,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { and, asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import {
   actionPorts,
   actionSkills,
@@ -24,6 +24,7 @@ import {
 import { exitsOf, hasNamedExits, type ResolvedNode, type ResolvedPort } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
 import { DATA_DIR } from "@/server/fs-safety";
+import type { NodeToolFilter } from "@/server/harness/rpc/types";
 import type { RunProcess } from "@/server/harness/runtime";
 import type { RunWorkspace } from "@/server/harness/workspace";
 import type { NodeExit } from "@/lib/graph";
@@ -48,8 +49,8 @@ export interface ActionNodeContext {
   sinks: Map<string, EventSinkContext>;
   /** 第几轮执行；0 是首次，>0 说明本节点被回边重入了（ADR-0009） */
   round: number;
-  /** 全局设置里默认停用的工具公名；对本次运行的每个会话一致 */
-  disabledTools: readonly string[];
+  /** 本 Action 的会话工具面：未引用的工作流 Tool 与全局停用项都在这里收窄。 */
+  toolFilter?: NodeToolFilter;
 }
 
 /** 一次 Action 执行的结果：产物值加它走的那个出口。 */
@@ -169,6 +170,12 @@ export async function runActionNode(
     modelId: model.modelId,
     reasoningEffort: action.reasoningEffort,
   });
+  // 会话 id 必须先落库再发 prompt：cancelRun 只从 running 节点读取待取消会话，
+  // 若等 runTurn 收束后才写，这十五分钟内的活跃会话就永远取消不到。
+  db.update(runNodes)
+    .set({ sessionId })
+    .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
+    .run();
   assertNotCancelled(ctx.runId);
 
   await ctx.proc.runTurn(
@@ -180,9 +187,7 @@ export async function runActionNode(
         outputSchema: buildOutputSchema(exits, branching),
         reasoningEffort: action.reasoningEffort,
         maxSteps: NODE_MAX_STEPS,
-        ...(ctx.disabledTools.length === 0
-          ? {}
-          : { toolFilter: { deny: [...ctx.disabledTools] } }),
+        ...(ctx.toolFilter === undefined ? {} : { toolFilter: ctx.toolFilter }),
       },
       timeoutMs: NODE_TURN_TIMEOUT_MS,
     },
@@ -294,7 +299,13 @@ function assertPortsUnchanged(
 ): void {
   const same = (a: ResolvedPort[], b: ActionPortRow[]): boolean =>
     a.length === b.length &&
-    a.every((p, i) => p.name === b[i].name && p.objectTypeId === b[i].objectTypeId);
+    a.every(
+      (p, i) =>
+        p.name === b[i].name &&
+        p.objectTypeId === b[i].objectTypeId &&
+        (p.artifactPath ?? null) === b[i].artifactPath &&
+        (p.exitName ?? null) === b[i].exitName,
+    );
   if (!same(node.inputs, ports.inputs) || !same(node.outputs, ports.outputs)) {
     throw new Error(
       `节点「${node.label}」的端口在运行开始后被改动，本次运行中止：` +
@@ -387,7 +398,7 @@ function buildPrompt(
 
   sections.push(
     `写完后调用 structured_output，每个产物字段填你实际写出的那个路径。` +
-      `不要把长文本塞进 structured_output——它会被完整拼进每个下游节点的提示。`,
+      `不要把长文本塞进 structured_output——下游只需要工作区里的产物路径。`,
   );
 
   if (rule.trim()) sections.push(`## 执行规则\n\n${rule.trim()}`);
@@ -399,6 +410,17 @@ function describeInput(value: PortValue | undefined): string {
   if (!value) return "（上游未提供）";
   switch (value.kind) {
     case "file":
+      if (value.file.preprocessed?.kind === "pdf") {
+        const pdf = value.file.preprocessed;
+        const pages = pdf.pageImagePaths
+          .map((page, index) => `第 ${index + 1} 页 \`${workspaceRelative(page)}\``)
+          .join("、");
+        return (
+          `PDF 已预处理：先读文本层 \`${workspaceRelative(pdf.textPath)}\`，` +
+          `再逐页调用 read_image 核对页面图（共 ${pdf.pageCount} 页：${pages}）；` +
+          `原文件在 \`${workspaceRelative(value.file.path)}\``
+        );
+      }
       return `读文件 \`${workspaceRelative(value.file.path)}\``;
     case "text":
       return value.text.length > 200 ? `${value.text.slice(0, 200)}…` : value.text;
@@ -520,7 +542,15 @@ function recordUsage(ctx: ActionNodeContext, sessionId: string): void {
     cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
   }
   db.update(runNodes)
-    .set({ inputTokens, outputTokens, reasoningTokens, cacheReadTokens, sessionId })
+    // 每一轮是独立会话，但 run_nodes 是节点级汇总。原值必须保留，否则回边重入
+    // 会把前几轮用量覆盖掉，运行总费用与监控统计都会少算（ADR-0009）。
+    .set({
+      inputTokens: sql`${runNodes.inputTokens} + ${inputTokens}`,
+      outputTokens: sql`${runNodes.outputTokens} + ${outputTokens}`,
+      reasoningTokens: sql`${runNodes.reasoningTokens} + ${reasoningTokens}`,
+      cacheReadTokens: sql`${runNodes.cacheReadTokens} + ${cacheReadTokens}`,
+      sessionId,
+    })
     .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
     .run();
 }

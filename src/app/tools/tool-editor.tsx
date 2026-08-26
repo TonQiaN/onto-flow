@@ -25,8 +25,8 @@ export interface ToolRow {
 
 const TOOL_TEMPLATE = `/**
  * OntoFlow Tool = 一个 cordis 插件（ADR-0006）。运行时被物化到
- * <运行目录>/plugins/<工具名>.ts，由本次运行的组合 include 进去，
- * 注册到全局工具面，这次运行里的每个 Action 都能调用。
+ * <运行目录>/plugins/<工具 id>.ts，由本次运行的组合 include 进去。
+ * 整张图的 Tool 会先注册到全局工具面，每个 Action 会话再只保留自己引用的 Tool。
  *
  * 模块解析从运行目录向上走到仓库根，所以 node: 内置模块与仓库的
  * node_modules 都可以 import。数据库用 node:sqlite，路径见环境变量。

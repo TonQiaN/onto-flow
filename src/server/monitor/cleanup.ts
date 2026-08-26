@@ -56,8 +56,8 @@ export function runCleanup(request: CleanupRequest): CleanupResult {
 // ---------------- workspaces ----------------
 
 /**
- * 删 data/runs 下 N 天前运行的工作区目录，**保留数据库记录**。
- * 目录名即 runId；DB 里查不到的目录按目录 mtime 判断（多半是被删过运行的残留）。
+ * 删 data/runs/<workflowId>/<runId> 下 N 天前运行的工作区目录，**保留数据库记录**。
+ * DB 里查不到的叶子目录按目录 mtime 判断（多半是被删过运行的残留）。
  */
 function cleanWorkspaces(
   cutoff: number,
@@ -65,32 +65,51 @@ function cleanWorkspaces(
   dryRun: boolean,
 ): CleanupResult {
   const root = path.join(DATA_DIR, "runs");
-  const entries = readDirs(root);
-  const runRows = db.all<{ id: string; startedAt: number; status: string }>(
-    sql`select id, started_at as startedAt, status from runs`,
+  const entries = readWorkspaceDirs(root);
+  const runRows = db.all<{
+    id: string;
+    runDir: string | null;
+    startedAt: number;
+    status: string;
+  }>(
+    sql`select id, run_dir as runDir, started_at as startedAt, status from runs`,
   );
-  const runById = new Map(runRows.map((r) => [r.id, r]));
-
-  let count = 0;
-  let bytes = 0;
+  const knownRunIds = new Set(runRows.map((r) => r.id));
+  const knownTargets = new Map<string, WorkspaceTarget>();
+  const targets = new Map<string, WorkspaceTarget>();
   let skippedRunning = 0;
-  const targets: string[] = [];
 
-  for (const name of entries) {
-    const run = runById.get(name);
-    if (run?.status === "running") {
+  // 有 DB 记录的运行只信 run_dir；空值或目录不存在时不按 workflowId/id 猜路径。
+  for (const run of runRows) {
+    const target = targetFromStoredRunDir(run.runDir);
+    if (!target) continue;
+    knownTargets.set(target.absolutePath, target);
+    if (!isDirectory(target.absolutePath)) continue;
+    if (run.status === "running") {
       skippedRunning += 1;
       continue;
     }
-    const at = run ? run.startedAt : dirMtime(path.join(root, name));
-    if (at == null || at >= cutoff) continue;
-    count += 1;
-    bytes += dirStat(path.join(root, name)).bytes;
-    targets.push(name);
+    if (run.startedAt < cutoff) targets.set(target.absolutePath, target);
   }
 
+  // DB 完全不知道的叶子目录才是孤儿。若 runId 仍有记录但 run_dir 为空或指向别处，
+  // 不能把约定布局当 fallback，否则又绕开了 run_dir 的唯一事实源。
+  for (const entry of entries) {
+    if (knownRunIds.has(entry.runId) || knownTargets.has(entry.absolutePath)) continue;
+    const at = dirMtime(entry.absolutePath);
+    if (at == null || at >= cutoff) continue;
+    const target = targetFromAbsoluteRunDir(entry.absolutePath);
+    targets.set(target.absolutePath, target);
+  }
+
+  const count = targets.size;
+  const bytes = [...targets.values()].reduce(
+    (sum, target) => sum + dirStat(target.absolutePath).bytes,
+    0,
+  );
+
   if (!dryRun) {
-    for (const name of targets) removeDir(path.join("runs", name));
+    for (const target of targets.values()) removeDir(target);
   }
 
   const detail =
@@ -155,10 +174,16 @@ function cleanRuns(
   beforeDays: number,
   dryRun: boolean,
 ): CleanupResult {
-  const rows = db.all<{ id: string }>(sql`
-    select id from runs where started_at < ${cutoff} and status <> 'running'
+  const rows = db.all<{ id: string; runDir: string | null }>(sql`
+    select id, run_dir as runDir
+    from runs where started_at < ${cutoff} and status <> 'running'
   `);
   const count = rows.length;
+  const targets = new Map<string, WorkspaceTarget>();
+  for (const row of rows) {
+    const target = targetFromStoredRunDir(row.runDir);
+    if (target) targets.set(target.absolutePath, target);
+  }
 
   const detailStat = db.get<{ nodes: number; events: number; usage: number }>(sql`
     select
@@ -173,17 +198,16 @@ function cleanRuns(
       ) as usage
   `);
 
-  let bytes = 0;
-  const runsRoot = path.join(DATA_DIR, "runs");
-  for (const row of rows) {
-    bytes += dirStat(path.join(runsRoot, row.id)).bytes;
-  }
+  const bytes = [...targets.values()].reduce(
+    (sum, target) => sum + dirStat(target.absolutePath).bytes,
+    0,
+  );
 
   if (!dryRun && count > 0) {
     db.run(sql`
       delete from runs where started_at < ${cutoff} and status <> 'running'
     `);
-    for (const row of rows) removeDir(path.join("runs", row.id));
+    for (const target of targets.values()) removeDir(target);
   }
 
   const detail =
@@ -207,6 +231,61 @@ function readDirs(root: string): string[] {
   }
 }
 
+interface ScannedWorkspaceDir {
+  workflowId: string;
+  runId: string;
+  absolutePath: string;
+}
+
+/** 当前工作区布局有两层所有权：workflowId 再 runId；清理单位是叶子运行目录。 */
+function readWorkspaceDirs(root: string): ScannedWorkspaceDir[] {
+  return readDirs(root).flatMap((workflowId) => {
+    const workflowRoot = path.join(root, workflowId);
+    return readDirs(workflowRoot).map((runId) => ({
+      workflowId,
+      runId,
+      absolutePath: path.join(workflowRoot, runId),
+    }));
+  });
+}
+
+interface WorkspaceTarget {
+  /** 相对 data/ 的删除路径；与 absolutePath 在目标解析时一次性生成。 */
+  relativePath: string;
+  absolutePath: string;
+}
+
+/** runs.run_dir 是相对仓库根的事实路径；null 表示该记录没有可清理目录。 */
+function targetFromStoredRunDir(runDir: string | null): WorkspaceTarget | null {
+  if (!runDir) return null;
+  // runDir 是运行时数据库事实，不是构建输入；下游仍会收敛到 data/runs，禁止 Turbopack
+  // 因这个动态值把整个仓库误追踪进服务端产物。
+  return targetFromAbsoluteRunDir(
+    path.resolve(/* turbopackIgnore: true */ process.cwd(), runDir),
+  );
+}
+
+/** 把 DB 或目录扫描得来的路径收敛在 data/runs 内，并冻结为同一个清理目标。 */
+function targetFromAbsoluteRunDir(absolutePath: string): WorkspaceTarget {
+  const relativePath = path.relative(DATA_DIR, absolutePath);
+  let resolved: string;
+  try {
+    resolved = resolveWithinData(relativePath);
+  } catch {
+    throw new CleanupError("运行目录越界 data/，已拒绝清理");
+  }
+  const runsRoot = path.join(DATA_DIR, "runs");
+  const withinRuns = path.relative(runsRoot, resolved);
+  if (
+    withinRuns === "" ||
+    withinRuns.startsWith("..") ||
+    path.isAbsolute(withinRuns)
+  ) {
+    throw new CleanupError("运行目录不在 data/runs 内，已拒绝清理");
+  }
+  return { relativePath: path.relative(DATA_DIR, resolved), absolutePath: resolved };
+}
+
 function dirMtime(dir: string): number | null {
   try {
     return fs.statSync(dir).mtimeMs;
@@ -215,12 +294,21 @@ function dirMtime(dir: string): number | null {
   }
 }
 
-/** relPath 相对 data/；经 resolveWithinData 收敛后才 rm -rf */
-function removeDir(relPath: string): void {
+function isDirectory(dir: string): boolean {
   try {
-    const abs = resolveWithinData(relPath);
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** target 在预览前已收敛；真删前再验证同一相对路径仍解析回同一绝对目标。 */
+function removeDir(target: WorkspaceTarget): void {
+  try {
+    const abs = resolveWithinData(target.relativePath);
+    if (abs !== target.absolutePath) throw new Error("运行目录在预览后发生变化");
     fs.rmSync(abs, { recursive: true, force: true });
   } catch (err) {
-    console.error("[monitor] 删除目录失败", relPath, err);
+    console.error("[monitor] 删除目录失败", target.relativePath, err);
   }
 }

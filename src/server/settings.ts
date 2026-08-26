@@ -45,10 +45,7 @@ export const DEFAULT_SETTINGS: SettingsDocument = {
   disabledTools: [],
 };
 
-/**
- * 凭据形键名：出现在 MCP 的 env / headers 里就拒绝。
- * 这些值会原样写进运行目录的组合配置文件，密钥不该走这条路。
- */
+/** 凭据形键名：出现在 MCP stdio env 里就拒绝；HTTP headers 暂不接受非空值。 */
 const CREDENTIAL_KEY_WORDS =
   /(key|token|secret|password|credential|auth|bearer|session|passwd|pwd|pat|cookie)/i;
 
@@ -59,6 +56,12 @@ const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
 
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /** 读设置。表里没有行就返回出厂值——第一次进设置页不该看见错误。 */
@@ -196,9 +199,14 @@ function parseMcpServer(raw: unknown): WriteResult<McpServerSpec> {
 
   const url = str(body.url);
   if (!url) return writeFail(400, `服务器「${name}」缺少 url`);
-  // v1 不支持自定义 headers：它几乎总是认证用途，而组合配置会原样落盘。
-  if (body.headers !== undefined && Object.keys(body.headers as object).length > 0) {
-    return writeFail(400, `服务器「${name}」暂不支持自定义 headers（几乎总是认证用途）`);
+  if (body.headers !== undefined) {
+    if (!isPlainObject(body.headers)) {
+      return writeFail(400, `服务器「${name}」的 headers 必须是对象`);
+    }
+    // v1 没有“按引用在启动时注入 header”的通道；任何非空值都会原样落进 cordis.yml。
+    if (Object.keys(body.headers).length > 0) {
+      return writeFail(400, `服务器「${name}」暂不支持自定义 headers（组合配置会原样落盘）`);
+    }
   }
   return writeOk({ name, enabled, transport, url, headers: {} });
 }

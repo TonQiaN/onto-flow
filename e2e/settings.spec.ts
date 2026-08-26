@@ -41,7 +41,7 @@ test.describe("全局设置", () => {
     }
   });
 
-  test("凭据形 env 键被拒绝，合法 MCP 服务器进入下次运行的组合", async ({ request }) => {
+  test("设置校验与 MCP 启停状态分别进入组合和停用区", async ({ request, page }) => {
     // 凭据不该走组合配置：那个对象会原样落盘到运行目录
     const bad = await request.put("/api/settings", {
       data: {
@@ -52,6 +52,37 @@ test.describe("全局设置", () => {
     });
     expect(bad.status()).toBe(400);
     expect(await bad.text()).toContain("凭据");
+
+    for (const headers of [null, []]) {
+      const badHeaders = await request.put("/api/settings", {
+        data: {
+          mcpServers: [
+            {
+              name: "e2e-http",
+              transport: "streamable-http",
+              url: "https://example.invalid/mcp",
+              headers,
+            },
+          ],
+        },
+      });
+      expect(badHeaders.status()).toBe(400);
+      expect(await badHeaders.text()).toContain("headers 必须是对象");
+    }
+    const nonEmptyHeaders = await request.put("/api/settings", {
+      data: {
+        mcpServers: [
+          {
+            name: "e2e-http",
+            transport: "streamable-http",
+            url: "https://example.invalid/mcp",
+            headers: { "X-Tenant": "development" },
+          },
+        ],
+      },
+    });
+    expect(nonEmptyHeaders.status()).toBe(400);
+    expect(await nonEmptyHeaders.text()).toContain("暂不支持自定义 headers");
 
     const ok = await request.put("/api/settings", {
       data: {
@@ -65,11 +96,12 @@ test.describe("全局设置", () => {
     expect(ok.ok()).toBe(true);
 
     const composition = (await (await request.get("/api/settings/composition")).json()) as {
-      entries: Array<{ id: string; disabled: boolean }>;
+      entries: Array<{ id: string }>;
+      disabledEntries: Array<{ id: string }>;
     };
     const entry = composition.entries.find((e) => e.id === "mcp-e2e-fs");
     expect(entry, "启用的 MCP 服务器应出现在下次运行的组合里").toBeTruthy();
-    expect(entry!.disabled).toBe(false);
+    expect(composition.disabledEntries.find((e) => e.id === "mcp-e2e-fs")).toBeUndefined();
 
     // 停用后整条省略：每运行组合只描述这次运行的真实能力
     await request.put("/api/settings", {
@@ -81,8 +113,15 @@ test.describe("全局设置", () => {
       },
     });
     const after = (await (await request.get("/api/settings/composition")).json()) as {
-      entries: Array<{ id: string; disabled: boolean }>;
+      entries: Array<{ id: string }>;
+      disabledEntries: Array<{ id: string }>;
     };
-    expect(after.entries.find((e) => e.id === "mcp-e2e-fs")?.disabled).toBe(true);
+    expect(after.entries.find((e) => e.id === "mcp-e2e-fs")).toBeUndefined();
+    expect(after.disabledEntries.find((e) => e.id === "mcp-e2e-fs")).toBeTruthy();
+
+    await page.goto("/settings");
+    const disabledSection = page.getByText("已停用的 MCP（不会进入组合）", { exact: true });
+    await expect(disabledSection).toBeVisible();
+    await expect(page.getByText("mcp-e2e-fs", { exact: true })).toBeVisible();
   });
 });

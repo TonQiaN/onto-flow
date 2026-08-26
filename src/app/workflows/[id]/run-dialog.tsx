@@ -6,6 +6,7 @@
  */
 import { useEffect, useState } from "react";
 import type { PortValue } from "@/lib/values";
+import type { FilePreprocessor } from "@/lib/object-types";
 import { KIND_LABEL, type PortKind } from "./types";
 
 export interface RunInputSpec {
@@ -13,6 +14,7 @@ export interface RunInputSpec {
   label: string;
   typeName: string;
   kind: PortKind;
+  filePreprocessor: FilePreprocessor | null;
 }
 
 interface FieldState {
@@ -135,6 +137,12 @@ export function RunDialog({
                   <div className="mt-1.5">
                     <input
                       type="file"
+                      aria-label={`${spec.label}文件`}
+                      accept={
+                        spec.filePreprocessor === "pdf"
+                          ? ".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain"
+                          : undefined
+                      }
                       disabled={submitting || f.uploading}
                       onChange={(e) => {
                         const file = e.target.files?.[0];
@@ -150,6 +158,11 @@ export function RunDialog({
                     {f.file?.kind === "file" && (
                       <p className="mt-1 text-xs text-emerald-600">
                         已上传：{f.file.file.name}
+                      </p>
+                    )}
+                    {spec.filePreprocessor === "pdf" && (
+                      <p className="mt-1 text-xs leading-5 text-zinc-400">
+                        支持 PDF、Markdown 与纯文本；PDF 会抽取文本层并逐页交给多模态模型核对。
                       </p>
                     )}
                   </div>

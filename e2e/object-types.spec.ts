@@ -67,6 +67,26 @@ test.describe("对象类型", () => {
     await expect(row).toHaveCount(0);
   });
 
+  test("文件类型可保存并回显 PDF 输入预处理", async ({ page }) => {
+    const name = `${PREFIX}PDF-${Date.now()}`;
+    await page.goto("/object-types");
+
+    await page.getByRole("button", { name: "新建类型" }).click();
+    await page.getByPlaceholder("如：需求文件、集采计划").fill(name);
+    await page.getByLabel("基础形态").selectOption("file");
+    await page.getByLabel("输入预处理").selectOption("pdf");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+
+    const row = page
+      .locator("li")
+      .filter({ has: page.getByRole("heading", { name, exact: true }) });
+    await expect(row.getByText("PDF 预处理", { exact: true })).toBeVisible();
+
+    await row.getByRole("button", { name: "编辑" }).click();
+    await expect(page.getByLabel("输入预处理")).toHaveValue("pdf");
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+  });
+
   test("删除被引用的「集采计划」类型：显示 409 引用信息且实体保留", async ({
     page,
   }) => {

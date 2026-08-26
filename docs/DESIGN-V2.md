@@ -1,8 +1,8 @@
 # OntoFlow v2 实现契约
 
-v1 契约见 [DESIGN.md](./DESIGN.md)（执行引擎、opencode 集成规范仍然有效）。
-领域语义见 [../CONTEXT.md](../CONTEXT.md)，本轮新决策见 ADR-0004（画布编辑共享 Action）、
-ADR-0005（文件夹而非标签，推翻 ADR-0003）。
+v1 与现行 DeepSeek Harness 引擎契约见 [DESIGN.md](./DESIGN.md)，领域语义见
+[../CONTEXT.md](../CONTEXT.md)。文件夹决策见 ADR-0005；ADR-0010 已推翻 ADR-0004，但节点自带
+定义的迁移尚未实现，因此本文涉及共享 Action 的部分只描述当前代码，不是目标领域模型。
 
 v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 监控页。本文件是三阶段共同的接口基准。
 
@@ -16,7 +16,7 @@ v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 监控页。本
 - `run_nodes` 新增：`snapshot`（运行快照 JSON）、六个用量字段（inputTokens / outputTokens /
   reasoningTokens / cacheReadTokens / cacheWriteTokens / cost）、状态多一个 `cancelled`。
 - `runs` 新增：`workflowName`（冗余快照）、状态多一个 `cancelled`。
-- `node_usage`：逐条 assistant 消息的用量明细，`(sessionId, messageId)` 唯一。
+- `node_usage`：逐 step 的用量明细，`messageId` 取 `turn:step`，`(sessionId, messageId)` 唯一。
 
 ## 一、通用列表查询契约（五个库的 GET 列表统一支持）
 
@@ -157,13 +157,13 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 1. **运行快照**：`runActionNode` 解析出 Action 配置后，把完整配置写进 `run_nodes.snapshot`：
    ```ts
    { actionId, actionName, prompt, rule, model:{providerId,modelId,displayName},
-     reasoningEffort, skills:[{name,content}], tools:[{name,code}],
-     ports:{inputs:[{name,objectTypeName,kind}], outputs:[...]} }
+     reasoningEffort, skills:[{name,content}], renderedPrompt,
+     ports:{inputs:[{name,objectTypeName,kind}], outputs:[{...,artifactPath,exitName}]} }
    ```
    写入时机：会话创建前（即使随后失败也留有快照）。
-2. **用量捕获**：事件循环处理 `message.updated`，当 `info.role==="assistant"` 且带 tokens 时，
-   按 `(sessionID, messageID)` upsert 进 `node_usage`，同时累加进 `run_nodes` 的六个用量字段
-   （累加 = 重算该 run_node 下 node_usage 的合计，避免重复计数）。
+2. **用量捕获**：dsh 每个 step 发一条不累积的 usage chunk，按
+   `(sessionId, turn:step)` 唯一化写入 `node_usage`；节点收束时把该会话各 step 求和写入
+   `run_nodes` 的用量字段。
 3. `runs.workflowName` 在 startRun 时写入。
 4. `cancelled` 状态：引擎侧支持把节点/运行标为 cancelled（取消入口在阶段二实现）。
 
@@ -171,7 +171,7 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 
 - 阶段二：节点面板按文件夹路径分组（单归属，未归类沉底）+ 关键词搜索；双击节点 → 复用 Action 编辑器（同一组件）+ ReferencesPanel +
   影响预览 + 「复制为新 Action 并替换本节点」；五态视觉 + 边流动动画 + 自动跟随 + 取消运行
-  （`session.abort` + 标记 cancelled + 下游 skipped）。
+  （`session/cancel` + 标记 cancelled + 下游 skipped）。
 - 阶段三：`/monitor` 六标签（总览 / 实时会话 / Trace / 日志检索 / 成本分析 / 系统健康），
   全局 SSE `/api/monitor/stream`，手动清理（工作区 / 事件明细 / 旧运行）与孤儿检测。
   左下角入口，与主导航分区。

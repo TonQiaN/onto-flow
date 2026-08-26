@@ -670,9 +670,11 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         label: n.data.label,
         typeName: n.data.outputs[0]?.objectTypeName ?? "未知类型",
         kind: n.data.outputs[0]?.kind ?? "text",
+        filePreprocessor:
+          objectTypes.find((type) => type.id === n.data.objectTypeId)?.filePreprocessor ?? null,
       }));
     setRunSpecs(specs);
-  }, [persist, storeApi]);
+  }, [objectTypes, persist, storeApi]);
 
   const startRun = useCallback(
     async (inputs: Record<string, PortValue>) => {

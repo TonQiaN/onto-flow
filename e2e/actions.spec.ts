@@ -26,5 +26,14 @@ test.describe("Action 库", () => {
     await expect(card.getByText("审核评价", { exact: true })).toBeVisible();
     // 输入与输出各出现一次「集采计划」端口徽章
     await expect(card.getByText("集采计划", { exact: true })).toHaveCount(2);
+
+    await card.getByRole("button", { name: "编辑" }).click();
+    const effort = page.getByLabel("思考强度");
+    await expect(effort.locator("option")).toHaveText([
+      "off（关闭）",
+      "low（低）",
+      "high（高）",
+      "max（最大）",
+    ]);
   });
 });
