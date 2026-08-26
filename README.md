@@ -84,7 +84,8 @@ npm run dev
 第二个案例先执行 `npx tsx scripts/seed-resume.ts`，再进入「工作流 → 简历匹配评分」。岗位与
 简历都可上传 PDF、Markdown 或纯文本；PDF 会在输入节点保留原件、受限抽取文本层并逐页生成页面图，
 「简历评分·解析」使用 DeepSeek V4 Flash Vision 对每页执行视觉核对，六个评委与汇总继续使用
-文本模型。命令行付费验收可运行：
+文本模型。最终汇总会回看岗位与简历原文，自动裁决评委分歧、证据缺口和分数不自洽，并把明确的
+推荐判断、依据、证据充分度及所有改分记录写进 `report.md`，不留下未裁决项。命令行付费验收可运行：
 
 ```bash
 npx tsx scripts/run-resume.ts [data/ 内岗位路径] [data/ 内简历路径]
