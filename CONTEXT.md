@@ -2,6 +2,10 @@
 
 OntoFlow 工作台的领域术语表（ubiquitous language）。只记语义，不记实现。
 
+> **Action** 与 **Action 模板** 两条记的是已经定下、但代码还没搬过去的模型
+> （[ADR-0010](docs/adr/0010-nodes-own-their-definition.md)）：库里的 Action 目前
+> 仍被工作流节点共享引用，节点还不自带定义。这次搬迁尚未排进里程碑。
+
 ## Language
 
 ### 库与实体
