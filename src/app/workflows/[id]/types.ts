@@ -35,6 +35,8 @@ export interface PortSnapshot {
   objectTypeId: string;
   objectTypeName: string;
   kind: PortKind;
+  /** 输出端口所属的具名出口；输入端口与普通输出端口为 null */
+  exitName: string | null;
 }
 
 export interface ActionPortDto extends PortSnapshot {
@@ -43,8 +45,6 @@ export interface ActionPortDto extends PortSnapshot {
   position: number;
   /** 输出端口写到工作区哪个文件（ADR-0008）；输入端口为 null */
   artifactPath: string | null;
-  /** 输出端口所属的具名出口（ADR-0009）；无分支时为 null */
-  exitName: string | null;
 }
 
 export interface ActionDto {
@@ -226,8 +226,20 @@ export function actionPortSnapshots(action: ActionDto): {
       objectTypeId: p.objectTypeId,
       objectTypeName: p.objectTypeName,
       kind: p.kind,
+      exitName: p.exitName,
     }));
   return { inputs: pick("input"), outputs: pick("output") };
+}
+
+/** 连线展示的情况名来自源端口所属出口，连线本身不保存条件（ADR-0009）。 */
+export function sourceExitName(
+  sourceData: FlowNodeData | undefined,
+  sourceHandleId: string | null | undefined,
+): string | null {
+  const sourcePort = sourceData?.outputs.find(
+    (port) => port.name === (sourceHandleId ?? "value"),
+  );
+  return sourcePort?.exitName ?? null;
 }
 
 /** Action → 节点卡片副信息 */
@@ -328,6 +340,7 @@ export function buildFlowNodes(
         objectTypeId: dto.objectTypeId ?? "",
         objectTypeName: type?.name ?? "未知类型",
         kind: type?.kind ?? "text",
+        exitName: null,
       };
       if (dto.kind === "input") outputs = [port];
       else inputs = [port];

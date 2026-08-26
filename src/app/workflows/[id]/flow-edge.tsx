@@ -16,7 +16,15 @@
  * `.react-flow__edge-path` 与 hover/selected 规则——内联样式会盖掉它们。
  */
 import { memo } from "react";
-import { BaseEdge, getBezierPath, type Edge, type EdgeProps } from "@xyflow/react";
+import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  useNodesData,
+  type Edge,
+  type EdgeProps,
+} from "@xyflow/react";
+import { sourceExitName, type FlowNode } from "./types";
 import { useRunVisualsContext } from "./use-run-visuals";
 
 export type EdgeFlowState = "idle" | "flowing" | "flowed" | "blocked";
@@ -26,6 +34,12 @@ const STROKE: Record<EdgeFlowState, string> = {
   flowing: "#3b82f6", // blue-500
   flowed: "#10b981", // emerald-500
   blocked: "#e4e4e7", // zinc-200（下游被跳过/取消，这条线不再有意义）
+};
+
+const LABEL_COLOR = {
+  text: "#3f3f46",
+  background: "#ffffff",
+  border: "#d4d4d8",
 };
 
 export const FlowEdgeView = memo(function FlowEdgeView({
@@ -39,10 +53,13 @@ export const FlowEdgeView = memo(function FlowEdgeView({
   sourcePosition,
   targetPosition,
   markerEnd,
+  sourceHandleId,
   selected,
 }: EdgeProps<Edge>) {
   const visuals = useRunVisualsContext();
-  const [path] = getBezierPath({
+  const sourceNode = useNodesData<FlowNode>(source);
+  const exitName = sourceExitName(sourceNode?.data, sourceHandleId);
+  const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
     sourcePosition,
@@ -51,37 +68,66 @@ export const FlowEdgeView = memo(function FlowEdgeView({
     targetPosition,
   });
 
-  // 尚未发起过运行：不写内联样式，配色/hover 交回 globals.css
-  // （Provider 挂着但 runId 为空也算「没有运行」，否则整张图会被刷成淡灰且失去 hover 反馈）
-  if (!visuals?.runId) {
-    return <BaseEdge id={id} path={path} markerEnd={markerEnd} />;
-  }
-
-  const upstream = visuals.statusByNode[source];
-  const downstream = visuals.statusByNode[target];
-
+  const hasRun = Boolean(visuals?.runId);
   let state: EdgeFlowState = "idle";
-  if (upstream === "success") {
-    if (downstream === "running") state = "flowing";
-    else if (downstream === "skipped" || downstream === "cancelled")
-      state = "blocked";
-    else state = "flowed";
+  if (hasRun && visuals) {
+    const upstream = visuals.statusByNode[source];
+    const downstream = visuals.statusByNode[target];
+    if (upstream === "success") {
+      if (downstream === "running") state = "flowing";
+      else if (downstream === "skipped" || downstream === "cancelled")
+        state = "blocked";
+      else state = "flowed";
+    }
   }
 
   const flowing = state === "flowing";
+  const labelColor = selected
+    ? { text: "#18181b", background: "#ffffff", border: "#18181b" }
+    : LABEL_COLOR;
 
   return (
-    <BaseEdge
-      id={id}
-      path={path}
-      markerEnd={markerEnd}
-      className={flowing ? "ff-edge-flow" : undefined}
-      style={{
-        stroke: selected ? "#18181b" : STROKE[state],
-        strokeWidth: selected ? 2.5 : flowing ? 2.5 : state === "flowed" ? 2 : 1.75,
-        strokeOpacity: state === "blocked" ? 0.5 : 1,
-        transition: "stroke 200ms ease, stroke-width 200ms ease",
-      }}
-    />
+    <>
+      <BaseEdge
+        id={id}
+        path={path}
+        markerEnd={markerEnd}
+        className={hasRun && flowing ? "ff-edge-flow" : undefined}
+        style={
+          hasRun
+            ? {
+                stroke: selected ? "#18181b" : STROKE[state],
+                strokeWidth: selected
+                  ? 2.5
+                  : flowing
+                    ? 2.5
+                    : state === "flowed"
+                      ? 2
+                      : 1.75,
+                strokeOpacity: state === "blocked" ? 0.5 : 1,
+                transition: "stroke 200ms ease, stroke-width 200ms ease",
+              }
+            : undefined
+        }
+      />
+      {exitName && (
+        <EdgeLabelRenderer>
+          <div
+            data-testid={`workflow-edge-exit-${id}`}
+            role="note"
+            aria-label={`出口：${exitName}`}
+            className="pointer-events-none absolute z-10 max-w-40 select-none whitespace-normal break-words rounded-lg border px-2 py-0.5 text-center text-[10px] font-semibold leading-4 shadow-sm"
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              color: labelColor.text,
+              background: labelColor.background,
+              borderColor: labelColor.border,
+            }}
+          >
+            {exitName}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
   );
 });

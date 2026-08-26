@@ -390,6 +390,7 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         objectTypeId: type.id,
         objectTypeName: type.name,
         kind: type.kind,
+        exitName: null,
       };
       const node: FlowNode = {
         id: crypto.randomUUID(),

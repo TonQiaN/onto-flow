@@ -102,6 +102,7 @@ export function ActionInspector({
           if (saved) onSaved(saved);
           onClose();
         }}
+        onDefinitionRestored={onSaved}
         onRefresh={() => {
           /* 画布不维护列表分页，归属变化无需重拉 */
         }}
