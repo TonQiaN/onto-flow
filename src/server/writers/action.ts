@@ -354,6 +354,8 @@ export function createAction(raw: unknown): WriteResult<ActionDto> {
         rule: p.rule,
         modelId: p.modelId,
         reasoningEffort: p.reasoningEffort,
+        maxReentries: p.maxReentries,
+        onExhausted: p.onExhausted,
       })
       .returning({ id: actions.id })
       .get();
@@ -384,6 +386,8 @@ export function writeAction(id: string, raw: unknown): WriteResult<ActionDto> {
         rule: p.rule,
         modelId: p.modelId,
         reasoningEffort: p.reasoningEffort,
+        maxReentries: p.maxReentries,
+        onExhausted: p.onExhausted,
       })
       .where(eq(actions.id, id))
       .run();

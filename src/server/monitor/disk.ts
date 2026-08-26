@@ -11,11 +11,11 @@ import path from "node:path";
 export interface DirStat {
   bytes: number;
   files: number;
-  /** 顶层子目录数：data/runs 下一个子目录 = 一次运行的工作区 */
+  /** 调用方指定深度上的目录数；默认统计直接子目录。 */
   topDirs: number;
 }
 
-export function dirStat(root: string): DirStat {
+export function dirStat(root: string, countDirsAtDepth = 1): DirStat {
   let bytes = 0;
   let files = 0;
   let topDirs = 0;
@@ -27,12 +27,12 @@ export function dirStat(root: string): DirStat {
     return { bytes: 0, files: 0, topDirs: 0 };
   }
 
-  const stack: string[] = [];
+  const stack: Array<{ dir: string; depth: number }> = [];
   for (const entry of top) {
     const full = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      topDirs += 1;
-      stack.push(full);
+      if (countDirsAtDepth === 1) topDirs += 1;
+      stack.push({ dir: full, depth: 1 });
     } else if (entry.isFile()) {
       files += 1;
       bytes += safeSize(full);
@@ -40,7 +40,7 @@ export function dirStat(root: string): DirStat {
   }
 
   while (stack.length > 0) {
-    const dir = stack.pop() as string;
+    const { dir, depth } = stack.pop() as { dir: string; depth: number };
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -50,7 +50,11 @@ export function dirStat(root: string): DirStat {
     for (const entry of entries) {
       const full = path.join(dir, entry.name);
       // 只跟目录与普通文件，符号链接不跟（防环）
-      if (entry.isDirectory()) stack.push(full);
+      if (entry.isDirectory()) {
+        const childDepth = depth + 1;
+        if (childDepth === countDirsAtDepth) topDirs += 1;
+        stack.push({ dir: full, depth: childDepth });
+      }
       else if (entry.isFile()) {
         files += 1;
         bytes += safeSize(full);

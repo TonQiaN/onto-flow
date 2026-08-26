@@ -16,12 +16,12 @@ src/
 ├── components/                         # 共享 UI（nav 已建）
 ├── db/  schema.ts  index.ts            # Drizzle（已建，改动需全员同步）
 ├── lib/
-│   ├── graph.ts                        # 图校验/拓扑（已建，已测）
+│   ├── graph.ts                        # 图校验、回边分类、出口与下游闭包
 │   └── values.ts                       # PortValue 封装（已建）
 └── server/
     ├── resolve.ts                      # DB 行 → ResolvedNode（图解析）
-    ├── engine/                         # 执行引擎（run 编排 + opencode 会话）
-    └── opencode/                       # opencode server 生命周期与 SDK 封装
+    ├── engine/                         # 就绪驱动编排、Action 执行与事件落库
+    └── harness/                        # 每运行 dsh 子进程、组合、工作区与 RPC
 ```
 
 ## API 面（全部 JSON；错误统一 `{ error: string }` + 4xx/5xx）
@@ -31,7 +31,7 @@ src/
 | /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建；对象类型载荷含 `filePreprocessor: "pdf" | null` |
 | /api/object-types/[id] 等同上三者 | GET, PUT, DELETE | 详情/更新/删除；被引用时 DELETE 返回 409 `{ error, usedBy }`；builtin 类型不可删改 |
 | /api/models | GET | 模型白名单 |
-| /api/actions | GET, POST | POST/PUT 载荷含 `ports: {direction,name,objectTypeId,position}[]`、`skillIds`、`toolIds`，整体替换 |
+| /api/actions | GET, POST | POST/PUT 载荷含 `ports: {direction,name,objectTypeId,position,artifactPath,exitName}[]`、`maxReentries`、`onExhausted`、`skillIds`、`toolIds`，整体替换；每个输出端口的 `artifactPath` 必填，输入端口两字段归一为 null |
 | /api/actions/[id] | GET, PUT, DELETE | 被 workflow 节点引用时 DELETE 409 |
 | /api/workflows | GET, POST | |
 | /api/workflows/[id] | GET, PUT, DELETE | GET 返回 nodes+edges+校验结果；PUT 保存整图（nodes+edges 整体替换，节点 id 由前端生成保持连线引用） |
@@ -49,74 +49,83 @@ src/
 - 前端数据获取：凡是要数据的页面都是 client component（`"use client"` 起手），一律 `fetch` 打 `/api/*` 后在 `useEffect` 里取数。没有 Server Action，也没有任何 Server Component 读 DB——只有根 `app/page.tsx`（仅 redirect）与 `app/layout.tsx`（静态外壳）不带 `"use client"`。
 - UI 文案全部中文；Tailwind 工具类直接写，不引组件库；整体风格与既有外壳（zinc 系工作台）一致。
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
-- 执行引擎：拓扑序串行；每节点一个全新 opencode session；工作区 `data/runs/<runId>/<nodeId>/`；file 输入物化到工作区 `inputs/`；引用 tools 物化到 `.opencode/tools/`；rule+skills 以 noReply 上下文注入；多输出或含 json 输出**一律用 prompt 约定纯 JSON**（schema 按输出端口生成、json 端口有自定义 schema 则内嵌，写进 prompt 末尾的输出契约），**禁用 `format: json_schema`**（理由见下方引擎实现规范的「输出提取」）。
-- 运行期间每个节点的 opencode 事件写 run_events（节流：文本增量可合并），SSE 转发。
+- 执行引擎：就绪节点并行、并发上限 4；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
+- 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。文件输入物化到 `workspace/inputs/`，Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
+- 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。
 
-## 引擎实现规范（opencode SDK 1.18.16 实测定稿）
+## 引擎实现规范（DeepSeek Harness）
 
-一律用 **v2 API**（`@opencode-ai/sdk/v2`）——只有 v2 的 `session.prompt` 有 `format` 与 `variant`。
-所有 SDK 调用返回 `{ data, error, response }`，用 data 前必须查 error。
+DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负责运行编排，运行专属子进程
+负责 cordis 组合、会话与模型循环；两者只经 stdio JSON-RPC 通信。
 
-- **Server 单例**：`createOpencodeServer({ hostname:"127.0.0.1", port:4977, config })`，
-  挂 globalThis 防 HMR 重启。`config` 经 OPENCODE_CONFIG_CONTENT 与全局配置**合并**：在其中为
-  deepseek/deepseek-v4-flash 与 newapi/openai/gpt-5.6-luna 定义 low/medium/high/max 四个
-  variants（`variants.<name> = { reasoningEffort }`）。spawn 前设置
-  `process.env.ONTOFLOW_DB_PATH`（ontoflow.db 绝对路径）与 `ONTOFLOW_DATA_DIR`
-  （data/ 绝对路径），custom tools 靠它们定位数据库与备份目录。端口不要用 0（实测不生效）。
-- **会话绑定工作区**：`createOpencodeClient({ baseUrl, directory })` 或 per-call `directory`；
-  `session.create({ directory: <workspace> })`。custom tools 按 **session 目录**发现：
-  物化到 `<workspace>/.opencode/tools/<name>.ts`，无需装 @opencode-ai/plugin（opencode 自动装）。
-- **注入顺序**：① `session.prompt({ noReply: true, parts: [rule+skills 文本] })`（不触发模型）；
-  ② 正式 prompt：`{{端口}}` 占位符插值（file 端口→占位文本），file 输入追加
-  `{ type:"file", mime, filename, url:"file://<绝对路径>" }` part。
-- **工具**：不传 `tools` map——内置工具全开（与 opencode CLI 行为一致），custom tools
-  物化到工作区 `.opencode/tools/` 后由 opencode 自动发现启用（未列出的工具默认启用，实测）。
-- **思考强度**：prompt 顶层 `variant: <low|medium|high|max>`（不在 model 对象里）。
-- **输出提取**：单 text 输出→`parts.filter(p=>p.type==="text").map(p=>p.text).join("")`；
-  多输出或含 json 输出→**prompt 约定纯 JSON**：正式 prompt 末尾追加输出契约
-  （给出 JSON Schema，要求最终回答只输出一个 JSON 对象），解析（全文→最后一个代码
-  围栏→首尾大括号切片）+ 必填键校验，失败同会话反馈重试（共 3 轮）。
-  **禁用 `format: json_schema`**：opencode 的 format 靠「合成工具 + tool_choice:required」
-  实现，DeepSeek 思考模式等 provider 直接 400（"Thinking mode does not support this
-  tool_choice"，HTTP 仍 200、parts 为空、错误走 session.error 事件）；且用过 format 的
-  session 再调 `session.messages` 会 400（1.18.16）。prompt 约定对所有 provider 兼容。
-- **完成/错误判定**：v2 prompt 阻塞到回合结束；`session.idle` 事件是可靠完成信号；错误三通道
-  （res.error / session.error 事件 / info.error）都要接。工具调用过程只出现在 events
-  （`message.part.updated`，ToolPart state pending→running→completed），prompt 响应只含最终消息。
-- **事件→run_events**：opencode 事件流按 directory 作用域隔离，故每个会话按其工作区目录
-  单独起 `event.subscribe({ directory })` 事件泵，sessionID→(runId,nodeId) 路由，text delta
-  节流合并（≥500ms 或 ≥500 字符落一条），工具调用状态逐条落库，节点结束时 abort。
-  SSE 路由轮询 sqlite（500ms）推增量，不依赖进程内 pubsub。
+- **每运行一套运行时**：先创建共同工作区，再生成 `cordis.yml`，最后以
+  `node --import tsx src/server/harness/runner.ts <cordis.yml>` 启动子进程；无常驻共享 host。
+  子进程 stdout 只承载 JSON-RPC，stderr 写 `<run>/logs/harness.stderr.log`，运行结束在 `finally`
+  中逐级收束子进程，任何路径都不得遗留 `running`。
+- **能力与隔离**：工作流级指令写 `workspace/AGENTS.md`；Skill 以 ASCII slug 链进
+  `workspace/.agents/skills/`，由 `skill-filesystem` 按描述发现，不强制拼进提示。Tool 以 ASCII id
+  物化为 `<run>/plugins/tool-<id>.ts` cordis 插件；工作流并集进入全局工具面后，每个 Action
+  会话再按自己的 `action_tools` 引用收窄可见面。`DSH_HOME`、`dshHome` 与 `agentsHome` 全部钉在
+  运行目录内，避免发现机器所有者的个人能力。
+- **提示与产物**：Action 的任务、规则、上游取用说明、产物路径和出口要求组成一条文本消息。
+  文件输入与上游产物都只给工作区相对路径；实质内容不沿边复制。循环第 N 轮的产物写进
+  `rounds/N/`，不覆盖前一轮（ADR-0008 / ADR-0009）。
+- **结构化结果**：每个 Action 会话按真实输出 schema 注册一次性的 `structured_output` 工具；
+  工具参数只报告产物路径与所选出口，实质内容仍在文件。捕获值以 `tools/result` 的权威结果
+  两阶段提交；会话收束后未捕获、出口不合法或声明的产物文件不存在，节点都失败。
+- **模型调用**：模型行的 `providerId` 是 dsh 路由；`deepseek-official` 由
+  `llm-deepseek` 提供。思考强度经会话 scope 上的 `agent/request` waterfall 无条件覆盖到调用配置；
+  每节点最多 40 步、墙钟 15 分钟。全局停用工具从会话工具面移除，晚注册工具另由 guard 兜底。
+- **完成、取消与错误**：`session/prompt` 懒创建会话，Next 侧等待同一会话依次进入 running / idle；
+  人工取消走 `session/cancel`，运行与节点进入独立的 `cancelled` 终态。节点完成后关闭会话，一次
+  运行完成后关闭子进程；崩溃、超时与无产物都写入 run / run_node 的失败事实。
+- **事件与用量**：`session.event` 通知到达时立刻归一为 text / reasoning / tool /
+  session.idle / session.error 并落库。每个 step 的 usage chunk 是不累积值，按
+  `(sessionId, turn:step)` 唯一化后求和；完整原始会话另存 `<run>/sessions/*.jsonl`。
 
 ## 安全与健壮性约束（终审确认项）
 
 - **运行输入的 file PortValue 不可信**：`/api/workflows/[id]/run` 直接接收请求体里的
   PortValue，`file.path` 必须经 `src/server/fs-safety.ts` 的 `resolveWithinData` 约束在
-  `data/` 内（`isWithinData` 在 startRun 入口 422 拦截，`resolveWithinData` 在 action.ts
+  `data/` 内（`isWithinData` 在 startRun 入口 422 拦截，`resolveWithinData` 在 runner.ts
   物化时纵深兜底），`file.name` 用 `safeBasename` 只取 basename——防目录穿越读任意文件外泄、
-  或写入 opencode 会扫描执行的 `.opencode/tools/` 目录。
+  或覆盖工作区目标目录之外的文件。
 - **PDF 预处理由对象类型声明**：`object_types.file_preprocessor = "pdf"` 的输入节点在工作区
   保留原文件，调用 Poppler 抽取 `text-layer.txt` 并按页生成 PNG；模型提示必须同时给出文本层、
   页面图与原文件路径。文件签名而不是 multipart MIME/扩展名决定是否处理；声称是 PDF 但签名
-  不符直接失败。单份 PDF 上限 32 MiB / 20 页，页面图不齐时不得启动模型。非 PDF 文件原样物化。
+  不符直接失败。上传请求体在 multipart 解析前流式限流；单份 PDF 上限 32 MiB / 20 页，文本层
+  上限 16 MiB、全部派生文件合计上限 128 MiB。Poppler 通过可取消的异步子进程逐项执行，失败
+  或取消删除半成品；页面图不齐时不得启动模型。非 PDF 文件原样物化。
 - **孤儿运行对账**：`src/instrumentation.ts` 启动钩子调用 `reconcileOrphanRuns`，把上次进程
   遗留的 `running` run 及其 running/pending 节点失败化——否则 SSE 结束条件永假、无限轮询。
 - **模型输出用作文件名前先净化**：`save_purchase_plan` 里 `plan_no` 由模型产出，拼进备份
-  文件名前 `replace(/[^\w.-]/g, "_")`，防穿越写出 `documents/` 之外。
-- **进程级 Map 生命周期**：`releaseSession` 清理 sessionRoutes/textBuffers/sessionPumps/
-  **sessionErrors**（全部四个），防长跑进程内存单调增长。
+  文件名前先取 basename、做 NFKC 归一与字符白名单净化；最终绝对路径再约束在 `data/` 内，
+  防止穿越写出 `documents/` 之外。
+- **HMR 下的运行所有权**：取消标记与在跑子进程句柄挂在 `globalThis`，使开发期 HMR 不会丢失
+  对现存运行的取消和收束能力；运行结束必须删除对应句柄与取消标记。
 
 ## 首个案例种子（scripts/seed.ts，幂等：按 name upsert；内容取自 scratchpad research/erp-seed.json）
 
 - Object Types：需求文件(file)、需求Prompt(text)、集采计划(text)、**审核评价(json+完整schema)**、
   **归档回执(text)** + 内置 text/file/json。
-- Models：DeepSeek V4 Flash (deepseek/deepseek-v4-flash)、GPT-5.6 Luna (newapi/openai/gpt-5.6-luna)。
+- Models：DeepSeek V4 Flash Vision / V4 Flash / V4 Pro，provider 路由均为 `deepseek-official`。
 - Skills：集采计划编制规范、集采计划审核要点（全文见 erp-seed.json）。
-- Tool：save_purchase_plan——**在 opencode（bun）运行时执行**，用 `bun:sqlite` 打开
+- Tool：save_purchase_plan——物化为 cordis 插件并在本运行的 harness 子进程执行，用 `node:sqlite` 打开
   `process.env.ONTOFLOW_DB_PATH` 写 purchase_plans（17 字段见 schema.ts），备份 Markdown 写
-  `ONTOFLOW_DATA_DIR/documents/集采计划-<planNo>-<日期>.md`，返回 { id, planNo, backupPath }。
+  `ONTOFLOW_DATA_DIR/documents/<safePlanNo>-<日期>.md`，返回 { id, planNo, backupPath }。
 - Actions（prompt/rule 全文见 erp-seed.json）：需求整理(deepseek, low)、集采计划生成(deepseek, high)、
   集采计划审核(deepseek, high；输出 审核评价+集采计划透传)、集采计划归档(deepseek, low；引用 save_purchase_plan)。
 - Workflow「采购集采计划生成」：输入节点(需求文件) → 需求整理 → 集采计划生成 → 集采计划审核 →
   集采计划归档 → 输出节点(归档回执)；审核评价另接一个输出节点(审核评价)。
 - 示例需求文件写入 data/samples/采购需求示例.txt。
+
+## 第二个案例种子（scripts/seed-resume.ts）
+
+- 工作流「简历匹配评分」是两个文件输入 → 一个解析 Action → 六个评委扇出 → 一个汇总 →
+  一个输出的 11 节点图。
+- `岗位JD文件` 与 `简历文件` 的 `filePreprocessor` 都是 `pdf`：PDF 生成文本层与逐页 PNG，
+  Markdown/纯文本原样物化。
+- 只有「简历评分·解析」使用 `deepseek-v4-flash-vision-exp`。它必须把输入当不可信数据，先读
+  文本层、再逐页调用 `read_image`；扫描件文本层为空也不得跳页，页面与文本冲突时以可见页面为准。
+- 六个评委与汇总使用 `deepseek-v4-flash`。评委只经 `job.md` / `resume.md` 读解析结果，汇总
+  等六份 `scores/*.md` 全部结算后才运行，最终产物是 `report.md`。

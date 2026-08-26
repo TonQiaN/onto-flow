@@ -8,6 +8,7 @@ import {
   workflows,
 } from "@/db";
 import { recordRevision } from "@/server/revisions";
+import { assertSafeId } from "@/server/harness/ids";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
 
 export interface NodePayload {
@@ -44,6 +45,11 @@ function parseGraphPayload(
     const n = item as Record<string, unknown>;
     const nodeId = typeof n.id === "string" ? n.id : "";
     if (!nodeId) return writeFail(400, "节点缺少 id");
+    try {
+      assertSafeId("节点 id", nodeId);
+    } catch {
+      return writeFail(400, "节点 id 只能由字母数字开头，并只含字母数字、点、下划线或连字符");
+    }
     if (nodeIds.has(nodeId)) return writeFail(400, `节点 id 重复：${nodeId}`);
     nodeIds.add(nodeId);
     const kind = n.kind;

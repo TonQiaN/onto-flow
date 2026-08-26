@@ -62,7 +62,7 @@ npx tsx scripts/smoke-graph.ts         # 验图能力：扇出、汇总、具名
 npx tsx scripts/smoke-capabilities.ts  # 验能力：技能被发现、工具被调用、停用工具从清单消失
 npx tsx scripts/seed-resume.ts         # 装入「简历匹配评分」工作流（不花钱）
 npx tsx scripts/run-procurement.ts     # 验收案例一：采购集采计划生成
-npx tsx scripts/run-resume.ts          # 验收案例二：简历匹配评分
+npx tsx scripts/run-resume.ts [data内岗位路径] [data内简历路径]  # 验收案例二；省略参数用 Markdown 样例
 ```
 
 ### Checks
@@ -93,7 +93,7 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 - **Write paths return a result object; the engine throws.** `runner.ts` turns a thrown error into `run_nodes.error` plus skipped downstream nodes. New service modules use `WriteResult` with `writeOk`/`writeFail` from `@/server/writers/types`; `folders.ts` and `revisions.ts` still carry private structurally identical `Result<T>` copies — converge on `WriteResult`, never add a fourth. `fs-safety.ts` and `monitor/cleanup.ts` throw deliberately and their callers map the throw.
 - **better-sqlite3 is synchronous.** Drizzle calls end in `.get()` / `.all()` / `.run()`; never `await db.…`.
 - Raw SQL goes through drizzle's `sql` tag and only where the query builder cannot express the aggregate: `monitor/`, `writers/list.ts`, `revisions.ts`, `api/runs/route.ts`. User input inside `LIKE` is escaped and paired with `escape '\'`.
-- Process-level mutable state is parked on `globalThis` under an `ontoflow`-prefixed key so HMR cannot lose it: `ontoflowDb`, `ontoflowOpencodeServer`, `ontoflowCancelledRuns`, `ontoflowSessionRoutes`, `ontoflowSessionPumps`, `ontoflowSessionErrors`, and the delta buffers. A module-level `const map = new Map()` is the bug this prevents.
+- Process-level mutable state is parked on `globalThis` under an `ontoflow`-prefixed key so HMR cannot lose it: `ontoflowDb`, `ontoflowCancelledRuns`, `ontoflowInputControllers`, and `ontoflowRunProcesses`. A module-level `const map = new Map()` is the bug this prevents.
 - A server-module unit test assigns an in-memory database to `globalThis.ontoflowDb` and then `await import()`s the module under test; a static import reaches the real `data/ontoflow.db`.
 - **There are no Server Actions.** Every mutation is a `fetch` to `/api/*`; new pages start with `"use client"` and load data in `useEffect`.
 - Client code imports no runtime value from `@/server` or `@/db`. `import type` from `@/server/monitor/types` is the sanctioned exception, and that module's own `import type { NodeStatus, RunStatus } from "@/app/runs/lib"` is the one accepted reverse dependency.
@@ -114,7 +114,7 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 - **A run with output nodes but none reached is a failure, not a success.** An unreached output node on an untaken branch is normal; all of them unreached means the run produced nothing.
 - **A canvas node is a reference to the shared Action**, so editing it from the canvas edits that Action everywhere ([ADR-0004](docs/adr/0004-canvas-edits-the-shared-action.md)).
 - Input and output node ports are always named `"value"`.
-- **A Tool is a cordis plugin.** `tools.code` exports `name` / `inject` / `apply`; the run materializes it to `<run>/plugins/<name>.ts` and the per-run composition includes it by absolute path, so it registers on the global tool surface for every Action in that run. Module resolution walks up from the run directory to the repository root, so `node:` builtins and the repo's dependencies are importable — the old "cannot import anything from this repository" rule is gone with opencode.
+- **A Tool is a cordis plugin with Action scope.** `tools.code` exports `name` / `inject` / `apply`; the run materializes the graph-wide union under `<run>/plugins/` and includes every plugin by absolute path on the global tool surface, then each Action session applies `toolFilter` so only that Action's referenced Tools remain visible (along with unscoped built-ins). Module resolution walks up from the run directory to the repository root, so `node:` builtins and the repo's dependencies are importable — the old "cannot import anything from this repository" rule is gone with opencode.
 - **The JSON Schema subset is narrower than JSON Schema.** A type array (`type: ["integer", "null"]`) is rejected, and a Tool whose schema uses one fails at plugin load, which takes the whole run down before any node starts. Omit the field instead of typing it nullable. The same subset governs an Action's data-plane schema.
 - **`output.render` takes `(args, value)`, not `(value)`.** Getting it wrong renders `undefined` and the call dies with `output.render returned non-lossless JSON`, which reads like a serialization bug rather than an arity bug. The Tool template in `src/app/tools/tool-editor.tsx` carries the correct shape.
 - **A Skill is projected to disk, not injected.** `src/server/skill-library.ts` writes every Skill to `data/skills/<slug>/SKILL.md`; a run symlinks the declared ones into `workspace/.agents/skills/` and upstream `skill-filesystem` discovers them from the session cwd. The model sees name and description and loads what it judges relevant. Anything that must always apply belongs in the Action's rule or the workflow-level instructions in `workspace/AGENTS.md`.
@@ -148,7 +148,7 @@ A comment that records why a workaround exists is the rule itself — `longHaulF
 ## Decisions and the glossary
 
 - [CONTEXT.md](CONTEXT.md) owns domain vocabulary and semantics only; keep implementation out of it and update it the moment a term is settled.
-- [docs/DESIGN.md](docs/DESIGN.md) owns the v1 contract and the engine spec — its opencode sections are stale until M5 rewrites them; [docs/DESIGN-V2.md](docs/DESIGN-V2.md) owns the list, folder, reference, revision, and shared-UI contracts.
+- [docs/DESIGN.md](docs/DESIGN.md) owns the v1 contract and the current DeepSeek Harness engine spec; [docs/DESIGN-V2.md](docs/DESIGN-V2.md) owns the list, folder, reference, revision, and shared-UI contracts.
 - [README.md](README.md) is the product pitch and the only document carrying the demo walkthrough; it duplicates the startup and test commands from the Commands block above and restates behavior the engine spec owns, so change README, that block, and the spec together or change none of them.
 - The eight `/api/monitor/*` routes have no written contract; `src/server/monitor/` is their source of truth.
 - An irreversible, surprising, genuinely traded-off decision gets an ADR at `docs/adr/NNNN-slug.md`. The three-of-three test and the numbering rule live in [ADR-FORMAT.md](.claude/skills/domain-modeling/ADR-FORMAT.md); the house shape is a Chinese title, the decision, then a `理由：` paragraph ending in the cost, as in [ADR-0005](docs/adr/0005-folders-not-tags.md).

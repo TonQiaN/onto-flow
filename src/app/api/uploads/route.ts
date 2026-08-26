@@ -9,6 +9,33 @@ export const dynamic = "force-dynamic";
 
 /** multipart 边界与头部的宽限；真正的文件上限仍由解析后的 File.size 复核。 */
 const MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
+export const MAX_UPLOAD_REQUEST_BYTES =
+  MAX_FILE_INPUT_BYTES + MAX_MULTIPART_OVERHEAD_BYTES;
+
+/** 无 Content-Length / 伪造小长度时也逐块硬停，不能先让 formData 把任意大请求吃进内存。 */
+async function readRequestBodyWithinLimit(
+  body: ReadableStream<Uint8Array> | null,
+): Promise<Buffer | null> {
+  if (!body) return Buffer.alloc(0);
+  const reader = body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_UPLOAD_REQUEST_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, total);
+}
 
 /** multipart 单文件上传 → data/uploads/<uuid>/<原名>，返回 PortValue(file) */
 export async function POST(request: Request) {
@@ -18,11 +45,19 @@ export async function POST(request: Request) {
     const contentLength = Number(request.headers.get("content-length"));
     if (
       Number.isFinite(contentLength) &&
-      contentLength > MAX_FILE_INPUT_BYTES + MAX_MULTIPART_OVERHEAD_BYTES
+      contentLength > MAX_UPLOAD_REQUEST_BYTES
     ) {
       return jsonError(413, "单个上传文件不能超过 32 MiB");
     }
-    const form = await request.formData().catch(() => null);
+    const body = await readRequestBodyWithinLimit(request.body);
+    if (body === null) return jsonError(413, "单个上传文件不能超过 32 MiB");
+    const contentType = request.headers.get("content-type");
+    if (!contentType) return jsonError(400, "缺少 multipart Content-Type");
+    const form = await new Response(Uint8Array.from(body), {
+      headers: { "content-type": contentType },
+    })
+      .formData()
+      .catch(() => null);
     const file = form?.get("file");
     if (!(file instanceof File)) return jsonError(400, "缺少 file 字段");
     if (file.size > MAX_FILE_INPUT_BYTES) {

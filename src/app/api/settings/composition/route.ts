@@ -45,21 +45,15 @@ export async function GET() {
       },
       mcpServers: settings.mcpServers,
     });
-    // 每运行组合把停用的 MCP 整条省略——它只描述这次运行的真实能力。但面板是给人
-    // 看的清单，「登记了但不会挂」也得看得见，所以这里把它们补回来并标停用。
-    const entries = [
-      ...mounted.map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        disabled: entry.disabled === true,
-      })),
-      ...settings.mcpServers
-        .filter((server) => !server.enabled)
-        .map((server) => {
-          const entry = mcpCompositionEntry(server);
-          return { id: entry.id, name: entry.name, disabled: true };
-        }),
-    ];
+    // entries 是下一次运行真正会挂载的组合，不能为了展示把停用项混回这份事实。
+    // 停用的 MCP 独立返回，页面另区展示登记状态。
+    const entries = mounted.map((entry) => ({ id: entry.id, name: entry.name }));
+    const disabledEntries = settings.mcpServers
+      .filter((server) => !server.enabled)
+      .map((server) => {
+        const entry = mcpCompositionEntry(server);
+        return { id: entry.id, name: entry.name };
+      });
 
     // 最近一次运行真实落盘的组合：文件在运行目录里，直接读回来。
     const lastRun = db
@@ -77,6 +71,6 @@ export async function GET() {
         // 运行目录可能已被清理，面板照常显示推导结果。
       }
     }
-    return NextResponse.json({ entries, lastComposition });
+    return NextResponse.json({ entries, disabledEntries, lastComposition });
   });
 }

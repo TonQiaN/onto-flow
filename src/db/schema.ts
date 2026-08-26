@@ -140,14 +140,14 @@ export const tools = sqliteTable("tools", {
   description: text("description").notNull().default(""),
   /**
    * 工具源码：一个 cordis 插件（导出 name / inject / apply）。运行时物化到
-   * <运行目录>/plugins/<工具名>.ts，由每运行组合 include 进去（ADR-0006）。
+   * <运行目录>/plugins/tool-<工具 id>.ts，由每运行组合 include 进去（ADR-0006）。
    * 模块解析从运行目录向上走到仓库根，因此它能 import node: 内置模块与仓库依赖。
    */
   code: text("code").notNull(),
   ...timestamps,
 });
 
-/** 可选模型白名单（种子数据只有 deepseek-v4-flash 与 gpt-5.6-luna） */
+/** 可选模型白名单；providerId 是 dsh provider 路由，不是厂商显示名。 */
 export const models = sqliteTable(
   "models",
   {
@@ -341,7 +341,7 @@ export const runNodes = sqliteTable(
       string,
       unknown
     > | null>(),
-    /** 会话级用量汇总（由 message.updated 事件累加，来源见 node_usage） */
+    /** 节点各轮会话的累计用量；逐 step 明细来源见 node_usage。 */
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
     reasoningTokens: integer("reasoning_tokens").notNull().default(0),
@@ -371,8 +371,8 @@ export const runEvents = sqliteTable("run_events", {
 });
 
 /**
- * 逐条 assistant 消息的用量明细，由 message.updated 事件实时捕获落库。
- * 必须自己存：opencode 重启后历史会话不可查——监控页的成本分析只读本表。
+ * 逐 step 的用量明细，由 dsh usage chunk 到达时实时捕获落库。
+ * 必须自己存：运行子进程收束后不再提供查询面——监控页的成本分析只读本表。
  */
 export const nodeUsage = sqliteTable(
   "node_usage",

@@ -137,6 +137,12 @@ export function RunDialog({
                   <div className="mt-1.5">
                     <input
                       type="file"
+                      aria-label={`${spec.label}文件`}
+                      accept={
+                        spec.filePreprocessor === "pdf"
+                          ? ".pdf,.md,.markdown,.txt,application/pdf,text/markdown,text/plain"
+                          : undefined
+                      }
                       disabled={submitting || f.uploading}
                       onChange={(e) => {
                         const file = e.target.files?.[0];

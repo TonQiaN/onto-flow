@@ -8,6 +8,7 @@
  * 上游 dsh 的事件种类远多于这些，只有能落到这五种上的才记，其余丢弃——
  * 完整的会话记录本来就在运行目录的 sessions/*.jsonl 里，这里只是给人看的摘要。
  */
+import { sql } from "drizzle-orm";
 import { db, nodeUsage, runEvents } from "@/db";
 
 /** 上游 SessionEvent 的结构在 wire 上是开放的，这里只narrow 出用得上的形状。 */
@@ -54,22 +55,34 @@ export function recordSessionEvent(ctx: EventSinkContext, event: unknown): void 
       insert(ctx, ts, "tool", {
         tool: str(data.name),
         status: "running",
+        callId: str(data.callId),
+        sessionId: ctx.sessionId,
         input: str(data.arguments),
       });
       return;
     }
     case "tool/result": {
       const message = data.message as
-        | { content?: Array<{ isError?: boolean; content?: ContentBlock[] }> }
+        | {
+            content?: Array<{
+              toolCallId?: unknown;
+              isError?: boolean;
+              content?: ContentBlock[];
+            }>;
+          }
         | undefined;
       const first = message?.content?.[0];
+      const callId = str(first?.toolCallId);
       const output = (first?.content ?? [])
         .map((b) => (typeof b.text === "string" ? b.text : ""))
         .join("");
-      const failed = first?.isError === true;
+      const failed = first?.isError === true || data.error !== undefined;
       insert(ctx, ts, "tool", {
-        tool: str(data.name),
+        // tool/result 本身没有 name；用 ToolResultBlock.toolCallId 关联同会话先落库的 call。
+        tool: toolNameForCall(ctx, callId),
         status: failed ? "error" : "ok",
+        callId,
+        sessionId: ctx.sessionId,
         ...(failed ? { error: output } : { output }),
       });
       return;
@@ -97,6 +110,24 @@ export function recordSessionEvent(ctx: EventSinkContext, event: unknown): void 
     default:
       return;
   }
+}
+
+/** tool/call 先于 tool/result 到达；持久化关联让 HMR 与事件回放都不依赖进程内 Map。 */
+function toolNameForCall(ctx: EventSinkContext, callId: string): string {
+  if (!callId) return "";
+  const row = db.get<{ tool: string | null }>(sql`
+    select json_extract(payload, '$.tool') as tool
+      from run_events
+     where run_id = ${ctx.runId}
+       and node_id = ${ctx.nodeId}
+       and type = 'tool'
+       and json_extract(payload, '$.status') = 'running'
+       and json_extract(payload, '$.callId') = ${callId}
+       and json_extract(payload, '$.sessionId') = ${ctx.sessionId}
+     order by id desc
+     limit 1
+  `);
+  return row?.tool ?? "";
 }
 
 function insert(

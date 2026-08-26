@@ -1,0 +1,139 @@
+/** 清理测试：隔离临时 data 根与内存 SQLite，绝不触碰真实运行历史。 */
+import fs from "node:fs";
+import path from "node:path";
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as schema from "../../db/schema";
+
+const testPaths = vi.hoisted(() => ({
+  dataDir: `/tmp/ontoflow-cleanup-${process.pid}-${Math.random().toString(16).slice(2)}`,
+}));
+
+vi.mock("@/server/fs-safety", () => ({
+  DATA_DIR: testPaths.dataDir,
+  resolveWithinData(relPath: string): string {
+    if (
+      relPath.startsWith("/") ||
+      relPath.split(/[\\/]/).includes("..") ||
+      relPath === ""
+    ) {
+      throw new Error("测试路径越界");
+    }
+    return `${testPaths.dataDir}/${relPath}`;
+  },
+}));
+
+const sqlite = new Database(":memory:");
+sqlite.exec(`
+CREATE TABLE runs (
+  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
+  workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
+  started_at INTEGER NOT NULL, finished_at INTEGER
+);
+CREATE TABLE run_nodes (run_id TEXT NOT NULL);
+CREATE TABLE run_events (run_id TEXT NOT NULL, ts INTEGER NOT NULL, payload TEXT);
+CREATE TABLE node_usage (run_id TEXT NOT NULL);
+`);
+(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, {
+  schema,
+});
+
+const { runCleanup } = await import("./cleanup");
+const old = Date.now() - 3 * 86_400_000;
+
+function makeWorkspace(workflowId: string, runId: string, content = "test") {
+  const dir = path.join(testPaths.dataDir, "runs", workflowId, runId);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "artifact.txt"), content);
+  fs.utimesSync(dir, new Date(old), new Date(old));
+  return dir;
+}
+
+function storedRunDir(absolutePath: string): string {
+  return path.relative(process.cwd(), absolutePath);
+}
+
+beforeEach(() => {
+  sqlite.exec("DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM runs");
+  fs.rmSync(testPaths.dataDir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(testPaths.dataDir, "runs"), { recursive: true });
+});
+
+afterAll(() => {
+  fs.rmSync(testPaths.dataDir, { recursive: true, force: true });
+  sqlite.close();
+});
+
+describe("运行工作区清理", () => {
+  it("按 workflowId/runId 两层布局清理叶子目录并跳过进行中运行", () => {
+    // 已知运行实际目录故意不等于 workflow_id/id 约定重建路径。
+    const finished = makeWorkspace("stored-owner", "stored-finished");
+    const active = makeWorkspace("workflow-1", "run-active");
+    const orphan = makeWorkspace("workflow-2", "run-orphan", "orphan");
+    // 旧错误实现把 data/runs 的顶层当 runId；这个目录不应被当作运行工作区。
+    const direct = path.join(testPaths.dataDir, "runs", "direct-old");
+    fs.mkdirSync(direct, { recursive: true });
+    fs.writeFileSync(path.join(direct, "artifact.txt"), "direct");
+    fs.utimesSync(direct, new Date(old), new Date(old));
+
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, run_dir, started_at) values (?, ?, ?, ?, ?)",
+      )
+      .run("run-finished", "workflow-1", "success", storedRunDir(finished), old);
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, run_dir, started_at) values (?, ?, ?, ?, ?)",
+      )
+      .run("run-active", "workflow-1", "running", storedRunDir(active), old);
+
+    const preview = runCleanup({ target: "workspaces", beforeDays: 1, dryRun: true });
+    expect(preview.affected.count).toBe(2);
+    expect(preview.detail).toContain("跳过进行中的运行 1 个");
+
+    const deleted = runCleanup({ target: "workspaces", beforeDays: 1, dryRun: false });
+    expect(deleted.affected).toEqual(preview.affected);
+    expect(fs.existsSync(finished)).toBe(false);
+    expect(fs.existsSync(orphan)).toBe(false);
+    expect(fs.existsSync(active)).toBe(true);
+    expect(fs.existsSync(direct)).toBe(true);
+  });
+
+  it("run_dir 与 workflow/id 约定路径不同时只删除 run_dir 指向的工作区", () => {
+    const actual = makeWorkspace("storage-owner", "actual-leaf");
+    const reconstructed = makeWorkspace("workflow-9", "run-9");
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, run_dir, started_at) values (?, ?, ?, ?, ?)",
+      )
+      .run("run-9", "workflow-9", "success", storedRunDir(actual), old);
+
+    const deleted = runCleanup({ target: "runs", beforeDays: 1, dryRun: false });
+
+    expect(deleted.affected.count).toBe(1);
+    expect(fs.existsSync(actual)).toBe(false);
+    expect(fs.existsSync(reconstructed)).toBe(true);
+    expect(sqlite.prepare("select count(*) as count from runs").get()).toEqual({ count: 0 });
+  });
+
+  it("run_dir 为空时不从 workflow/id 猜目录", () => {
+    const conventional = makeWorkspace("workflow-null", "run-null");
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, run_dir, started_at) values (?, ?, ?, NULL, ?)",
+      )
+      .run("run-null", "workflow-null", "success", old);
+
+    const workspaceCleanup = runCleanup({
+      target: "workspaces",
+      beforeDays: 1,
+      dryRun: false,
+    });
+    expect(workspaceCleanup.affected.count).toBe(0);
+    expect(fs.existsSync(conventional)).toBe(true);
+
+    runCleanup({ target: "runs", beforeDays: 1, dryRun: false });
+    expect(fs.existsSync(conventional)).toBe(true);
+  });
+});
