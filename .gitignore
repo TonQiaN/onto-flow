@@ -13,3 +13,4 @@ data/
 tsconfig.tsbuildinfo
 test-results/
 playwright-report/
+.playwright-cli/

@@ -8,8 +8,10 @@ import {
   sumTokens,
   toMillis,
   type RunNodeRow,
+  type RunStatus,
 } from "../lib";
 import { STATUS_DOT, StatusBadge } from "../status-badge";
+import { AgentTrajectory } from "./agent-trajectory";
 import { PortValueView } from "./port-value-view";
 import { SnapshotView } from "./snapshot-view";
 
@@ -58,9 +60,15 @@ function UsageLine({ node }: { node: RunNodeRow }) {
 
 /**
  * 节点时间线卡片：label + 状态徽章 + 耗时 + 用量 + 输入/输出 +
- * 错误全文 + 运行快照。
+ * 错误全文 + Agent 会话轨迹 + 运行快照。
  */
-export function NodeCard({ node }: { node: RunNodeRow }) {
+export function NodeCard({
+  node,
+  runStatus,
+}: {
+  node: RunNodeRow;
+  runStatus: RunStatus;
+}) {
   const started = toMillis(node.startedAt);
   const inputs = Object.entries(node.inputs ?? {});
   const outputs = Object.entries(node.outputs ?? {});
@@ -71,7 +79,11 @@ export function NodeCard({ node }: { node: RunNodeRow }) {
           STATUS_DOT[node.status] ?? "bg-zinc-300"
         }`}
       />
-      <div className="rounded-lg border border-zinc-200 bg-white p-4">
+      <div
+        data-testid="run-node-card"
+        data-node-id={node.nodeId}
+        className="rounded-lg border border-zinc-200 bg-white p-4"
+      >
         <div className="flex flex-wrap items-center gap-3">
           <span className="font-medium text-zinc-900">{node.label}</span>
           <StatusBadge status={node.status} />
@@ -87,6 +99,15 @@ export function NodeCard({ node }: { node: RunNodeRow }) {
           <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm break-words whitespace-pre-wrap text-red-700">
             {node.error}
           </div>
+        )}
+        {(node.snapshot != null || node.sessionId) && (
+          <AgentTrajectory
+            runId={node.runId}
+            nodeId={node.nodeId}
+            nodeLabel={node.label}
+            status={node.status}
+            active={runStatus === "running" && node.status === "running"}
+          />
         )}
         <SnapshotView snapshot={node.snapshot} />
       </div>

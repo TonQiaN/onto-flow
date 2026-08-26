@@ -292,7 +292,7 @@ export default function RunDetailPage() {
                 <div className="absolute top-2 bottom-2 left-[4px] w-px bg-zinc-200" />
                 <div className="space-y-4">
                   {sortedNodes.map((node) => (
-                    <NodeCard key={node.id} node={node} />
+                    <NodeCard key={node.id} node={node} runStatus={run.status} />
                   ))}
                 </div>
               </div>
