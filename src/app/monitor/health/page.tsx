@@ -3,7 +3,7 @@
 /**
  * 监控 · 系统健康（模块 D）
  *
- * 开发者/管理员视角的控制台页：opencode server 探活、事件泵、数据库与磁盘占用、
+ * 开发者/管理员视角的控制台页：引擎就绪、在跑的运行子进程、数据库与磁盘占用、
  * 孤儿运行与孤儿实体，外加手动清理面板。信息密度高、等宽字体多、深色卡片，
  * 与业务页面（浅色 zinc 工作台）刻意区分。外壳（顶栏 + 六标签）由 /monitor/layout.tsx 提供，
  * 深色小组件（Panel / MetricCard / Dot / Num / Legend …）一律复用 ../ui。
@@ -165,8 +165,8 @@ export default function MonitorHealthPage() {
       ) : (
         <>
           <div className="grid gap-4 lg:grid-cols-2">
-            <OpencodeCard health={health} />
-            <EventPumpCard health={health} />
+            <EngineCard health={health} />
+            <RunProcessesCard health={health} />
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
@@ -195,56 +195,63 @@ export default function MonitorHealthPage() {
 /* 卡片                                                                        */
 /* -------------------------------------------------------------------------- */
 
-function OpencodeCard({ health }: { health: HealthPayload }) {
-  const { opencode } = health;
+function EngineCard({ health }: { health: HealthPayload }) {
+  const { engine } = health;
+  // 换成 dsh 引擎后没有常驻外部服务（ADR-0006）：就绪只取决于 runner 入口在不在、
+  // 凭据引用名有没有值。真正「活着的东西」是每次运行自己的子进程，见右边那张卡。
+  const ok = engine.ready && engine.credentialConfigured;
   return (
     <Panel
-      title="opencode server"
-      subtitle="执行引擎进程（单例，HMR 安全）"
+      title="执行引擎"
+      subtitle="DeepSeek Harness，每次运行一个子进程，无常驻外部服务"
       right={
         <span
           className={`inline-flex items-center gap-1.5 rounded border px-2 py-0.5 font-mono text-[11px] ${
-            opencode.reachable
+            ok
               ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300"
               : "border-red-500/40 bg-red-500/10 text-red-300"
           }`}
         >
-          <Dot tone={opencode.reachable ? "emerald" : "red"} />
-          {opencode.reachable ? "可达" : "不可达"}
+          <Dot tone={ok ? "emerald" : "red"} />
+          {ok ? "就绪" : "未就绪"}
         </span>
       }
     >
-      <dl className="grid grid-cols-[3.5rem_1fr] gap-y-1 font-mono text-[11px]">
-        <dt className="text-zinc-500">地址</dt>
-        <dd className="break-all text-zinc-200">
-          {opencode.url || "http://127.0.0.1:4977"}
+      <dl className="grid grid-cols-[4.5rem_1fr] gap-y-1 font-mono text-[11px]">
+        <dt className="text-zinc-500">runner</dt>
+        <dd className="break-all text-zinc-200">{engine.runnerEntry || "—"}</dd>
+        <dt className="text-zinc-500">凭据</dt>
+        <dd className="text-zinc-200">
+          {engine.credentialRef || "—"}
+          <span
+            className={
+              engine.credentialConfigured ? "ml-2 text-emerald-400" : "ml-2 text-red-400"
+            }
+          >
+            {engine.credentialConfigured ? "已配置" : "未配置"}
+          </span>
         </dd>
-        <dt className="text-zinc-500">版本</dt>
-        <dd className="text-zinc-200">{opencode.version ?? "—"}</dd>
       </dl>
 
-      {!opencode.reachable && (
+      {!ok && (
         <div className="mt-3 space-y-2 rounded border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
-          {opencode.error && (
-            <p className="font-mono break-all">{opencode.error}</p>
-          )}
+          {engine.error && <p className="font-mono break-all">{engine.error}</p>}
           <div>
             <p className="font-medium">排查步骤</p>
             <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-red-200/90">
-              <li>
-                确认 opencode CLI 在 PATH 上：终端执行{" "}
-                <code className="font-mono">which opencode</code>
-                ，没有就先安装，然后重启 Next.js 进程让单例重建。
-              </li>
-              <li>
-                确认 4977 端口没被别的进程占用：
-                <code className="font-mono">lsof -i :4977</code>
-                （端口在 server.ts 里写死，实测不能改成 0）。
-              </li>
-              <li>
-                看 Next.js 进程控制台：createOpencodeServer 的 spawn
-                失败会打印原因；修好后重启进程。
-              </li>
+              {!engine.ready && (
+                <li>
+                  runner 入口不存在：确认{" "}
+                  <code className="font-mono">src/server/harness/runner.ts</code> 未被删除。
+                </li>
+              )}
+              {!engine.credentialConfigured && (
+                <li>
+                  把 <code className="font-mono">{engine.credentialRef}</code>{" "}
+                  写进仓库根的 <code className="font-mono">.env.local</code>（已被 .gitignore
+                  排除），然后重启 Next.js 进程——凭据在启动时按引用名从进程环境挑值。
+                </li>
+              )}
             </ol>
           </div>
         </div>
@@ -253,14 +260,14 @@ function OpencodeCard({ health }: { health: HealthPayload }) {
   );
 }
 
-function EventPumpCard({ health }: { health: HealthPayload }) {
-  const { activeSessions, routeEntries } = health.eventPump;
-  // 事件泵与路由表应一一对应，不一致说明有会话没被 releaseSession 清干净
-  const mismatch = activeSessions !== routeEntries;
+function RunProcessesCard({ health }: { health: HealthPayload }) {
+  const { activeRuns, runEntries } = health.runProcesses;
+  // 计数与明细应一一对应，不一致说明有子进程句柄没被 executeRun 的 finally 清掉
+  const mismatch = activeRuns !== runEntries;
   return (
     <Panel
-      title="事件泵"
-      subtitle="每个执行中的节点独占一个会话与一个按工作区订阅的事件泵"
+      title="运行子进程"
+      subtitle="一次运行一个 harness 子进程，独占一个工作区"
       right={
         <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-zinc-500">
           <Dot tone={mismatch ? "amber" : "zinc"} pulse={mismatch} />
@@ -270,24 +277,24 @@ function EventPumpCard({ health }: { health: HealthPayload }) {
     >
       <div className="grid grid-cols-2 gap-3">
         <MetricCard
-          label="活跃会话（事件泵）"
-          value={formatCount(activeSessions)}
+          label="在跑运行"
+          value={formatCount(activeRuns)}
           unit="个"
-          tone={activeSessions > 0 ? "sky" : "zinc"}
-          hint="sessionPumps"
+          tone={activeRuns > 0 ? "sky" : "zinc"}
+          hint="ontoflowRunProcesses"
         />
         <MetricCard
-          label="路由表条目"
-          value={formatCount(routeEntries)}
-          unit="条"
+          label="子进程句柄"
+          value={formatCount(runEntries)}
+          unit="个"
           tone={mismatch ? "amber" : "zinc"}
-          hint="ontoflowSessionRoutes"
+          hint="runProcesses.runs"
         />
       </div>
       <p className="mt-3 text-xs leading-5 text-zinc-500">
-        节点结束时 releaseSession 会同时移除事件泵与路由。
+        运行收束时 executeRun 的 finally 会 dispose 子进程并从表里移除。
         {mismatch &&
-          " 当前两个数字不相等，说明有会话未被正常释放（进程内残留），重启 Next.js 进程即可清空。"}
+          " 当前两个数字不相等，说明有子进程未被正常收束（进程内残留），重启 Next.js 进程即可清空。"}
       </p>
     </Panel>
   );

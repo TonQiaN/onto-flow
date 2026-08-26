@@ -368,7 +368,7 @@ function upsertAction(input: {
   prompt: string;
   rule: string;
   modelId: string;
-  reasoningEffort: "low" | "medium" | "high" | "max";
+  reasoningEffort: "off" | "low" | "high" | "max";
   inputs: SeedPort[];
   outputs: SeedPort[];
   skillIds: string[];
@@ -551,15 +551,22 @@ const otReceipt = upsertObjectType({
 // ③ Models
 // ---------------------------------------------------------------------------
 
+// provider 是 dsh 的路由名：llm-deepseek 注册的路由固定叫 deepseek-official
+// （刻意与 pi-ai 目录里的 deepseek 区分开），见 ADR-0006。
 const modelDeepseek = upsertModel({
-  providerId: "deepseek",
+  providerId: "deepseek-official",
+  modelId: "deepseek-v4-flash-vision-exp",
+  displayName: "DeepSeek V4 Flash Vision",
+});
+upsertModel({
+  providerId: "deepseek-official",
   modelId: "deepseek-v4-flash",
   displayName: "DeepSeek V4 Flash",
 });
 upsertModel({
-  providerId: "newapi",
-  modelId: "openai/gpt-5.6-luna",
-  displayName: "GPT-5.6 Luna",
+  providerId: "deepseek-official",
+  modelId: "deepseek-v4-pro",
+  displayName: "DeepSeek V4 Pro",
 });
 
 // ---------------------------------------------------------------------------

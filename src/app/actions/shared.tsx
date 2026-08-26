@@ -1,7 +1,7 @@
 /** actions 管理页内部共享的类型与小工具（仅本目录使用） */
 
 export type Kind = "text" | "file" | "json";
-export type ReasoningEffort = "low" | "medium" | "high" | "max";
+export type ReasoningEffort = "off" | "low" | "high" | "max";
 
 export interface ActionPortDto {
   id: string;
@@ -55,8 +55,8 @@ export interface ToolRow {
 }
 
 export const EFFORT_LABEL: Record<ReasoningEffort, string> = {
+  off: "关闭",
   low: "低",
-  medium: "中",
   high: "高",
   max: "最大",
 };

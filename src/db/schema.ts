@@ -132,7 +132,10 @@ export const tools = sqliteTable("tools", {
   id: id(),
   name: text("name").notNull().unique(),
   description: text("description").notNull().default(""),
-  /** 完整的 opencode custom tool TS 源码，运行时物化为 .opencode/tools/<name>.ts */
+  /**
+   * 工具源码。目前仍是旧引擎留下的 opencode custom tool 形态且不进入任何运行——
+   * M3 把它改成 cordis 插件源码，物化进 <run>/plugins/ 并由每运行组合 include。
+   */
   code: text("code").notNull(),
   ...timestamps,
 });
@@ -160,11 +163,12 @@ export const actions = sqliteTable("actions", {
   modelId: text("model_id")
     .notNull()
     .references(() => models.id),
+  /** 档位对齐 dsh 的 reasoningEffort：off 关思考，其余三档递增（ADR-0006） */
   reasoningEffort: text("reasoning_effort", {
-    enum: ["low", "medium", "high", "max"],
+    enum: ["off", "low", "high", "max"],
   })
     .notNull()
-    .default("max"),
+    .default("high"),
   ...timestamps,
 });
 
@@ -181,6 +185,11 @@ export const actionPorts = sqliteTable(
       .notNull()
       .references(() => objectTypes.id),
     position: integer("position").notNull().default(0),
+    /**
+     * 输出端口的产物路径（相对运行工作区）。Action 把实质内容写进这个文件，
+     * 下游经连线拿到的只是「去读这个路径」（ADR-0008）。输入端口恒为 null。
+     */
+    artifactPath: text("artifact_path"),
   },
   (t) => [
     uniqueIndex("action_ports_unique").on(t.actionId, t.direction, t.name),
@@ -264,6 +273,14 @@ export const runs = sqliteTable("runs", {
   /** 冗余快照：运行当时的工作流名，改名后历史仍可读 */
   workflowName: text("workflow_name").notNull().default(""),
   error: text("error"),
+  /** 本次运行的运行目录（相对仓库根）；工作区、日志、会话记录都在它下面 */
+  runDir: text("run_dir"),
+  /**
+   * 导入摘要：工作流级共同指令与各项技能/工具在启动时刻的内容摘要。
+   * 工作区里是指向全局库活目录的链接，所以摘要只能证明「是不是同一份」，
+   * 证明不了能把旧内容取回来（ADR-0007）。
+   */
+  imports: text("imports", { mode: "json" }).$type<Record<string, unknown> | null>(),
   startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
   finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
 });

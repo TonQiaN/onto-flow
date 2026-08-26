@@ -1,13 +1,17 @@
 /**
  * 运行编排：startRun（校验 + 建 run + 异步执行）与 executeRun（拓扑序串行）。
  *
+ * 一次运行 = 一个独立工作区 + 一个 harness 子进程（ADR-0007）。executeRun 建工作区、
+ * 物化文件输入、起子进程，然后按拓扑序驱动节点，最后无论成败都把子进程收束到静止。
+ *
  * - 输入节点 → outputs = { value: 用户输入 }；输出节点 → 上游值透传为 outputs；
- *   Action 节点 → runActionNode。
+ *   Action 节点 → runActionNode（在子进程里开一个会话）。
  * - 节点失败 → run_nodes.error + 下游全部 skipped + run failed；全部成功 → run success。
- * - cancelRun 是人为中止：abort 会话 + 节点 cancelled + 下游 skipped + run cancelled，
+ * - cancelRun 是人为中止：取消在跑会话 + 节点 cancelled + 下游 skipped + run cancelled，
  *   是区别于 failed 的独立终态（run.error 留空）。
  * - 任何异常都落到 run / run_nodes.error，绝不留 running 悬挂。
  */
+import fs from "node:fs";
 import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, runNodes, runs } from "@/db";
@@ -18,10 +22,17 @@ import {
   type ValidationIssue,
 } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
-import { DATA_DIR, isWithinData } from "@/server/fs-safety";
-import { getOpencodeClient } from "@/server/opencode/server";
+import { DATA_DIR, isWithinData, safeBasename } from "@/server/fs-safety";
+import { launchRun } from "@/server/harness/launch";
+import type { RunProcess } from "@/server/harness/runtime";
+import {
+  createRunWorkspace,
+  WORKSPACE_INPUTS_SUBDIR,
+  type RunWorkspace,
+} from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
 import { runActionNode } from "./action";
+import { recordSessionEvent, type EventSinkContext } from "./events";
 
 export type StartRunResult =
   | { ok: true; runId: string }
@@ -38,10 +49,14 @@ export type CancelRunResult =
  */
 interface RunnerGlobals {
   ontoflowCancelledRuns?: Set<string>;
+  ontoflowRunProcesses?: Map<string, RunProcess>;
 }
 const g = globalThis as RunnerGlobals;
 const cancelledRuns: Set<string> = g.ontoflowCancelledRuns ?? new Set();
 g.ontoflowCancelledRuns = cancelledRuns;
+/** 在跑运行的子进程句柄；cancelRun 要拿它去取消会话（挂 globalThis 以免 HMR 丢失）。 */
+const runProcesses: Map<string, RunProcess> = g.ontoflowRunProcesses ?? new Map();
+g.ontoflowRunProcesses = runProcesses;
 
 export function isRunCancelled(runId: string): boolean {
   return cancelledRuns.has(runId);
@@ -144,7 +159,7 @@ export async function startRun(
 async function executeRun(
   runId: string,
   resolved: ResolvedWorkflow,
-  runInputs: Record<string, PortValue>,
+  rawInputs: Record<string, PortValue>,
 ): Promise<void> {
   const { nodes, edges } = resolved;
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
@@ -154,108 +169,153 @@ async function executeRun(
   let firstError: string | null = null;
   let cancelled = false;
 
-  for (const nodeId of order) {
-    // 取消是人为中止：立刻停止调度剩余节点（收尾由下方终态判定统一处理）
-    if (isRunCancelled(runId)) {
-      cancelled = true;
-      break;
-    }
+  // 工作区先建：它是这次运行全部 Action 的共同工作场所与唯一交流场所。
+  const workspace = await createRunWorkspace({
+    workflowId: resolved.workflow.id,
+    runId,
+    instructions: workflowInstructions(resolved),
+  });
+  db.update(runs)
+    .set({
+      runDir: path.relative(process.cwd(), workspace.runDir),
+      imports: workspace.imports as unknown as Record<string, unknown>,
+    })
+    .where(eq(runs.id, runId))
+    .run();
 
-    const node = nodeById.get(nodeId);
-    if (!node) continue;
+  // 文件输入落进工作区：模型的 cwd 是工作区，上传目录在它之外读不到。
+  const runInputs = materializeFileInputs(rawInputs, workspace);
 
-    if (skipped.has(nodeId)) {
-      updateRunNode(runId, nodeId, {
-        status: "skipped",
-        finishedAt: new Date(),
-      });
-      continue;
-    }
+  // 会话 id 就是节点 id；每个 Action 在开跑前把自己的落库上下文登记进来，
+  // 事件回调据此把 dsh 事件即时写成 run_events / node_usage。
+  const sinks = new Map<string, EventSinkContext>();
+  const proc = await launchRun(workspace, {
+    onCrash: (message) => {
+      firstError ??= message;
+    },
+    onSessionEvent: (sessionId, event) => {
+      const sink = sinks.get(sessionId);
+      if (sink) recordSessionEvent(sink, event);
+    },
+  });
+  runProcesses.set(runId, proc);
 
-    try {
-      if (node.kind === "input") {
+  try {
+    for (const nodeId of order) {
+      // 取消是人为中止：立刻停止调度剩余节点（收尾由下方终态判定统一处理）
+      if (isRunCancelled(runId)) {
+        cancelled = true;
+        break;
+      }
+
+      const node = nodeById.get(nodeId);
+      if (!node) continue;
+
+      if (skipped.has(nodeId)) {
+        updateRunNode(runId, nodeId, {
+          status: "skipped",
+          finishedAt: new Date(),
+        });
+        continue;
+      }
+
+      try {
+        if (node.kind === "input") {
+          updateRunNode(runId, nodeId, {
+            status: "running",
+            startedAt: new Date(),
+          });
+          const value = runInputs[nodeId];
+          if (!value) throw new Error("输入节点缺少运行输入");
+          const outs: Record<string, PortValue> = { value };
+          outputsByNode.set(nodeId, outs);
+          updateRunNode(runId, nodeId, {
+            status: "success",
+            outputs: outs,
+            finishedAt: new Date(),
+          });
+          continue;
+        }
+
+        // 汇集上游输入
+        const nodeInputs: Record<string, PortValue> = {};
+        for (const port of node.inputs) {
+          const edge = edges.find(
+            (e) => e.targetNodeId === nodeId && e.targetPort === port.name,
+          );
+          const value = edge
+            ? outputsByNode.get(edge.sourceNodeId)?.[edge.sourcePort]
+            : undefined;
+          if (!value) {
+            throw new Error(`输入端口「${port.name}」没有可用的上游值`);
+          }
+          nodeInputs[port.name] = value;
+        }
+
         updateRunNode(runId, nodeId, {
           status: "running",
           startedAt: new Date(),
+          inputs: nodeInputs,
         });
-        const value = runInputs[nodeId];
-        if (!value) throw new Error("输入节点缺少运行输入");
-        const outs: Record<string, PortValue> = { value };
+
+        let outs: Record<string, PortValue>;
+        if (node.kind === "output") {
+          // 输出节点：上游值直接透传
+          outs = { value: nodeInputs.value };
+        } else {
+          const nodeRow = resolved.nodeRows.get(nodeId);
+          if (!nodeRow?.actionId) {
+            throw new Error("Action 节点缺少 actionId");
+          }
+          outs = await runActionNode({
+            runId,
+            node,
+            actionId: nodeRow.actionId,
+            inputs: nodeInputs,
+            proc,
+            workspace,
+            sinks,
+          });
+        }
+        // 节点跑完时运行已被取消：cancelRun 已把它标 cancelled，不再翻回 success
+        if (isRunCancelled(runId)) {
+          cancelled = true;
+          break;
+        }
         outputsByNode.set(nodeId, outs);
         updateRunNode(runId, nodeId, {
           status: "success",
           outputs: outs,
           finishedAt: new Date(),
         });
-        continue;
-      }
-
-      // 汇集上游输入
-      const nodeInputs: Record<string, PortValue> = {};
-      for (const port of node.inputs) {
-        const edge = edges.find(
-          (e) => e.targetNodeId === nodeId && e.targetPort === port.name,
-        );
-        const value = edge
-          ? outputsByNode.get(edge.sourceNodeId)?.[edge.sourcePort]
-          : undefined;
-        if (!value) {
-          throw new Error(`输入端口「${port.name}」没有可用的上游值`);
+      } catch (err) {
+        // session.abort 会让正在跑的 prompt 抛错——那是被取消而不是失败，不记 error
+        if (isRunCancelled(runId)) {
+          updateRunNode(runId, nodeId, {
+            status: "cancelled",
+            finishedAt: new Date(),
+          });
+          cancelled = true;
+          break;
         }
-        nodeInputs[port.name] = value;
-      }
-
-      updateRunNode(runId, nodeId, {
-        status: "running",
-        startedAt: new Date(),
-        inputs: nodeInputs,
-      });
-
-      let outs: Record<string, PortValue>;
-      if (node.kind === "output") {
-        // 输出节点：上游值直接透传
-        outs = { value: nodeInputs.value };
-      } else {
-        const nodeRow = resolved.nodeRows.get(nodeId);
-        if (!nodeRow?.actionId) {
-          throw new Error("Action 节点缺少 actionId");
-        }
-        outs = await runActionNode({
-          runId,
-          node,
-          actionId: nodeRow.actionId,
-          inputs: nodeInputs,
-        });
-      }
-      // 节点跑完时运行已被取消：cancelRun 已把它标 cancelled，不再翻回 success
-      if (isRunCancelled(runId)) {
-        cancelled = true;
-        break;
-      }
-      outputsByNode.set(nodeId, outs);
-      updateRunNode(runId, nodeId, {
-        status: "success",
-        outputs: outs,
-        finishedAt: new Date(),
-      });
-    } catch (err) {
-      // session.abort 会让正在跑的 prompt 抛错——那是被取消而不是失败，不记 error
-      if (isRunCancelled(runId)) {
+        const message = err instanceof Error ? err.message : String(err);
         updateRunNode(runId, nodeId, {
-          status: "cancelled",
+          status: "failed",
+          error: message,
           finishedAt: new Date(),
         });
-        cancelled = true;
-        break;
+        firstError ??= `节点「${node.label}」失败：${message}`;
+        for (const id of downstreamOf(nodeId, edges)) skipped.add(id);
       }
-      const message = err instanceof Error ? err.message : String(err);
-      updateRunNode(runId, nodeId, {
-        status: "failed",
-        error: message,
-        finishedAt: new Date(),
-      });
-      firstError ??= `节点「${node.label}」失败：${message}`;
-      for (const id of downstreamOf(nodeId, edges)) skipped.add(id);
+    }
+
+  } finally {
+    // 无论成败都把子进程收束到静止：一个运行的进程树不许活过它的运行。
+    runProcesses.delete(runId);
+    try {
+      await proc.dispose();
+    } catch (err) {
+      console.error("[engine] 子进程收束失败", runId, err);
     }
   }
 
@@ -284,7 +344,7 @@ async function executeRun(
 }
 
 /**
- * 取消运行：abort 掉所有 running 节点的 opencode 会话，把它们标 cancelled、
+ * 取消运行：取消子进程里所有 running 节点的会话，把它们标 cancelled、
  * 未开始的节点标 skipped、run 标 cancelled。同时立进程级取消标记，让
  * executeRun 在下一个节点开始前停止调度。HTTP 入口在阶段二接。
  */
@@ -308,23 +368,14 @@ export async function cancelRun(runId: string): Promise<CancelRunResult> {
     .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "running")))
     .all();
 
+  const proc = runProcesses.get(runId);
   for (const node of running) {
-    if (!node.sessionId) continue;
-    // 事件流与会话都按 directory 作用域隔离，abort 必须带该节点的工作区路径
-    const workspace = path.join(DATA_DIR, "runs", runId, node.nodeId);
+    if (!node.sessionId || !proc) continue;
     try {
-      const client = await getOpencodeClient(workspace);
-      // 客户端 fetch 已全局不设超时（见 longHaulFetch）：abort 这类控制面调用
-      // 必须自带有界 signal，否则 opencode 卡死时取消运行会永远挂起
-      const res = await client.session.abort(
-        { sessionID: node.sessionId, directory: workspace },
-        { signal: AbortSignal.timeout(10_000) },
-      );
-      if (res.error) {
-        console.error("[engine] 中止会话失败", node.sessionId, res.error);
-      }
+      await proc.cancel(node.sessionId);
     } catch (err) {
-      console.error("[engine] 中止会话异常", node.sessionId, err);
+      // 子进程可能已随崩溃退出；取消的权威结果是下面写下的终态，不是这次调用。
+      console.error("[engine] 取消会话失败", node.sessionId, err);
     }
   }
 
@@ -390,4 +441,53 @@ function failWholeRun(runId: string, message: string): void {
   } catch (err) {
     console.error("[engine] 运行失败状态落库失败", err);
   }
+}
+
+/**
+ * 工作流级共同指令，物化为工作区的 AGENTS.md。
+ * 上游 agent-instructions 从会话 cwd 向上发现它，因此这次运行的每个 Action
+ * 都无条件读到同一份（对应「在项目文件夹里起 agent」的体验）。
+ */
+function workflowInstructions(resolved: ResolvedWorkflow): string {
+  const lines = [
+    `# ${resolved.workflow.name}`,
+    "",
+    "你是这个工作流里的一个 Action。本目录是本次运行的工作区，也是各 Action 之间",
+    "唯一的交流场所：实质内容一律写成文件，读上游的东西也一律读文件。",
+    "",
+    "- 只在本目录内读写，不要访问工作区以外的路径。",
+    "- 结构化输出只用来报告产物路径，不要往里塞长文本。",
+    "- 声明了的产物必须真的写出来：文件不存在，本节点即判失败。",
+  ];
+  if (resolved.workflow.description) {
+    lines.splice(2, 0, resolved.workflow.description, "");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * 把文件类运行输入拷进工作区的 inputs/ 并改写它的 PortValue 路径。
+ * 上传目录在工作区之外，模型的 cwd 是工作区，不搬进来它根本读不到。
+ */
+function materializeFileInputs(
+  inputs: Record<string, PortValue>,
+  workspace: RunWorkspace,
+): Record<string, PortValue> {
+  const out: Record<string, PortValue> = {};
+  for (const [nodeId, value] of Object.entries(inputs)) {
+    if (value.kind !== "file") {
+      out[nodeId] = value;
+      continue;
+    }
+    const name = safeBasename(value.file.name || value.file.path);
+    const destDir = path.join(workspace.workspaceDir, WORKSPACE_INPUTS_SUBDIR, nodeId);
+    fs.mkdirSync(destDir, { recursive: true });
+    const dest = path.join(destDir, name);
+    fs.copyFileSync(path.join(DATA_DIR, value.file.path), dest);
+    out[nodeId] = {
+      kind: "file",
+      file: { ...value.file, path: path.relative(DATA_DIR, dest), name },
+    };
+  }
+  return out;
 }

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-OntoFlow is a single-process local workbench: reusable Actions wired into DAG workflows, each Action node executed in its own session on a local opencode server. Read [CONTEXT.md](CONTEXT.md) before naming anything.
+OntoFlow is a local workbench: Actions wired into workflow graphs, each run getting its own workspace directory and its own DeepSeek Harness subprocess, each Action a session inside it. Read [CONTEXT.md](CONTEXT.md) before naming anything.
 
 ## Stance: no compatibility layers
 
@@ -22,8 +22,10 @@ src/db/           Drizzle schema + better-sqlite3 singleton (WAL, foreign_keys=O
 src/lib/          pure, DB-free: graph.ts (validate/topo/downstream), values.ts, http.ts
 src/server/       server-only services; client code imports no value from here
   engine/           runner.ts (orchestration/cancel), action.ts (one node), reconcile.ts (startup)
-  opencode/         server singleton, per-workspace event pump, usage rollup;
-                    the SDK is imported only here and in engine/action.ts
+  harness/          DeepSeek Harness absorption: composition generation, run
+                    workspace, subprocess + stdio JSON-RPC, and rpc/ (the cordis
+                    plugin the subprocess loads). The @deepseek-ai closure is
+                    imported only here
   writers/          per-library write<Kind>() + registry + list.ts query contract + used-by guard
   monitor/          read-only aggregation, except cleanup.ts — the one destructive path
                     (deletes run_events and runs rows and data/runs/<id>; dryRun previews it)
@@ -39,7 +41,7 @@ _reference/       gitignored third-party source, excluded from tsconfig; never i
 
 ## Commands
 
-Run everything from the repository root: `data/` resolves from `process.cwd()` in `src/db/index.ts`, `src/server/fs-safety.ts`, `src/server/opencode/server.ts`, and `drizzle.config.ts`, so another working directory is another database. The opencode CLI (>= 1.18) must be on PATH; `getOpencodeUrl` reuses whatever already answers on `127.0.0.1:4977` instead of spawning a second one, and a reused server keeps the `opencodeConfig` and `ONTOFLOW_DB_PATH` of whoever spawned it — both arrive as spawn-time environment and cannot be changed afterwards. Run `lsof -ti tcp:4977 | xargs kill` after editing `opencodeConfig`, or when an opencode from another working directory may hold the port: otherwise new variants are silently inert and a Tool writes into another database.
+Run everything from the repository root: `data/` resolves from `process.cwd()` in `src/db/index.ts`, `src/server/fs-safety.ts`, and `drizzle.config.ts`, so another working directory is another database. No external service has to be running — the engine is the `@deepseek-ai` npm closure booted inside a per-run subprocess ([ADR-0006](docs/adr/0006-deepseek-harness-as-execution-engine.md)). What must exist is the model credential: put `DEEPSEEK_API_KEY` in `.env.local` (gitignored) and export it before any command that runs a model. Credentials travel by reference name only: the value is picked from the Next process environment at spawn time and never enters a composition file, a log, or a run directory.
 
 ```sh
 npm install
@@ -52,6 +54,10 @@ npm run check       # typecheck && test; run this before declaring work done
 npm test            # vitest run over src/**/*.test.ts and scripts/**/*.test.ts
 npm run test:e2e    # playwright over e2e/; workers: 1
 npx playwright test e2e/<name>.spec.ts   # one spec
+
+# 花钱的冒烟（真实调用模型，需要 DEEPSEEK_API_KEY）
+npx tsx scripts/smoke-harness.ts    # 只验子进程：boot、一轮对话、产物、结构化输出、收束
+npx tsx scripts/smoke-engine.ts     # 验整条引擎：两 Action 节点的线性工作流经 startRun 跑通
 ```
 
 ### Checks
@@ -81,7 +87,7 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 - **Entity-body validation lives in the writer's `parse…Payload`** (workflow's is `parseGraphPayload`); a route hand-narrows only its own non-entity params. All of it is hand-written `typeof` narrowing — there is no schema library.
 - **Write paths return a result object; the engine throws.** `runner.ts` turns a thrown error into `run_nodes.error` plus skipped downstream nodes. New service modules use `WriteResult` with `writeOk`/`writeFail` from `@/server/writers/types`; `folders.ts` and `revisions.ts` still carry private structurally identical `Result<T>` copies — converge on `WriteResult`, never add a fourth. `fs-safety.ts` and `monitor/cleanup.ts` throw deliberately and their callers map the throw.
 - **better-sqlite3 is synchronous.** Drizzle calls end in `.get()` / `.all()` / `.run()`; never `await db.…`.
-- Raw SQL goes through drizzle's `sql` tag and only where the query builder cannot express the aggregate: `monitor/`, `writers/list.ts`, `revisions.ts`, `opencode/server.ts`, `api/runs/route.ts`. User input inside `LIKE` is escaped and paired with `escape '\'`.
+- Raw SQL goes through drizzle's `sql` tag and only where the query builder cannot express the aggregate: `monitor/`, `writers/list.ts`, `revisions.ts`, `api/runs/route.ts`. User input inside `LIKE` is escaped and paired with `escape '\'`.
 - Process-level mutable state is parked on `globalThis` under an `ontoflow`-prefixed key so HMR cannot lose it: `ontoflowDb`, `ontoflowOpencodeServer`, `ontoflowCancelledRuns`, `ontoflowSessionRoutes`, `ontoflowSessionPumps`, `ontoflowSessionErrors`, and the delta buffers. A module-level `const map = new Map()` is the bug this prevents.
 - A server-module unit test assigns an in-memory database to `globalThis.ontoflowDb` and then `await import()`s the module under test; a static import reaches the real `data/ontoflow.db`.
 - **There are no Server Actions.** Every mutation is a `fetch` to `/api/*`; new pages start with `"use client"` and load data in `useEffect`.
@@ -91,24 +97,29 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 - Workflows never enter folders; gate every folder path on `isFolderEntityKind`, not an ad-hoc comparison ([ADR-0005](docs/adr/0005-folders-not-tags.md)).
 - **Delete protection is per-owner and there are exactly three.** The four referenceable libraries answer 409 through `usedByNames()`; workflow DELETE has its own running-run guard; folder DELETE has its own name-collision guard. Do not add a fourth, and do not hand-write a reference join — `src/server/references.ts` is the only module that joins references.
 - **Every entity write records a revision inside the same transaction**, capturing the complete definition including relations, and rollback replays the same `write<Kind>()`; a route that can reach revision restore carries `import "@/server/writers";` or restore silently answers 501.
-- Untrusted paths pass through `@/server/fs-safety` (`isWithinData` at the request boundary, `resolveWithinData` and `safeBasename` at use); opencode executes whatever lands in a run workspace.
+- Untrusted paths pass through `@/server/fs-safety` (`isWithinData` at the request boundary, `resolveWithinData` and `safeBasename` at use); the run subprocess reads and writes whatever is in its workspace.
 - Ids are `crypto.randomUUID()` from the schema default; a caller supplies an id only when it must return that id before insert or preserve client-side edge references.
 - **Nominal port typing is a runtime rule, not a TypeScript one.** Two ports connect only when their `objectTypeId` values are equal ([ADR-0002](docs/adr/0002-nominal-port-typing.md)); ids stay bare `string`.
 - **A canvas node is a reference to the shared Action**, so editing it from the canvas edits that Action everywhere ([ADR-0004](docs/adr/0004-canvas-edits-the-shared-action.md)).
 - Input and output node ports are always named `"value"`.
-- A Tool's `code` is a standalone opencode custom tool that Bun executes inside the node workspace. It cannot import anything from this repository; it reaches SQLite through `bun:sqlite` and `process.env.ONTOFLOW_DB_PATH`, shares that file with the Next process, and therefore sets `busy_timeout` and stays write-light.
-- Adding or changing a model is a two-file change: `opencodeConfig` in `src/server/opencode/server.ts` declares the four reasoning-effort `variants` — the only channel by which 思考强度 reaches the model — and `upsertModel` in `scripts/seed.ts` populates the `models` table. No route writes `models`, and a model without declared variants has no effort levels.
+- **Tools are currently inert.** The `tools.code` column still holds opencode custom-tool source and nothing materializes it into a run, so a Tool reference has no effect on execution. M3 converts the column to cordis plugin source materialized into `<run>/plugins/` and included by the per-run composition; do not build on the current contents.
+- A Skill referenced by an Action is registered as a **runtime skill** on that session's scope: the model sees its name and description in the skill catalogue and loads it if it judges it relevant. It is not injected. Anything that must always apply belongs in the Action's rule or the workflow-level instructions materialized as `workspace/AGENTS.md`.
+- A `models` row's `providerId` is a **dsh provider route**, not a vendor name: `llm-deepseek` registers exactly `deepseek-official`. Adding a model means `upsertModel` in `scripts/seed.ts` plus, for a route no adapter serves yet, a new entry in `runCompositionEntries`. No route writes `models`.
 
-### The opencode seam
+### The harness seam
 
-Every rule here was learned from a production failure. Read the header comments of `src/server/opencode/server.ts` and `src/server/engine/action.ts`, and the engine spec in [docs/DESIGN.md](docs/DESIGN.md), before touching sessions, events, usage, or cancellation.
+Every rule here was learned the hard way while replacing opencode with dsh. Read the header comments of `src/server/harness/runtime.ts`, `src/server/harness/rpc/server.ts` and `src/server/engine/action.ts` before touching sessions, events, usage, or cancellation.
 
-- **All opencode traffic goes through `longHaulFetch`.** Node's undici severs a model turn past its default header and body timeouts, and Next's patched `globalThis.fetch` silently drops the `dispatcher` field.
-- **Because that client is unbounded, every non-generating call carries its own `AbortSignal.timeout`**; only the generation prompts run unbounded, and cancellation is their timeout.
-- Pass `directory` on every session call and subscribe the event pump per workspace: opencode scopes its event stream by directory, so a global subscription receives nothing and an abort without it never lands.
-- **Structured output is a prompt convention.** Do not use opencode's `format: json_schema`: it is implemented with a synthetic tool plus `tool_choice: required`, which the reasoning models in use reject with 400.
-- Token usage is upserted by `(sessionId, messageId)` and rolled up with `SUM`; one assistant message emits `message.updated` repeatedly, so incrementing counts it many times over.
+- **One run, one subprocess, one workspace.** `executeRun` creates the run directory, spawns `node --import tsx src/server/harness/runner.ts <cordis.yml>`, and disposes it in a `finally`. There is no build step for server code: the subprocess loads the same TypeScript the Next process does.
+- **The RPC plugin is named in the composition by absolute path, not by package name.** The cordis loader resolves bare specifiers from its own location inside `node_modules`, and this repository has no self-referencing symlink there, so a bare name fails at boot. `boot`'s `bareModuleBaseUrl` does not rescue it.
+- **stdout belongs to the protocol.** The per-run composition must never include a stdout logger; harness stderr goes to `<run>/logs/harness.stderr.log`.
+- **思考强度 reaches the model only through the `agent/request` waterfall.** `AgentOptions` carries just provider/model/maxTokens, and the `GenerateOptions` handed to `llm/stream` is frozen — assigning to it throws mid-turn. The listener is registered on the session's own scope in `composeNodeScope`, so it is filtered to that agent and released with the session.
+- **Overwrite the effort unconditionally.** agent-loop resolves the adapter default into the call config before the waterfall runs, so a "only set it when unset" guard never fires.
+- **Structured output is a scope-registered tool, not a provider feature.** Each session registers its own `structured_output` with the real schema; two-phase commit on `tools/result` is what makes the captured value authoritative.
+- Token usage arrives as one `usage` chunk per step and does not accumulate, so summing is correct — unlike opencode's repeated `message.updated`, there is no double-count hazard here.
+- **Session events must be written to SQLite as they arrive.** Both SSE endpoints poll the database and there is no in-process pubsub, so `onSessionEvent` writes `run_events` rows live; batching them until the node finishes makes the run page look frozen.
 - **The run snapshot is written before the session is created**, from ports re-read at execution time; a run whose ports changed mid-flight aborts rather than produce output the snapshot cannot explain.
+- **A declared artifact that is not on disk fails the node.** The model saying it wrote the file is not evidence; this is the only mechanical backstop the dual-channel result has ([ADR-0008](docs/adr/0008-artifacts-not-values.md)).
 - **`cancelled` is a terminal state distinct from `failed`** and leaves `run.error` null; a prompt that throws after cancellation is cancelled, not failed.
 - **A run never stays `running`.** Terminal state is written by `executeRun`, by `cancelRun`, by `failWholeRun`, and at process start by `reconcileOrphanRuns` through `src/instrumentation.ts`.
 - Both SSE endpoints poll SQLite; there is no in-process pubsub, and the run stream ends only after three silent ticks past terminal state.
@@ -120,7 +131,7 @@ A comment that records why a workaround exists is the rule itself — `longHaulF
 ## Decisions and the glossary
 
 - [CONTEXT.md](CONTEXT.md) owns domain vocabulary and semantics only; keep implementation out of it and update it the moment a term is settled.
-- [docs/DESIGN.md](docs/DESIGN.md) owns the v1 contract and the opencode engine spec; [docs/DESIGN-V2.md](docs/DESIGN-V2.md) owns the list, folder, reference, revision, and shared-UI contracts.
+- [docs/DESIGN.md](docs/DESIGN.md) owns the v1 contract and the engine spec — its opencode sections are stale until M5 rewrites them; [docs/DESIGN-V2.md](docs/DESIGN-V2.md) owns the list, folder, reference, revision, and shared-UI contracts.
 - [README.md](README.md) is the product pitch and the only document carrying the demo walkthrough; it duplicates the startup and test commands from the Commands block above and restates behavior the engine spec owns, so change README, that block, and the spec together or change none of them.
 - The eight `/api/monitor/*` routes have no written contract; `src/server/monitor/` is their source of truth.
 - An irreversible, surprising, genuinely traded-off decision gets an ADR at `docs/adr/NNNN-slug.md`. The three-of-three test and the numbering rule live in [ADR-FORMAT.md](.claude/skills/domain-modeling/ADR-FORMAT.md); the house shape is a Chinese title, the decision, then a `理由：` paragraph ending in the cost, as in [ADR-0005](docs/adr/0005-folders-not-tags.md).

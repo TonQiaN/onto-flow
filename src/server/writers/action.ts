@@ -13,8 +13,8 @@ import {
 import { recordRevision } from "@/server/revisions";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
 
-type Effort = "low" | "medium" | "high" | "max";
-const EFFORTS: readonly string[] = ["low", "medium", "high", "max"];
+type Effort = "off" | "low" | "high" | "max";
+const EFFORTS: readonly string[] = ["off", "low", "high", "max"];
 
 export interface PortPayload {
   direction: "input" | "output";
@@ -86,9 +86,9 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
     return writeFail(400, "指定的模型不存在");
 
   const effortRaw =
-    body.reasoningEffort === undefined ? "max" : body.reasoningEffort;
+    body.reasoningEffort === undefined ? "high" : body.reasoningEffort;
   if (typeof effortRaw !== "string" || !EFFORTS.includes(effortRaw))
-    return writeFail(400, "思考强度必须是 low/medium/high/max 之一");
+    return writeFail(400, "思考强度必须是 off/low/high/max 之一");
   const reasoningEffort = effortRaw as Effort;
 
   if (!Array.isArray(body.ports)) return writeFail(400, "ports 必须是数组");

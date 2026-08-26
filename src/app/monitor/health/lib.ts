@@ -4,7 +4,7 @@
  * 服务端接口由监控 API 模块提供，本文件是**客户端侧的契约声明**，
  * 唯一权威是 `@/server/monitor/types`：
  * - `GET /api/monitor/health` → HealthPayload
- *   `{ opencode, eventPump:{activeSessions,routes[]}, db:{path,bytes,tables[]}, disk, orphanRuns[], counts }`
+ *   `{ engine, runProcesses:{activeRuns,runs[]}, db:{path,bytes,tables[]}, disk, orphanRuns[], counts }`
  * - `POST /api/monitor/cleanup` `{ target, beforeDays, dryRun }` → CleanupResult
  *   `{ target, affected:{count,bytes?}, deleted, detail }`
  * - `GET /api/references/orphans` → `{ items: Array<{kind,id,name,href}> }`（已存在，见 DESIGN-V2 第三节）
@@ -23,21 +23,24 @@ export const WORKSPACE_WARN_BYTES = 2 * 1024 * 1024 * 1024;
 /* 类型                                                                        */
 /* -------------------------------------------------------------------------- */
 
-export interface OpencodeHealth {
-  /** server 是否可达（HTTP 探活成功） */
-  reachable: boolean;
-  /** 基址，通常是 http://127.0.0.1:4977 */
-  url: string;
-  version: string | null;
-  /** 不可达时的原因 */
+/** 引擎就绪：没有常驻外部服务可探，就绪只看入口与凭据（ADR-0006） */
+export interface EngineHealth {
+  /** 运行子进程的 runner 入口路径 */
+  runnerEntry: string;
+  /** 入口文件在不在 */
+  ready: boolean;
+  /** 模型凭据的引用名 */
+  credentialRef: string;
+  /** 该引用名在服务端进程环境里有没有值（只报有无） */
+  credentialConfigured: boolean;
   error: string | null;
 }
 
-/** 事件泵状态：每个活跃会话一个泵，路由表是 sessionID→(runId,nodeId) */
-export interface EventPumpHealth {
-  activeSessions: number;
-  /** 服务端 eventPump.routes 是明细数组，这里只留条目数（页面只用计数） */
-  routeEntries: number;
+/** 在跑的运行子进程：一次运行一个（ADR-0007） */
+export interface RunProcessesHealth {
+  activeRuns: number;
+  /** 服务端 runProcesses.runs 是明细数组，这里只留条目数（页面只用计数） */
+  runEntries: number;
 }
 
 export interface TableStat {
@@ -88,8 +91,8 @@ export interface HealthCounts {
 }
 
 export interface HealthPayload {
-  opencode: OpencodeHealth;
-  eventPump: EventPumpHealth;
+  engine: EngineHealth;
+  runProcesses: RunProcessesHealth;
   /** 服务端键名是 db */
   database: DatabaseHealth;
   disk: DiskHealth;
@@ -179,23 +182,23 @@ function asOrphanRuns(value: unknown): OrphanRun[] {
 
 export function asHealth(value: unknown): HealthPayload {
   const o = rec(value);
-  const oc = rec(o.opencode);
-  const pump = rec(o.eventPump);
+  const engine = rec(o.engine);
+  const procs = rec(o.runProcesses);
   const database = rec(o.db);
   const disk = rec(o.disk);
   const counts = rec(o.counts);
   return {
-    opencode: {
-      reachable: oc.reachable === true,
-      url: str(oc.url),
-      version: strOrNull(oc.version),
-      error: strOrNull(oc.error),
+    engine: {
+      runnerEntry: str(engine.runnerEntry),
+      ready: engine.ready === true,
+      credentialRef: str(engine.credentialRef),
+      credentialConfigured: engine.credentialConfigured === true,
+      error: strOrNull(engine.error),
     },
-    eventPump: {
-      activeSessions: num(pump.activeSessions),
-      // routes 是 {sessionId,runId,nodeId} 的**数组**，不是计数：
-      // 以前直接 num(routes) 恒为 0，页面因此永远显示「路由表 0 条」并误报计数不一致
-      routeEntries: Array.isArray(pump.routes) ? pump.routes.length : 0,
+    runProcesses: {
+      activeRuns: num(procs.activeRuns),
+      // runs 是 {runId,pid} 的**数组**，不是计数：直接 num(runs) 会恒为 0。
+      runEntries: Array.isArray(procs.runs) ? procs.runs.length : 0,
     },
     database: {
       path: str(database.path),

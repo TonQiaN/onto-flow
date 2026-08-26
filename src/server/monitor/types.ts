@@ -216,24 +216,27 @@ export interface CostPayload {
 
 // ---------------- 系统健康 ----------------
 
-export interface HealthOpencode {
-  url: string;
-  reachable: boolean;
-  version?: string;
+export interface HealthEngine {
+  /** 运行子进程的 runner 入口绝对路径 */
+  runnerEntry: string;
+  /** 入口文件在不在——不在则一次运行都起不来 */
+  ready: boolean;
+  /** 模型凭据引用名 */
+  credentialRef: string;
+  /** 该引用名在本进程环境里有没有值（只看有无，不读值） */
+  credentialConfigured: boolean;
   error?: string;
 }
 
-export interface EventPumpRoute {
-  sessionId: string;
+export interface LiveRunProcess {
   runId: string;
-  nodeId: string;
+  pid: number | null;
 }
 
-export interface HealthEventPump {
-  /** 进程内仍在运行的事件泵（会话）数量 */
-  activeSessions: number;
-  /** sessionID → (runId,nodeId) 路由表快照 */
-  routes: EventPumpRoute[];
+export interface HealthRunProcesses {
+  /** 进程内在跑的运行子进程数（一次运行一个，见 ADR-0007） */
+  activeRuns: number;
+  runs: LiveRunProcess[];
 }
 
 export interface HealthTable {
@@ -279,11 +282,11 @@ export interface HealthCounts {
 }
 
 export interface HealthPayload {
-  opencode: HealthOpencode;
-  eventPump: HealthEventPump;
+  engine: HealthEngine;
+  runProcesses: HealthRunProcesses;
   db: HealthDb;
   disk: HealthDisk;
-  /** status='running' 但进程内已无会话路由的运行数（多半是上次进程留下的） */
+  /** status='running' 但进程内已无对应子进程的运行（多半是上次进程留下的） */
   orphanRuns: OrphanRun[];
   counts: HealthCounts;
 }
