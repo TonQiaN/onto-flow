@@ -19,7 +19,7 @@ src/app/          Next 16 App Router: every page and every REST route; no middle
 src/instrumentation.ts   boot hook; the only server entry point that is not a route
 src/components/library/  list/folder/reference/revision UI the five library pages reuse
 src/db/           Drizzle schema + better-sqlite3 singleton (WAL, foreign_keys=ON)
-src/lib/          pure, DB-free: graph.ts (validate/topo/downstream), values.ts, http.ts
+src/lib/          pure, DB-free: graph.ts (validate/back-edge/exits), values.ts, http.ts
 src/server/       server-only services; client code imports no value from here
   engine/           runner.ts (orchestration/cancel), action.ts (one node), reconcile.ts (startup)
   harness/          DeepSeek Harness absorption: composition generation, run
@@ -99,7 +99,10 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 - **Every entity write records a revision inside the same transaction**, capturing the complete definition including relations, and rollback replays the same `write<Kind>()`; a route that can reach revision restore carries `import "@/server/writers";` or restore silently answers 501.
 - Untrusted paths pass through `@/server/fs-safety` (`isWithinData` at the request boundary, `resolveWithinData` and `safeBasename` at use); the run subprocess reads and writes whatever is in its workspace.
 - Ids are `crypto.randomUUID()` from the schema default; a caller supplies an id only when it must return that id before insert or preserve client-side edge references.
-- **Nominal port typing is a runtime rule, not a TypeScript one.** Two ports connect only when their `objectTypeId` values are equal ([ADR-0002](docs/adr/0002-nominal-port-typing.md)); ids stay bare `string`.
+- **Nominal port typing is an edit-time rule, not a TypeScript one and not a runtime one.** Two ports connect only when their `objectTypeId` values are equal ([ADR-0002](docs/adr/0002-nominal-port-typing.md), amended by [ADR-0008](docs/adr/0008-artifacts-not-values.md)); ids stay bare `string`. Nothing checks at runtime that the artifact holds what its type claims — the only mechanical backstop is that a declared artifact must exist on disk.
+- **The workflow graph is not a DAG.** Fan-out is one output port with several edges, synthesis is one input port with several edges, and an edge from an exit port back to an upstream Action is a legal cycle ([ADR-0009](docs/adr/0009-exit-ports-and-back-edges.md)). `classifyEdges` decides which edges are back edges by a stable DFS from the entry nodes, and that answer is load-bearing in three places: readiness ignores back edges (a node that waits on one deadlocks its own loop on the first pass), `downstreamOf` ignores them (or the closure swallows the whole cycle), and validation requires every back edge's target to declare a re-entry limit.
+- **Every output port declares an artifact path, and a branching Action reports its exit.** Ports sharing an `exitName` form one exit; the data-plane result names the exit taken and only that exit's edges activate, the rest go dead and their downstream is skipped. Re-entry bumps the whole loop body's round together, and round N writes under `rounds/N/` so an earlier round is never overwritten.
+- **A run with output nodes but none reached is a failure, not a success.** An unreached output node on an untaken branch is normal; all of them unreached means the run produced nothing.
 - **A canvas node is a reference to the shared Action**, so editing it from the canvas edits that Action everywhere ([ADR-0004](docs/adr/0004-canvas-edits-the-shared-action.md)).
 - Input and output node ports are always named `"value"`.
 - **Tools are currently inert.** The `tools.code` column still holds opencode custom-tool source and nothing materializes it into a run, so a Tool reference has no effect on execution. M3 converts the column to cordis plugin source materialized into `<run>/plugins/` and included by the per-run composition; do not build on the current contents.

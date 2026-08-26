@@ -169,6 +169,12 @@ export const actions = sqliteTable("actions", {
   })
     .notNull()
     .default("high"),
+  /** 被回边重入的上限；0 表示不可重入，不能作为回边的目标（ADR-0009） */
+  maxReentries: integer("max_reentries").notNull().default(0),
+  /** 重入次数耗尽时的收束方式：fail 判失败，accept 以最后一轮结果收束 */
+  onExhausted: text("on_exhausted", { enum: ["fail", "accept"] })
+    .notNull()
+    .default("fail"),
   ...timestamps,
 });
 
@@ -190,6 +196,12 @@ export const actionPorts = sqliteTable(
      * 下游经连线拿到的只是「去读这个路径」（ADR-0008）。输入端口恒为 null。
      */
     artifactPath: text("artifact_path"),
+    /**
+     * 输出端口所属的具名出口。null 是默认出口——节点没有分支，全部输出恒生效。
+     * 一旦有具名出口，该 Action 的每个输出端口都必须归属某个出口，运行时由数据面
+     * 的 exit 字段选中其一，只有它的出线激活（ADR-0009）。
+     */
+    exitName: text("exit_name"),
   },
   (t) => [
     uniqueIndex("action_ports_unique").on(t.actionId, t.direction, t.name),

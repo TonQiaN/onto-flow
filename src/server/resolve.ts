@@ -69,6 +69,8 @@ export async function resolveWorkflow(
   const toResolvedPort = (row: {
     name: string;
     objectTypeId: string;
+    artifactPath?: string | null;
+    exitName?: string | null;
   }): ResolvedPort => {
     const type = types.get(row.objectTypeId);
     return {
@@ -76,6 +78,8 @@ export async function resolveWorkflow(
       objectTypeId: row.objectTypeId,
       objectTypeName: type?.name ?? "未知类型",
       kind: type?.kind ?? "text",
+      artifactPath: row.artifactPath ?? null,
+      exitName: row.exitName ?? null,
     };
   };
 
@@ -91,6 +95,8 @@ export async function resolveWorkflow(
         outputs: ports
           .filter((p) => p.direction === "output")
           .map(toResolvedPort),
+        maxReentries: action?.maxReentries ?? 0,
+        onExhausted: action?.onExhausted ?? "fail",
       };
     }
     const type = row.objectTypeId ? types.get(row.objectTypeId) : undefined;

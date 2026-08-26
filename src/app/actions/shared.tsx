@@ -11,6 +11,10 @@ export interface ActionPortDto {
   objectTypeName: string;
   kind: Kind;
   position: number;
+  /** 输出端口写到工作区哪个文件（ADR-0008）；输入端口为 null */
+  artifactPath: string | null;
+  /** 输出端口所属的具名出口（ADR-0009）；无分支时为 null */
+  exitName: string | null;
 }
 
 export interface ActionDto {
@@ -21,6 +25,8 @@ export interface ActionDto {
   rule: string;
   modelId: string;
   reasoningEffort: ReasoningEffort;
+  maxReentries: number;
+  onExhausted: "fail" | "accept";
   ports: ActionPortDto[];
   skillIds: string[];
   toolIds: string[];

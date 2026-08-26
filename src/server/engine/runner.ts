@@ -16,9 +16,10 @@ import path from "node:path";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, runNodes, runs } from "@/db";
 import {
+  classifyEdges,
   downstreamOf,
-  topologicalOrder,
   validateGraph,
+  type ResolvedNode,
   type ValidationIssue,
 } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
@@ -156,16 +157,41 @@ export async function startRun(
   return { ok: true, runId };
 }
 
+/** 一次运行内同时执行的 Action 上限。扇出宽了也不会把并发无限放大。 */
+const MAX_CONCURRENT_NODES = 4;
+
+type NodeStatus = "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
+
+interface NodeState {
+  node: ResolvedNode;
+  status: NodeStatus;
+  /** 已经执行过几轮；第 0 轮是首次执行 */
+  round: number;
+  outputs: Record<string, PortValue>;
+  /** 完成时选中的出口名；undefined 表示还没跑完，null 表示默认出口 */
+  selectedExit?: string | null;
+}
+
+/** 一条边的当前状态。dead 表示它的来源出口没有被选中，永远不会送来值。 */
+type EdgeStatus = "pending" | "satisfied" | "dead";
+
+/**
+ * 图执行：就绪驱动、并行、按出口激活、按回边重入（ADR-0009）。
+ *
+ * 就绪判定只看**前向边**：环里的节点若同时等前驱和回边，第一轮永远等不齐。
+ * 回边被满足时不参与就绪，而是触发目标节点的一次重入。
+ */
 async function executeRun(
   runId: string,
   resolved: ResolvedWorkflow,
   rawInputs: Record<string, PortValue>,
 ): Promise<void> {
   const { nodes, edges } = resolved;
-  const nodeById = new Map(nodes.map((n) => [n.id, n]));
-  const order = topologicalOrder(nodes, edges);
-  const outputsByNode = new Map<string, Record<string, PortValue>>();
-  const skipped = new Set<string>();
+  const { backEdgeIds } = classifyEdges(nodes, edges);
+  const states = new Map<string, NodeState>(
+    nodes.map((n) => [n.id, { node: n, status: "pending" as NodeStatus, round: 0, outputs: {} }]),
+  );
+  const edgeStatus = new Map<string, EdgeStatus>(edges.map((e) => [e.id, "pending"]));
   let firstError: string | null = null;
   let cancelled = false;
 
@@ -186,8 +212,8 @@ async function executeRun(
   // 文件输入落进工作区：模型的 cwd 是工作区，上传目录在它之外读不到。
   const runInputs = materializeFileInputs(rawInputs, workspace);
 
-  // 会话 id 就是节点 id；每个 Action 在开跑前把自己的落库上下文登记进来，
-  // 事件回调据此把 dsh 事件即时写成 run_events / node_usage。
+  // 每个 Action 在开跑前把自己的落库上下文登记进来，事件回调据此把 dsh 事件
+  // 即时写成 run_events / node_usage。
   const sinks = new Map<string, EventSinkContext>();
   const proc = await launchRun(workspace, {
     onCrash: (message) => {
@@ -200,115 +226,252 @@ async function executeRun(
   });
   runProcesses.set(runId, proc);
 
-  try {
-    for (const nodeId of order) {
-      // 取消是人为中止：立刻停止调度剩余节点（收尾由下方终态判定统一处理）
-      if (isRunCancelled(runId)) {
-        cancelled = true;
-        break;
+  /**
+   * 一个入端口有没有前向入线。只被回边喂的端口（review-fix 里「意见」这种）
+   * 第一轮本来就没有值，不能参与就绪判定，否则整个环第一轮就死锁。
+   */
+  const portHasForward = (nodeId: string, portName: string): boolean =>
+    edges.some(
+      (e) => !backEdgeIds.has(e.id) && e.targetNodeId === nodeId && e.targetPort === portName,
+    );
+
+  /** 某个输入端口是否已被喂上：至少一条**前向**入线处于 satisfied。 */
+  const portFed = (nodeId: string, portName: string): boolean =>
+    edges.some(
+      (e) =>
+        !backEdgeIds.has(e.id) &&
+        e.targetNodeId === nodeId &&
+        e.targetPort === portName &&
+        edgeStatus.get(e.id) === "satisfied",
+    );
+
+  /** 某个输入端口是否已经没救：全部前向入线都 dead。 */
+  const portDead = (nodeId: string, portName: string): boolean => {
+    const forward = edges.filter(
+      (e) => !backEdgeIds.has(e.id) && e.targetNodeId === nodeId && e.targetPort === portName,
+    );
+    return forward.length > 0 && forward.every((e) => edgeStatus.get(e.id) === "dead");
+  };
+
+  /**
+   * 汇集一个节点各输入端口的值。一个端口可以接多条入线（那就是汇总），
+   * 所以每个端口拿到的是一个**列表**——下游要读齐全部上游产物，不是只读一份。
+   * 顺序按边 id 稳定，重跑时提示里的文件顺序不会晃。
+   */
+  const gatherInputs = (state: NodeState): Record<string, PortValue[]> => {
+    const out: Record<string, PortValue[]> = {};
+    const sorted = [...edges].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    for (const port of state.node.inputs) {
+      const values: PortValue[] = [];
+      for (const e of sorted) {
+        if (e.targetNodeId !== state.node.id || e.targetPort !== port.name) continue;
+        if (edgeStatus.get(e.id) !== "satisfied") continue;
+        const value = states.get(e.sourceNodeId)?.outputs[e.sourcePort];
+        if (value) values.push(value);
       }
+      if (values.length > 0) out[port.name] = values;
+    }
+    return out;
+  };
 
-      const node = nodeById.get(nodeId);
-      if (!node) continue;
+  /** 节点完成后：按选中的出口把出线标 satisfied，其余标 dead。 */
+  const settleOutgoing = (state: NodeState): void => {
+    for (const e of edges) {
+      if (e.sourceNodeId !== state.node.id) continue;
+      const port = state.node.outputs.find((p) => p.name === e.sourcePort);
+      const exitName = port?.exitName ?? null;
+      const taken = state.selectedExit === undefined || exitName === state.selectedExit;
+      edgeStatus.set(e.id, taken && state.outputs[e.sourcePort] ? "satisfied" : "dead");
+    }
+  };
 
-      if (skipped.has(nodeId)) {
-        updateRunNode(runId, nodeId, {
-          status: "skipped",
-          finishedAt: new Date(),
-        });
-        continue;
+  /** 出线全 dead 的节点被跳过，并把 dead 继续往下传。 */
+  const propagateSkips = (): void => {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const state of states.values()) {
+        if (state.status !== "pending") continue;
+        if (!state.node.inputs.some((p) => portDead(state.node.id, p.name))) continue;
+        state.status = "skipped";
+        updateRunNode(runId, state.node.id, { status: "skipped", finishedAt: new Date() });
+        for (const e of edges) {
+          if (e.sourceNodeId === state.node.id) edgeStatus.set(e.id, "dead");
+        }
+        changed = true;
       }
+    }
+  };
 
-      try {
-        if (node.kind === "input") {
-          updateRunNode(runId, nodeId, {
-            status: "running",
-            startedAt: new Date(),
-          });
-          const value = runInputs[nodeId];
-          if (!value) throw new Error("输入节点缺少运行输入");
-          const outs: Record<string, PortValue> = { value };
-          outputsByNode.set(nodeId, outs);
-          updateRunNode(runId, nodeId, {
-            status: "success",
-            outputs: outs,
-            finishedAt: new Date(),
-          });
-          continue;
-        }
-
-        // 汇集上游输入
-        const nodeInputs: Record<string, PortValue> = {};
-        for (const port of node.inputs) {
-          const edge = edges.find(
-            (e) => e.targetNodeId === nodeId && e.targetPort === port.name,
-          );
-          const value = edge
-            ? outputsByNode.get(edge.sourceNodeId)?.[edge.sourcePort]
-            : undefined;
-          if (!value) {
-            throw new Error(`输入端口「${port.name}」没有可用的上游值`);
-          }
-          nodeInputs[port.name] = value;
-        }
-
-        updateRunNode(runId, nodeId, {
-          status: "running",
-          startedAt: new Date(),
-          inputs: nodeInputs,
-        });
-
-        let outs: Record<string, PortValue>;
-        if (node.kind === "output") {
-          // 输出节点：上游值直接透传
-          outs = { value: nodeInputs.value };
-        } else {
-          const nodeRow = resolved.nodeRows.get(nodeId);
-          if (!nodeRow?.actionId) {
-            throw new Error("Action 节点缺少 actionId");
-          }
-          outs = await runActionNode({
-            runId,
-            node,
-            actionId: nodeRow.actionId,
-            inputs: nodeInputs,
-            proc,
-            workspace,
-            sinks,
-          });
-        }
-        // 节点跑完时运行已被取消：cancelRun 已把它标 cancelled，不再翻回 success
-        if (isRunCancelled(runId)) {
-          cancelled = true;
-          break;
-        }
-        outputsByNode.set(nodeId, outs);
-        updateRunNode(runId, nodeId, {
-          status: "success",
-          outputs: outs,
-          finishedAt: new Date(),
-        });
-      } catch (err) {
-        // session.abort 会让正在跑的 prompt 抛错——那是被取消而不是失败，不记 error
-        if (isRunCancelled(runId)) {
-          updateRunNode(runId, nodeId, {
-            status: "cancelled",
-            finishedAt: new Date(),
-          });
-          cancelled = true;
-          break;
-        }
-        const message = err instanceof Error ? err.message : String(err);
-        updateRunNode(runId, nodeId, {
+  /** 回边被满足：把目标节点连同它的前向下游重置，进入下一轮。 */
+  const reenter = (target: NodeState): boolean => {
+    const limit = target.node.maxReentries ?? 0;
+    if (target.round >= limit) {
+      if ((target.node.onExhausted ?? "fail") === "fail") {
+        target.status = "failed";
+        const message = `节点「${target.node.label}」重入次数已达上限 ${limit}`;
+        updateRunNode(runId, target.node.id, {
           status: "failed",
           error: message,
           finishedAt: new Date(),
         });
-        firstError ??= `节点「${node.label}」失败：${message}`;
-        for (const id of downstreamOf(nodeId, edges)) skipped.add(id);
+        firstError ??= message;
+      }
+      // accept：保留最后一轮的成功结果，回边不再跟进，循环自然收束。
+      return false;
+    }
+    const affected = downstreamOf(target.node.id, edges, backEdgeIds);
+    affected.add(target.node.id);
+    // 整个环体一起进下一轮：只给被回流的节点加轮次的话，环里其他节点会用
+    // 同一个产物路径把上一轮的东西覆盖掉，逐轮回看就没了依据。
+    const nextRound = target.round + 1;
+    for (const id of affected) {
+      const state = states.get(id);
+      if (!state) continue;
+      state.status = "pending";
+      state.selectedExit = undefined;
+      state.round = nextRound;
+      updateRunNode(runId, id, { status: "pending", error: null, finishedAt: null });
+      for (const e of edges) {
+        // 目标节点的入线要保留刚满足的那条回边，其余下游的边重新变回 pending。
+        if (affected.has(e.targetNodeId) && e.targetNodeId !== target.node.id) {
+          edgeStatus.set(e.id, "pending");
+        }
       }
     }
+    return true;
+  };
 
+  /** 一个节点跑完（成功）后的统一收尾：落库、结算出线、传播跳过、处理回边。 */
+  const onNodeSuccess = (state: NodeState): void => {
+    updateRunNode(runId, state.node.id, {
+      status: "success",
+      outputs: state.outputs,
+      finishedAt: new Date(),
+    });
+    state.status = "success";
+    settleOutgoing(state);
+    propagateSkips();
+    for (const e of edges) {
+      if (!backEdgeIds.has(e.id)) continue;
+      if (e.sourceNodeId !== state.node.id) continue;
+      if (edgeStatus.get(e.id) !== "satisfied") continue;
+      const target = states.get(e.targetNodeId);
+      if (target) reenter(target);
+    }
+  };
+
+  /** 挑出此刻可以开跑的节点。 */
+  const pickReady = (): NodeState[] => {
+    const ready: NodeState[] = [];
+    for (const state of states.values()) {
+      if (state.status !== "pending") continue;
+      if (state.node.kind === "input") {
+        ready.push(state);
+        continue;
+      }
+      const blocking = state.node.inputs.filter((p) => portHasForward(state.node.id, p.name));
+      if (blocking.every((p) => portFed(state.node.id, p.name))) ready.push(state);
+    }
+    return ready.sort((a, b) => (a.node.id < b.node.id ? -1 : 1));
+  };
+
+  const runOne = async (state: NodeState): Promise<void> => {
+    const nodeId = state.node.id;
+    if (state.node.kind === "input") {
+      updateRunNode(runId, nodeId, { status: "running", startedAt: new Date() });
+      const value = runInputs[nodeId];
+      if (!value) throw new Error("输入节点缺少运行输入");
+      state.outputs = { value };
+      onNodeSuccess(state);
+      return;
+    }
+
+    const nodeInputs = gatherInputs(state);
+    for (const port of state.node.inputs) {
+      // 只被回边喂的端口第一轮没有值是正常的，不算缺输入。
+      if (!portHasForward(nodeId, port.name)) continue;
+      if (!nodeInputs[port.name]?.length) {
+        throw new Error(`输入端口「${port.name}」没有可用的上游值`);
+      }
+    }
+    updateRunNode(runId, nodeId, {
+      status: "running",
+      startedAt: new Date(),
+      inputs: nodeInputs,
+      error: null,
+    });
+
+    if (state.node.kind === "output") {
+      // 输出节点只有一个 value 口，透传第一份（多条入线的输出节点没有意义）。
+      state.outputs = { value: nodeInputs.value[0] };
+      onNodeSuccess(state);
+      return;
+    }
+
+    const nodeRow = resolved.nodeRows.get(nodeId);
+    if (!nodeRow?.actionId) throw new Error("Action 节点缺少 actionId");
+    const result = await runActionNode({
+      runId,
+      node: state.node,
+      actionId: nodeRow.actionId,
+      inputs: nodeInputs,
+      proc,
+      workspace,
+      sinks,
+      round: state.round,
+    });
+    state.outputs = result.outputs;
+    state.selectedExit = result.selectedExit;
+    onNodeSuccess(state);
+  };
+
+  try {
+    const running = new Map<string, Promise<void>>();
+    for (;;) {
+      if (isRunCancelled(runId)) {
+        cancelled = true;
+        break;
+      }
+      // 有节点失败后不再启动新节点，但已在跑的等它们自己收束。
+      if (firstError === null) {
+        for (const state of pickReady()) {
+          if (running.size >= MAX_CONCURRENT_NODES) break;
+          state.status = "running";
+          const task = runOne(state)
+            .catch((err) => {
+              if (isRunCancelled(runId)) {
+                state.status = "cancelled";
+                updateRunNode(runId, state.node.id, {
+                  status: "cancelled",
+                  finishedAt: new Date(),
+                });
+                cancelled = true;
+                return;
+              }
+              const message = err instanceof Error ? err.message : String(err);
+              state.status = "failed";
+              updateRunNode(runId, state.node.id, {
+                status: "failed",
+                error: message,
+                finishedAt: new Date(),
+              });
+              firstError ??= `节点「${state.node.label}」失败：${message}`;
+              for (const e of edges) {
+                if (e.sourceNodeId === state.node.id) edgeStatus.set(e.id, "dead");
+              }
+              propagateSkips();
+            })
+            .finally(() => {
+              running.delete(state.node.id);
+            });
+          running.set(state.node.id, task);
+        }
+      }
+      if (running.size === 0) break;
+      await Promise.race(running.values());
+    }
+    await Promise.allSettled(running.values());
   } finally {
     // 无论成败都把子进程收束到静止：一个运行的进程树不许活过它的运行。
     runProcesses.delete(runId);
@@ -331,6 +494,18 @@ async function executeRun(
       .where(eq(runs.id, runId))
       .run();
   } else {
+    db.update(runNodes)
+      .set({ status: "skipped", finishedAt: now })
+      .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
+      .run();
+    // 输出节点标记的是工作流级最终产出。分支图里没走到的输出节点被跳过是正常的，
+    // 但一个都没走到就说明这次运行什么都没产出——那不叫成功。循环按 accept 收束
+    // 却始终没走出通过分支，就会落到这里。
+    const outputNodes = nodes.filter((n) => n.kind === "output");
+    const producedAny = outputNodes.some((n) => states.get(n.id)?.status === "success");
+    if (firstError === null && outputNodes.length > 0 && !producedAny) {
+      firstError = "运行结束时没有任何输出节点产出：图上所有通往输出的分支都没有走到";
+    }
     db.update(runs)
       .set(
         firstError

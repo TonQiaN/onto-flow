@@ -21,6 +21,10 @@ export interface PortPayload {
   name: string;
   objectTypeId: string;
   position: number;
+  /** 输出端口写到工作区哪个文件（ADR-0008）；输入端口恒为 null */
+  artifactPath: string | null;
+  /** 输出端口所属的具名出口（ADR-0009）；没有分支时为 null */
+  exitName: string | null;
 }
 
 export interface ActionPayload {
@@ -30,6 +34,8 @@ export interface ActionPayload {
   rule: string;
   modelId: string;
   reasoningEffort: Effort;
+  maxReentries: number;
+  onExhausted: "fail" | "accept";
   ports: PortPayload[];
   skillIds: string[];
   toolIds: string[];
@@ -43,6 +49,8 @@ export interface ActionDto {
   rule: string;
   modelId: string;
   reasoningEffort: Effort;
+  maxReentries: number;
+  onExhausted: "fail" | "accept";
   ports: Array<{
     id: string;
     direction: "input" | "output";
@@ -51,6 +59,8 @@ export interface ActionDto {
     objectTypeName: string;
     kind: "text" | "file" | "json";
     position: number;
+    artifactPath: string | null;
+    exitName: string | null;
   }>;
   skillIds: string[];
   toolIds: string[];
@@ -110,7 +120,33 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
       typeof port.objectTypeId === "string" ? port.objectTypeId : "";
     if (!objectTypeId) return writeFail(400, `端口「${portName}」缺少对象类型`);
     const position = typeof port.position === "number" ? port.position : index;
-    ports.push({ direction, name: portName, objectTypeId, position });
+    // 产物路径与出口只对输出端口有意义；输入端口传了也一律丢弃，
+    // 免得库里出现「输入口带产物路径」这种解释不了的行。
+    let artifactPath: string | null = null;
+    let exitName: string | null = null;
+    if (direction === "output") {
+      const rawPath = typeof port.artifactPath === "string" ? port.artifactPath.trim() : "";
+      if (rawPath) {
+        if (rawPath.startsWith("/") || rawPath.split("/").includes("..")) {
+          return writeFail(400, `端口「${portName}」的产物路径必须是工作区内的相对路径`);
+        }
+        artifactPath = rawPath;
+      }
+      const rawExit = typeof port.exitName === "string" ? port.exitName.trim() : "";
+      if (rawExit) exitName = rawExit;
+    }
+    ports.push({ direction, name: portName, objectTypeId, position, artifactPath, exitName });
+  }
+
+  // 具名出口要么全有要么全无，和图校验同一条规则——在写入口就挡住，
+  // 免得存进去一个跑起来才报错的 Action。
+  const outPorts = ports.filter((p) => p.direction === "output");
+  const namedExits = outPorts.filter((p) => p.exitName !== null).length;
+  if (namedExits !== 0 && namedExits !== outPorts.length) {
+    return writeFail(400, "输出端口要么都归属具名出口，要么都不归属");
+  }
+  if (outPorts.some((p) => p.artifactPath === null)) {
+    return writeFail(400, "每个输出端口都必须声明它写到工作区的哪个文件");
   }
 
   const typeIds = [...new Set(ports.map((p) => p.objectTypeId))];
@@ -157,9 +193,22 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
       return writeFail(400, "引用的工具不存在");
   }
 
+  const rawReentries = body.maxReentries;
+  const maxReentries =
+    rawReentries === undefined || rawReentries === null ? 0 : Number(rawReentries);
+  if (!Number.isSafeInteger(maxReentries) || maxReentries < 0) {
+    return writeFail(400, "重入上限必须是非负整数");
+  }
+  const rawExhausted = body.onExhausted === undefined ? "fail" : body.onExhausted;
+  if (rawExhausted !== "fail" && rawExhausted !== "accept") {
+    return writeFail(400, "重入耗尽的收束方式必须是 fail 或 accept");
+  }
+
   return writeOk({
     name,
     description,
+    maxReentries,
+    onExhausted: rawExhausted,
     prompt,
     rule,
     modelId,
@@ -179,11 +228,15 @@ function revisionPayload(p: ActionPayload): Record<string, unknown> {
     rule: p.rule,
     modelId: p.modelId,
     reasoningEffort: p.reasoningEffort,
+    maxReentries: p.maxReentries,
+    onExhausted: p.onExhausted,
     ports: p.ports.map((port) => ({
       direction: port.direction,
       name: port.name,
       objectTypeId: port.objectTypeId,
       position: port.position,
+      artifactPath: port.artifactPath,
+      exitName: port.exitName,
     })),
     skillIds: p.skillIds,
     toolIds: p.toolIds,
@@ -211,6 +264,8 @@ export function loadActionDtos(ids: string[]): ActionDto[] {
       objectTypeName: objectTypes.name,
       kind: objectTypes.kind,
       position: actionPorts.position,
+      artifactPath: actionPorts.artifactPath,
+      exitName: actionPorts.exitName,
     })
     .from(actionPorts)
     .innerJoin(objectTypes, eq(actionPorts.objectTypeId, objectTypes.id))
@@ -240,6 +295,8 @@ export function loadActionDtos(ids: string[]): ActionDto[] {
         rule: a.rule,
         modelId: a.modelId,
         reasoningEffort: a.reasoningEffort,
+        maxReentries: a.maxReentries,
+        onExhausted: a.onExhausted,
         ports: portRows
           .filter((p) => p.actionId === a.id)
           .map(({ actionId: _actionId, ...port }) => port),
