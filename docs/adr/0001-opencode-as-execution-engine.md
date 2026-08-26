@@ -1,5 +1,7 @@
 # 用 opencode 作为唯一的 Action 执行引擎
 
+> 2026-08-26：已被 [ADR-0006](0006-deepseek-harness-as-execution-engine.md) 推翻——共享 opencode server 是进程外单点，端口复用导致的静默失效无法从本仓库内根治。
+
 Action 需要模型推理、工具调用、结构化输出与会话隔离。我们不直连模型 API（如
 @ai-sdk / OpenAI SDK），而是把 opencode 作为唯一执行引擎：工作台后端常驻一个
 共享 opencode server（`@opencode-ai/sdk`），每次 Action 运行新建一个全新

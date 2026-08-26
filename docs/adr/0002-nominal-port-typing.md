@@ -1,5 +1,7 @@
 # 端口采用严格 nominal 类型（Object Type 注册表）
 
+> 2026-08-26：已被 [ADR-0008](0008-artifacts-not-values.md) 修订——内容改走工作区文件后，对象类型绑定的是产物的契约类型，同名才能连的约束只在编辑期成立。
+
 Workflow 连线校验不按底层形态（text/file/json）做结构等价，而是 ComfyUI 式的
 **严格同名类型**：端口绑定 Object Type 注册表里的类型，同名才能连——`评价` 和
 `集采计划` 即使底层都是 text 也不互通。
