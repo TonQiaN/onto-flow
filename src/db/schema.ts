@@ -8,6 +8,7 @@ import {
   uniqueIndex,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
+import { FILE_PREPROCESSORS } from "@/lib/object-types";
 
 const id = () =>
   text("id")
@@ -114,6 +115,11 @@ export const objectTypes = sqliteTable("object_types", {
   description: text("description").notNull().default(""),
   /** kind=json 时可选的 JSON Schema（序列化字符串），同时用作结构化输出 schema */
   jsonSchema: text("json_schema"),
+  /**
+   * kind=file 时可选的输入预处理器。pdf 会保留原文件、抽取文本层并逐页栅格化；
+   * 非 PDF 文件仍原样进入工作区。对象类型在输入节点上才触发这项行为。
+   */
+  filePreprocessor: text("file_preprocessor", { enum: FILE_PREPROCESSORS }),
   /** 内置类型（text/file/json 兜底）不可删除 */
   builtin: integer("builtin", { mode: "boolean" }).notNull().default(false),
   ...timestamps,

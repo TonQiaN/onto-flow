@@ -50,13 +50,20 @@ export function PortValueView({ value }: { value: unknown }) {
       );
     case "file":
       return (
-        <span
-          title={pv.file.mime || undefined}
-          className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-1 text-xs text-zinc-700"
-        >
-          <span className="text-zinc-400">文件</span>
-          <span className="font-medium">{pv.file.name}</span>
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            title={pv.file.mime || undefined}
+            className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-1 text-xs text-zinc-700"
+          >
+            <span className="text-zinc-400">文件</span>
+            <span className="font-medium">{pv.file.name}</span>
+          </span>
+          {pv.file.preprocessed?.kind === "pdf" && (
+            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs text-blue-700">
+              PDF 已预处理 · {pv.file.preprocessed.pageCount} 页
+            </span>
+          )}
+        </div>
       );
   }
 }

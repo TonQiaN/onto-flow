@@ -2,6 +2,8 @@
  * PortValue：连线上流动的值的统一封装。
  * 形态与 Object Type 的 kind 对应：text / json / file。
  */
+export const MAX_FILE_INPUT_BYTES = 32 * 1024 * 1024;
+
 export type PortValue =
   | { kind: "text"; text: string }
   | { kind: "json"; json: unknown }
@@ -12,6 +14,16 @@ export type PortValue =
         path: string;
         name: string;
         mime: string;
+        /**
+         * 输入节点按对象类型完成的 PDF 预处理结果。路径仍相对 data/；客户端提交的
+         * 同名字段不受信，运行物化时会重建。
+         */
+        preprocessed?: {
+          kind: "pdf";
+          pageCount: number;
+          textPath: string;
+          pageImagePaths: string[];
+        };
       };
     };
 

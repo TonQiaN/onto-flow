@@ -14,6 +14,8 @@ export interface ResolvedPort {
   objectTypeId: string;
   objectTypeName: string;
   kind: "text" | "file" | "json";
+  /** 只在输入节点的 file 端口生效；Action 端口携带它也不触发预处理。 */
+  filePreprocessor?: "pdf" | null;
   /**
    * 输出端口所属的出口名。null 表示默认出口——节点没有分支，全部输出恒生效。
    * 一旦有具名出口，该 Action 的每个输出端口都必须归属某个出口。

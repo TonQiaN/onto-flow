@@ -56,6 +56,7 @@ opencode 会安装依赖，磁盘增长很快——这是需要定期查看系�
 
 - 本机安装 opencode CLI（≥1.18），且 `~/.config/opencode/opencode.jsonc` 已配好模型
   `deepseek/deepseek-v4-flash` 与 `newapi` 下的 `openai/gpt-5.6-luna`（工作台可选的模型即这两个）。
+- 使用 PDF 输入预处理时本机需安装 Poppler，并能直接运行 `pdfinfo`、`pdftotext`、`pdftoppm`。
 
 ## 启动
 

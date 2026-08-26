@@ -28,7 +28,7 @@ src/
 
 | 路由 | 方法 | 说明 |
 |---|---|---|
-| /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建 |
+| /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建；对象类型载荷含 `filePreprocessor: "pdf" | null` |
 | /api/object-types/[id] 等同上三者 | GET, PUT, DELETE | 详情/更新/删除；被引用时 DELETE 返回 409 `{ error, usedBy }`；builtin 类型不可删改 |
 | /api/models | GET | 模型白名单 |
 | /api/actions | GET, POST | POST/PUT 载荷含 `ports: {direction,name,objectTypeId,position}[]`、`skillIds`、`toolIds`，整体替换 |
@@ -95,6 +95,10 @@ src/
   `data/` 内（`isWithinData` 在 startRun 入口 422 拦截，`resolveWithinData` 在 action.ts
   物化时纵深兜底），`file.name` 用 `safeBasename` 只取 basename——防目录穿越读任意文件外泄、
   或写入 opencode 会扫描执行的 `.opencode/tools/` 目录。
+- **PDF 预处理由对象类型声明**：`object_types.file_preprocessor = "pdf"` 的输入节点在工作区
+  保留原文件，调用 Poppler 抽取 `text-layer.txt` 并按页生成 PNG；模型提示必须同时给出文本层、
+  页面图与原文件路径。文件签名而不是 multipart MIME/扩展名决定是否处理；声称是 PDF 但签名
+  不符直接失败。单份 PDF 上限 32 MiB / 20 页，页面图不齐时不得启动模型。非 PDF 文件原样物化。
 - **孤儿运行对账**：`src/instrumentation.ts` 启动钩子调用 `reconcileOrphanRuns`，把上次进程
   遗留的 `running` run 及其 running/pending 节点失败化——否则 SSE 结束条件永假、无限轮询。
 - **模型输出用作文件名前先净化**：`save_purchase_plan` 里 `plan_no` 由模型产出，拼进备份

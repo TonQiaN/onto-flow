@@ -22,8 +22,9 @@ import {
   type ResolvedNode,
   type ValidationIssue,
 } from "@/lib/graph";
-import type { PortValue } from "@/lib/values";
-import { DATA_DIR, isWithinData, safeBasename } from "@/server/fs-safety";
+import { MAX_FILE_INPUT_BYTES, type PortValue } from "@/lib/values";
+import { DATA_DIR, isWithinData, resolveWithinData, safeBasename } from "@/server/fs-safety";
+import { claimsPdf, hasPdfSignature, preprocessPdfInput } from "@/server/pdf-input";
 import { launchRun } from "@/server/harness/launch";
 import type { RunProcess } from "@/server/harness/runtime";
 import {
@@ -215,7 +216,7 @@ async function executeRun(
     .run();
 
   // 文件输入落进工作区：模型的 cwd 是工作区，上传目录在它之外读不到。
-  const runInputs = materializeFileInputs(rawInputs, workspace);
+  const runInputs = materializeFileInputs(rawInputs, workspace, nodes);
 
   // 每个 Action 在开跑前把自己的落库上下文登记进来，事件回调据此把 dsh 事件
   // 即时写成 run_events / node_usage。
@@ -671,6 +672,7 @@ function workflowInstructions(resolved: ResolvedWorkflow): string {
 function materializeFileInputs(
   inputs: Record<string, PortValue>,
   workspace: RunWorkspace,
+  nodes: readonly ResolvedNode[],
 ): Record<string, PortValue> {
   const out: Record<string, PortValue> = {};
   for (const [nodeId, value] of Object.entries(inputs)) {
@@ -680,12 +682,40 @@ function materializeFileInputs(
     }
     const name = safeBasename(value.file.name || value.file.path);
     const destDir = path.join(workspace.workspaceDir, WORKSPACE_INPUTS_SUBDIR, nodeId);
-    fs.mkdirSync(destDir, { recursive: true });
-    const dest = path.join(destDir, name);
-    fs.copyFileSync(path.join(DATA_DIR, value.file.path), dest);
+    const sourceDir = path.join(destDir, "source");
+    fs.mkdirSync(sourceDir, { recursive: true });
+    const dest = path.join(sourceDir, name);
+    const source = resolveWithinData(value.file.path);
+    if (fs.statSync(source).size > MAX_FILE_INPUT_BYTES) {
+      throw new Error(`输入节点「${nodeId}」的文件超过 32 MiB`);
+    }
+    fs.copyFileSync(source, dest);
+    const node = nodes.find((candidate) => candidate.id === nodeId);
+    const filePreprocessor = node?.kind === "input" ? node.outputs[0]?.filePreprocessor : null;
+    let preprocessed: Extract<PortValue, { kind: "file" }>["file"]["preprocessed"];
+    if (filePreprocessor === "pdf") {
+      const pdf = hasPdfSignature(dest);
+      if (!pdf && claimsPdf(name, value.file.mime)) {
+        throw new Error(`输入节点「${node?.label ?? nodeId}」收到的文件不是合法 PDF`);
+      }
+      if (pdf) {
+        const derived = preprocessPdfInput(dest, path.join(destDir, "derived"));
+        preprocessed = {
+          kind: "pdf",
+          pageCount: derived.pageCount,
+          textPath: path.relative(DATA_DIR, derived.textPath),
+          pageImagePaths: derived.pageImagePaths.map((page) => path.relative(DATA_DIR, page)),
+        };
+      }
+    }
     out[nodeId] = {
       kind: "file",
-      file: { ...value.file, path: path.relative(DATA_DIR, dest), name },
+      file: {
+        path: path.relative(DATA_DIR, dest),
+        name,
+        mime: value.file.mime,
+        ...(preprocessed === undefined ? {} : { preprocessed }),
+      },
     };
   }
   return out;

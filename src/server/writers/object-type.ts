@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, objectTypes } from "@/db";
+import type { FilePreprocessor } from "@/lib/object-types";
 import { recordRevision } from "@/server/revisions";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
 
@@ -8,6 +9,7 @@ export interface ObjectTypePayload {
   kind: "text" | "file" | "json";
   description: string;
   jsonSchema: string | null;
+  filePreprocessor: FilePreprocessor | null;
 }
 
 export type ObjectTypeRow = typeof objectTypes.$inferSelect;
@@ -39,7 +41,16 @@ export function parseObjectTypePayload(
     jsonSchema = body.jsonSchema;
   }
 
-  return writeOk({ name, kind, description, jsonSchema });
+  let filePreprocessor: FilePreprocessor | null = null;
+  if (body.filePreprocessor !== undefined && body.filePreprocessor !== null) {
+    if (body.filePreprocessor !== "pdf")
+      return writeFail(400, "filePreprocessor 必须是 pdf 或 null");
+    if (kind !== "file")
+      return writeFail(400, "只有 file 对象类型可以声明文件预处理器");
+    filePreprocessor = body.filePreprocessor;
+  }
+
+  return writeOk({ name, kind, description, jsonSchema, filePreprocessor });
 }
 
 function revisionPayload(p: ObjectTypePayload): Record<string, unknown> {
@@ -48,6 +59,7 @@ function revisionPayload(p: ObjectTypePayload): Record<string, unknown> {
     kind: p.kind,
     description: p.description,
     jsonSchema: p.jsonSchema,
+    filePreprocessor: p.filePreprocessor,
   };
 }
 

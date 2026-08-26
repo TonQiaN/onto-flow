@@ -399,6 +399,17 @@ function describeInput(value: PortValue | undefined): string {
   if (!value) return "（上游未提供）";
   switch (value.kind) {
     case "file":
+      if (value.file.preprocessed?.kind === "pdf") {
+        const pdf = value.file.preprocessed;
+        const pages = pdf.pageImagePaths
+          .map((page, index) => `第 ${index + 1} 页 \`${workspaceRelative(page)}\``)
+          .join("、");
+        return (
+          `PDF 已预处理：先读文本层 \`${workspaceRelative(pdf.textPath)}\`，` +
+          `再逐页调用 read_image 核对页面图（共 ${pdf.pageCount} 页：${pages}）；` +
+          `原文件在 \`${workspaceRelative(value.file.path)}\``
+        );
+      }
       return `读文件 \`${workspaceRelative(value.file.path)}\``;
     case "text":
       return value.text.length > 200 ? `${value.text.slice(0, 200)}…` : value.text;

@@ -2,19 +2,32 @@ import { NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
 import { handle, jsonError } from "@/lib/http";
-import type { PortValue } from "@/lib/values";
+import { MAX_FILE_INPUT_BYTES, type PortValue } from "@/lib/values";
 import { DATA_DIR, safeBasename } from "@/server/fs-safety";
 
 export const dynamic = "force-dynamic";
+
+/** multipart 边界与头部的宽限；真正的文件上限仍由解析后的 File.size 复核。 */
+const MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
 
 /** multipart 单文件上传 → data/uploads/<uuid>/<原名>，返回 PortValue(file) */
 export async function POST(request: Request) {
   // 落盘会因文件系统错误（EISDIR/ENOSPC/EACCES 等）抛异常，包 handle() 统一转成
   // { error } 的 4xx/5xx，不再把未捕获异常直接抛给 Next
   return handle(async () => {
+    const contentLength = Number(request.headers.get("content-length"));
+    if (
+      Number.isFinite(contentLength) &&
+      contentLength > MAX_FILE_INPUT_BYTES + MAX_MULTIPART_OVERHEAD_BYTES
+    ) {
+      return jsonError(413, "单个上传文件不能超过 32 MiB");
+    }
     const form = await request.formData().catch(() => null);
     const file = form?.get("file");
     if (!(file instanceof File)) return jsonError(400, "缺少 file 字段");
+    if (file.size > MAX_FILE_INPUT_BYTES) {
+      return jsonError(413, "单个上传文件不能超过 32 MiB");
+    }
 
     const id = crypto.randomUUID();
     // 文件名来自不可信的 multipart 头：统一走 fs-safety 的 safeBasename，

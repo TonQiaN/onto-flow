@@ -41,7 +41,7 @@ _reference/       gitignored third-party source, excluded from tsconfig; never i
 
 ## Commands
 
-Run everything from the repository root: `data/` resolves from `process.cwd()` in `src/db/index.ts`, `src/server/fs-safety.ts`, and `drizzle.config.ts`, so another working directory is another database. No external service has to be running — the engine is the `@deepseek-ai` npm closure booted inside a per-run subprocess ([ADR-0006](docs/adr/0006-deepseek-harness-as-execution-engine.md)). What must exist is the model credential: put `DEEPSEEK_API_KEY` in `.env.local` (gitignored) and export it before any command that runs a model. Credentials travel by reference name only: the value is picked from the Next process environment at spawn time and never enters a composition file, a log, or a run directory.
+Run everything from the repository root: `data/` resolves from `process.cwd()` in `src/db/index.ts`, `src/server/fs-safety.ts`, and `drizzle.config.ts`, so another working directory is another database. No external service has to be running — the engine is the `@deepseek-ai` npm closure booted inside a per-run subprocess ([ADR-0006](docs/adr/0006-deepseek-harness-as-execution-engine.md)). What must exist is the model credential: put `DEEPSEEK_API_KEY` in `.env.local` (gitignored) and export it before any command that runs a model. Credentials travel by reference name only: the value is picked from the Next process environment at spawn time and never enters a composition file, a log, or a run directory. PDF input preprocessing also requires Poppler's `pdfinfo`, `pdftotext`, and `pdftoppm` on `PATH`.
 
 ```sh
 npm install
