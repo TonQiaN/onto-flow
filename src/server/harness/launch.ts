@@ -10,9 +10,15 @@ import { RunProcess } from "./runtime";
 import { writeRunComposition, type RunCompositionOptions } from "./composition";
 import type { RunWorkspace } from "./workspace";
 
-/** runner 入口：与本模块同目录的 TS 文件，由子进程的 tsx 加载。 */
+/**
+ * runner 入口：仓库内的 TS 文件，由子进程的 tsx 加载。
+ *
+ * 从 process.cwd() 拼而不是从 import.meta.dirname 拼：Turbopack 打包服务端代码后
+ * import.meta.dirname 是 undefined，路径会在 join 里炸掉——tsx 下跑得通、Next 里跑不通。
+ * 本仓库一切命令都从仓库根运行（见 AGENTS.md 的 Commands），cwd 是可靠的锚点。
+ */
 export function defaultRunnerEntry(): string {
-  return path.join(import.meta.dirname, "runner.ts");
+  return path.join(process.cwd(), "src", "server", "harness", "runner.ts");
 }
 
 /**

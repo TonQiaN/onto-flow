@@ -1,3 +1,5 @@
+import path from "node:path";
+
 /** boot 失败诊断的前缀名，出现在启动错误信息里。 */
 export const HARNESS_BIN_NAME = "ontoflow-harness";
 
@@ -9,5 +11,7 @@ export const HARNESS_BIN_NAME = "ontoflow-harness";
  * include 覆盖类对绝对路径有专门分支（转成 file URL 后直接 import），这条路稳。
  */
 export function rpcPluginModulePath(): string {
-  return new URL("./rpc/index.ts", import.meta.url).pathname;
+  // 同 defaultRunnerEntry：import.meta.url 在 Turbopack 打包后不指向源码位置，
+  // 组合配置写的是给子进程 import 的真实路径，必须从 cwd 拼。
+  return path.join(process.cwd(), "src", "server", "harness", "rpc", "index.ts");
 }
