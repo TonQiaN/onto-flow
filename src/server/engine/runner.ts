@@ -32,6 +32,7 @@ import {
   type RunWorkspace,
 } from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import { readSettings } from "@/server/settings";
 import { runActionNode } from "./action";
 import { collectCapabilities, materializeToolPlugins } from "./capabilities";
 import { recordSessionEvent, type EventSinkContext } from "./events";
@@ -219,8 +220,16 @@ async function executeRun(
   // 每个 Action 在开跑前把自己的落库上下文登记进来，事件回调据此把 dsh 事件
   // 即时写成 run_events / node_usage。
   const sinks = new Map<string, EventSinkContext>();
+  // 设置在运行启动时读一次：改设置在下一次运行生效，在跑的运行持有启动时刻的快照。
+  const globalSettings = readSettings();
   const proc = await launchRun(workspace, {
+    credentialRefs: globalSettings.credentialRefs.map((r) => r.name),
     composition: {
+      deepseek: {
+        apiKeyEnv: globalSettings.modelApiKeyEnv,
+        ...(globalSettings.modelBaseUrl ? { baseURL: globalSettings.modelBaseUrl } : {}),
+      },
+      mcpServers: globalSettings.mcpServers,
       toolPlugins: materializeToolPlugins(workspace, capabilities.tools),
     },
     onCrash: (message) => {
@@ -427,6 +436,7 @@ async function executeRun(
       workspace,
       sinks,
       round: state.round,
+      disabledTools: globalSettings.disabledTools,
     });
     state.outputs = result.outputs;
     state.selectedExit = result.selectedExit;

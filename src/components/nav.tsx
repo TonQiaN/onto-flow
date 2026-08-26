@@ -14,6 +14,9 @@ const items = [
   { href: "/documents", label: "归档文档" },
 ];
 
+/** 设置与监控台一样属于开发者面，与主导航分区放在底部。 */
+const SETTINGS_HREF = "/settings";
+
 /** 监控台入口的实时状态点：轮询进行中的运行数（轻量，不占用 SSE 连接） */
 const LIVE_POLL_MS = 8000;
 
@@ -71,9 +74,19 @@ export function Nav() {
         );
       })}
 
-      {/* 监控台与主导航分区：底部独立一块 */}
+      {/* 设置与监控台属于开发者面，与主导航分区：底部独立一块 */}
       <div className="mt-auto pt-3">
         <div className="mb-3 border-t border-zinc-800" />
+        <Link
+          href={SETTINGS_HREF}
+          className={`mb-1 flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
+            pathname.startsWith(SETTINGS_HREF)
+              ? "bg-zinc-700 text-white"
+              : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+          }`}
+        >
+          全局设置
+        </Link>
         <Link
           href="/monitor"
           title={

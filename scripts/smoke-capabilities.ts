@@ -1,10 +1,13 @@
 /**
- * 能力端到端冒烟（M3）：验证 Skill 与 Tool 真的进得了运行。
+ * 能力端到端冒烟（M3）：验证 Skill、Tool 与「默认停用的工具」三条都真的生效。
  *
  * - Skill 物化成全局技能库里的目录，运行工作区以 symlink 指过去，
  *   上游 skill-filesystem 从会话 cwd 发现它，模型看描述自行加载。
  * - Tool 是 cordis 插件源码，物化进运行目录并由每运行组合 include，
  *   注册到工具面后模型可调用。
+ * - 全局设置里 disabledTools 列出的工具，对本次运行的每个会话一律拒绝执行。
+ *   拦截是靠把工具从会话的工具清单里**摘掉**实现的，所以证据不是一条失败的调用，
+ *   而是它根本不在清单里——本冒烟直接读会话记录的请求头来断言这一点。
  *
  * 运行：DEEPSEEK_API_KEY=... npx tsx scripts/smoke-capabilities.ts
  */
@@ -30,6 +33,7 @@ import {
 } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import { materializeSkill, skillSlug, SKILL_LIBRARY_DIR } from "../src/server/skill-library";
+import { readSettings, writeSettings } from "../src/server/settings";
 
 const PREFIX = "能力冒烟";
 
@@ -85,6 +89,12 @@ async function main(): Promise<void> {
     .where(and(eq(models.providerId, "deepseek-official"), eq(models.modelId, "deepseek-v4-flash")))
     .get();
   if (!model) throw new Error("找不到模型行");
+
+  // 全局设置：确保 bash 在默认停用清单里，这条冒烟要验证拦截真的发生。
+  const current = readSettings();
+  if (!current.disabledTools.includes("bash")) {
+    writeSettings({ ...current, disabledTools: [...current.disabledTools, "bash"] });
+  }
 
   // Skill：写库并物化磁盘投影
   const skillName = `${PREFIX}口令`;
@@ -207,6 +217,7 @@ async function main(): Promise<void> {
     console.log(`口令来自技能：${text.includes("青山不改") ? "✓" : "✗"}`);
     console.log(`印章来自工具：${text.includes("【冒烟印章】") ? "✓" : "✗"}`);
   }
+  // 全局设置：把 bash 加进默认停用清单，本次运行应当拦下它。
   const toolCalls = db
     .select()
     .from(runEvents)
@@ -215,6 +226,33 @@ async function main(): Promise<void> {
     .filter((e) => e.type === "tool");
   const names = [...new Set(toolCalls.map((e) => (e.payload as { tool?: string })?.tool))];
   console.log(`调用过的工具：${names.join(", ")}`);
+  // 全局停用是把工具从清单里摘掉，所以证据在会话请求头里，不在调用记录里。
+  const sessionFile = fs
+    .readdirSync(path.join(dir, "sessions"), { withFileTypes: true })
+    .flatMap((entry) =>
+      entry.isDirectory()
+        ? fs
+            .readdirSync(path.join(dir, "sessions", entry.name), { withFileTypes: true })
+            .filter((child) => child.isDirectory())
+            .map((child) => path.join(dir, "sessions", entry.name, child.name, "session.jsonl"))
+        : [],
+    )
+    .find((file) => fs.existsSync(file));
+  if (sessionFile) {
+    for (const line of fs.readFileSync(sessionFile, "utf8").split("\n")) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line) as {
+        type?: string;
+        data?: { header?: { tools?: Array<{ name?: string }> } };
+      };
+      if (event.type !== "request/header") continue;
+      const visible = (event.data?.header?.tools ?? []).map((t) => t.name ?? "?").sort();
+      console.log(`会话可见工具：${visible.join(", ")}`);
+      console.log(`bash 已被全局设置摘掉：${visible.includes("bash") ? "✗" : "✓"}`);
+      console.log(`自建工具在清单里：${visible.includes("smoke_stamp") ? "✓" : "✗"}`);
+      break;
+    }
+  }
   for (const n of db.select().from(runNodes).where(eq(runNodes.runId, started.runId)).all()) {
     console.log(`  ${n.label.padEnd(6)} ${n.status}${n.error ? ` 错误=${n.error}` : ""}`);
   }

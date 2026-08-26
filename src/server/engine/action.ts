@@ -48,6 +48,8 @@ export interface ActionNodeContext {
   sinks: Map<string, EventSinkContext>;
   /** 第几轮执行；0 是首次，>0 说明本节点被回边重入了（ADR-0009） */
   round: number;
+  /** 全局设置里默认停用的工具公名；对本次运行的每个会话一致 */
+  disabledTools: readonly string[];
 }
 
 /** 一次 Action 执行的结果：产物值加它走的那个出口。 */
@@ -178,6 +180,9 @@ export async function runActionNode(
         outputSchema: buildOutputSchema(exits, branching),
         reasoningEffort: action.reasoningEffort,
         maxSteps: NODE_MAX_STEPS,
+        ...(ctx.disabledTools.length === 0
+          ? {}
+          : { toolFilter: { deny: [...ctx.disabledTools] } }),
       },
       timeoutMs: NODE_TURN_TIMEOUT_MS,
     },

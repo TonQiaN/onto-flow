@@ -236,6 +236,22 @@ export const actionTools = sqliteTable(
   (t) => [primaryKey({ columns: [t.actionId, t.toolId] })],
 );
 
+/**
+ * 全局设置：单行表，整份文档存 JSON。
+ *
+ * 不拆成列是因为它整体被读写——每次运行开始时读一次生成组合配置，设置页整份
+ * 提交。拆列只会让「加一个设置项」变成一次 schema 变更。校验在写入口做，
+ * 见 src/server/settings.ts。
+ */
+export const settings = sqliteTable("settings", {
+  /** 恒为 1：这张表只有一行 */
+  id: integer("id").primaryKey(),
+  document: text("document", { mode: "json" })
+    .notNull()
+    .$type<Record<string, unknown>>(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
+
 export const workflows = sqliteTable("workflows", {
   id: id(),
   name: text("name").notNull().unique(),
