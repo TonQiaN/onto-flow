@@ -62,6 +62,11 @@ export interface SessionNodeOptions {
    * sessionId 盖上去。这是思考强度到达模型的唯一通道（ADR-0006）。
    */
   reasoningEffort?: ReasoningEffortLevel;
+  /**
+   * 本会话允许的最大步数。上游 agent-loop 没有步数上限，一个转起来的 agent
+   * 只会被节点级墙钟超时拦住——按每工作流每日千次调用的规模，那太贵了。
+   */
+  maxSteps?: number;
 }
 
 /** 思考强度档位，取值对齐上游 llm-deepseek。 */

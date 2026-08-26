@@ -26,7 +26,6 @@ import type { PortValue } from "@/lib/values";
 import { DATA_DIR } from "@/server/fs-safety";
 import type { RunProcess } from "@/server/harness/runtime";
 import type { RunWorkspace } from "@/server/harness/workspace";
-import type { NodeSkillRegistration } from "@/server/harness/rpc/types";
 import type { NodeExit } from "@/lib/graph";
 import type { EventSinkContext } from "./events";
 // 循环依赖（runner → action → runner）在 ESM 下安全：isRunCancelled 是函数声明，
@@ -49,6 +48,8 @@ export interface ActionNodeContext {
   sinks: Map<string, EventSinkContext>;
   /** 第几轮执行；0 是首次，>0 说明本节点被回边重入了（ADR-0009） */
   round: number;
+  /** 全局设置里默认停用的工具公名；对本次运行的每个会话一致 */
+  disabledTools: readonly string[];
 }
 
 /** 一次 Action 执行的结果：产物值加它走的那个出口。 */
@@ -85,6 +86,12 @@ export interface RunSnapshot {
 
 /** 单个 Action 的会话在收束前允许的墙钟上限。 */
 const NODE_TURN_TIMEOUT_MS = 900_000;
+
+/**
+ * 单个 Action 一轮允许的最大步数。上游没有这个上限，只有墙钟兜底；
+ * 一个开始空转的 agent 能烧掉整整十五分钟的 token 才被拦下。
+ */
+const NODE_MAX_STEPS = 40;
 
 export async function runActionNode(
   ctx: ActionNodeContext,
@@ -172,9 +179,10 @@ export async function runActionNode(
       nodeOptions: {
         outputSchema: buildOutputSchema(exits, branching),
         reasoningEffort: action.reasoningEffort,
-        ...(skillRows.length === 0
+        maxSteps: NODE_MAX_STEPS,
+        ...(ctx.disabledTools.length === 0
           ? {}
-          : { skills: skillRows.map(toSkillRegistration) }),
+          : { toolFilter: { deny: [...ctx.disabledTools] } }),
       },
       timeoutMs: NODE_TURN_TIMEOUT_MS,
     },
@@ -187,7 +195,7 @@ export async function runActionNode(
   if (!captured.captured) {
     throw new Error(
       `Action「${action.name}」没有调用 structured_output 交出结果；` +
-        `会话已收束但数据面为空`,
+        `会话已收束但数据面为空（也可能是步数超过上限 ${NODE_MAX_STEPS} 被拦下）`,
     );
   }
 
@@ -308,16 +316,6 @@ function toSnapshotPort(port: {
     kind: port.kind,
     ...(port.artifactPath ? { artifactPath: port.artifactPath } : {}),
     ...(port.exitName ? { exitName: port.exitName } : {}),
-  };
-}
-
-function toSkillRegistration(
-  skill: typeof skills.$inferSelect,
-): NodeSkillRegistration {
-  return {
-    name: skill.name,
-    description: skill.description || skill.name,
-    content: skill.content,
   };
 }
 

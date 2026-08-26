@@ -27,6 +27,11 @@ export interface RunCompositionOptions {
   deepseek?: DeepSeekProviderSpec;
   /** 已停用的服务器直接省略：运行组合只描述本次运行的真实能力。 */
   mcpServers?: readonly McpServerSpec[];
+  /**
+   * 本次运行要挂的 Tool 插件：物化到运行目录后的绝对路径。
+   * 与 RPC 插件同理走绝对路径而非裸名——loader 从 node_modules 解析裸名。
+   */
+  toolPlugins?: readonly { id: string; modulePath: string }[];
 }
 
 /** 生成一次运行的组合 entry 清单。会话持久化根落在运行目录内。 */
@@ -65,12 +70,26 @@ export function runCompositionEntries(
       config: { maxBytes: 65536 },
     },
     { id: "skill", name: "@deepseek-ai/dsh-skill" },
-    // 批量运行不开技能 watcher，避免文件句柄随并发运行线性增长。
-    { id: "skill-filesystem", name: "@deepseek-ai/dsh-skill-filesystem", config: { watch: false } },
+    {
+      id: "skill-filesystem",
+      name: "@deepseek-ai/dsh-skill-filesystem",
+      config: {
+        // 批量运行不开技能 watcher，避免文件句柄随并发运行线性增长。
+        watch: false,
+        // 两个用户级技能根都钉进运行目录，否则 agentsHome 默认落在 ~/.agents，
+        // 运行会发现并加载本机用户自己的技能——工作区隔离当场破功，实测出现过
+        // agent 反复加载无关技能、再对着不存在的资源文件空转的情形（ADR-0007）。
+        dshHome: workspace.homeDir,
+        agentsHome: path.join(workspace.homeDir, "agents"),
+      },
+    },
     { id: "tool-skill", name: "@deepseek-ai/dsh-tool-skill" },
     { id: "agent", name: "@deepseek-ai/dsh-agent" },
     { id: "agent-loop", name: "@deepseek-ai/dsh-agent-loop", config: { agents: [] } },
     ...(options.mcpServers ?? []).filter((s) => s.enabled).map(mcpCompositionEntry),
+    // Tool 插件排在 tools 服务之后、RPC 之前：它们注册到全局工具面，
+    // 每个 Action 会话继承得到（能力不再按 Action 收窄，见 CONTEXT.md「引用」）。
+    ...(options.toolPlugins ?? []).map((tool) => ({ id: tool.id, name: tool.modulePath })),
     { id: "ontoflow-rpc", name: rpcPluginModulePath() },
   ];
 }

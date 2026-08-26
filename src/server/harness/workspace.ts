@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DATA_DIR } from "../fs-safety";
-import { assertSafeId, newRunId } from "./ids";
+import { assertSafeId, assertSafeName, newRunId } from "./ids";
 
 /** 工作区内的项目级技能根，对齐上游 skill-filesystem 相对 cwd 的发现路径。 */
 export const WORKSPACE_SKILLS_SUBDIR = path.join(".agents", "skills");
@@ -118,7 +118,7 @@ export async function createRunWorkspace(
 
   const seen = new Set<string>();
   for (const item of options.skills ?? []) {
-    assertSafeId("技能名", item.name);
+    assertSafeName("技能名", item.name);
     if (seen.has(item.name)) {
       throw new RunWorkspaceError(`技能名「${item.name}」重复；导入名必须唯一`);
     }

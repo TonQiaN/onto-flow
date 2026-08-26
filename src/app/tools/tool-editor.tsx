@@ -23,18 +23,49 @@ export interface ToolRow {
   updatedAt: string;
 }
 
-const TOOL_TEMPLATE = `import { tool } from "@opencode-ai/plugin";
+const TOOL_TEMPLATE = `/**
+ * OntoFlow Tool = 一个 cordis 插件（ADR-0006）。运行时被物化到
+ * <运行目录>/plugins/<工具名>.ts，由本次运行的组合 include 进去，
+ * 注册到全局工具面，这次运行里的每个 Action 都能调用。
+ *
+ * 模块解析从运行目录向上走到仓库根，所以 node: 内置模块与仓库的
+ * node_modules 都可以 import。数据库用 node:sqlite，路径见环境变量。
+ */
+import type { Context } from "@deepseek-ai/cordis";
 
-export default tool({
-  description: "工具的功能描述（模型据此决定何时调用）",
-  args: {
-    input: tool.schema.string().describe("参数说明"),
-  },
-  async execute(args) {
-    // TODO: 在这里实现工具逻辑，返回字符串结果
-    return JSON.stringify({ ok: true, input: args.input });
-  },
-});
+export const name = "my_tool";
+export const inject = ["tools"];
+
+export function apply(ctx: Context): void {
+  ctx.tools.register({
+    name: "my_tool",
+    description: "工具的功能描述（模型据此决定何时调用）",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        input: { type: "string", description: "参数说明" },
+      },
+      required: ["input"],
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { ok: { type: "boolean" } },
+        required: ["ok"],
+      },
+      // 注意签名是 (args, value)：第一个参数是调用参数，第二个才是返回值。
+      // 写成 (result) => … 会把参数当结果，渲染出 undefined 并以
+      // 「output.render returned non-lossless JSON」失败。
+      render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }],
+    },
+    async execute(args: { input: string }) {
+      // TODO: 在这里实现工具逻辑
+      return { ok: true };
+    },
+  });
+}
 `;
 
 type TabKey = "basic" | "refs" | "revisions";
@@ -216,7 +247,7 @@ export function ToolEditor({
               </div>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  代码（完整的 opencode custom tool TypeScript 定义）
+                  代码（一个 cordis 插件：导出 name / inject / apply）
                 </span>
                 <textarea
                   value={code}

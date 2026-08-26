@@ -32,7 +32,9 @@ import {
   type RunWorkspace,
 } from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import { readSettings } from "@/server/settings";
 import { runActionNode } from "./action";
+import { collectCapabilities, materializeToolPlugins } from "./capabilities";
 import { recordSessionEvent, type EventSinkContext } from "./events";
 
 export type StartRunResult =
@@ -196,10 +198,13 @@ async function executeRun(
   let cancelled = false;
 
   // 工作区先建：它是这次运行全部 Action 的共同工作场所与唯一交流场所。
+  // 技能以 symlink 指向全局库活目录，摘要写进 runs.imports（ADR-0007）。
+  const capabilities = collectCapabilities(resolved);
   const workspace = await createRunWorkspace({
     workflowId: resolved.workflow.id,
     runId,
     instructions: workflowInstructions(resolved),
+    skills: capabilities.skills,
   });
   db.update(runs)
     .set({
@@ -215,7 +220,18 @@ async function executeRun(
   // 每个 Action 在开跑前把自己的落库上下文登记进来，事件回调据此把 dsh 事件
   // 即时写成 run_events / node_usage。
   const sinks = new Map<string, EventSinkContext>();
+  // 设置在运行启动时读一次：改设置在下一次运行生效，在跑的运行持有启动时刻的快照。
+  const globalSettings = readSettings();
   const proc = await launchRun(workspace, {
+    credentialRefs: globalSettings.credentialRefs.map((r) => r.name),
+    composition: {
+      deepseek: {
+        apiKeyEnv: globalSettings.modelApiKeyEnv,
+        ...(globalSettings.modelBaseUrl ? { baseURL: globalSettings.modelBaseUrl } : {}),
+      },
+      mcpServers: globalSettings.mcpServers,
+      toolPlugins: materializeToolPlugins(workspace, capabilities.tools),
+    },
     onCrash: (message) => {
       firstError ??= message;
     },
@@ -420,6 +436,7 @@ async function executeRun(
       workspace,
       sinks,
       round: state.round,
+      disabledTools: globalSettings.disabledTools,
     });
     state.outputs = result.outputs;
     state.selectedExit = result.selectedExit;
