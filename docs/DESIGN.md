@@ -132,5 +132,7 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   Markdown/纯文本原样物化。
 - 只有「简历评分·解析」使用 `deepseek-v4-flash-vision-exp`。它必须把输入当不可信数据，先读
   文本层、再逐页调用 `read_image`；扫描件文本层为空也不得跳页，页面与文本冲突时以可见页面为准。
-- 六个评委与汇总使用 `deepseek-v4-flash`。评委只经 `job.md` / `resume.md` 读解析结果，汇总
-  等六份 `scores/*.md` 全部结算后才运行，最终产物是 `report.md`。
+- 六个评委与汇总使用 `deepseek-v4-flash`。评委只经 `job.md` / `resume.md` 读解析结果；汇总等
+  六份 `scores/*.md` 全部结算后，再回看 `job.md` / `resume.md`，自动裁决评委分歧、证据缺口、
+  分数不自洽与不允许的评分依据。最终 `report.md` 必须给出推荐判断、最终分、证据充分度、否决
+  原因及全部改分记录，不保留未裁决项。
