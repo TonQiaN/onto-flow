@@ -360,6 +360,10 @@ function upsertTool(input: {
 interface SeedPort {
   name: string;
   objectTypeId: string;
+  /** 输出端口写到工作区哪个文件（ADR-0008）；输入端口不填 */
+  artifactPath?: string;
+  /** 输出端口所属的具名出口（ADR-0009）；无分支时不填 */
+  exitName?: string;
 }
 
 function upsertAction(input: {
@@ -422,6 +426,8 @@ function upsertAction(input: {
         direction: "output",
         name: port.name,
         objectTypeId: port.objectTypeId,
+        artifactPath: port.artifactPath ?? null,
+        exitName: port.exitName ?? null,
         position: i,
       })
       .run();
@@ -618,7 +624,9 @@ const actionTidy = upsertAction({
   modelId: modelDeepseek,
   reasoningEffort: "low",
   inputs: [{ name: "需求文件", objectTypeId: otRequirementFile }],
-  outputs: [{ name: "需求Prompt", objectTypeId: otRequirementPrompt }],
+  outputs: [
+    { name: "需求Prompt", objectTypeId: otRequirementPrompt, artifactPath: "requirement-prompt.md" },
+  ],
   skillIds: [],
   toolIds: [],
 });
@@ -641,7 +649,9 @@ const actionGenerate = upsertAction({
   modelId: modelDeepseek,
   reasoningEffort: "high",
   inputs: [{ name: "需求Prompt", objectTypeId: otRequirementPrompt }],
-  outputs: [{ name: "集采计划", objectTypeId: otPlan }],
+  outputs: [
+    { name: "集采计划", objectTypeId: otPlan, artifactPath: "procurement-plan.md" },
+  ],
   skillIds: [skillBianzhi],
   toolIds: [],
 });
@@ -664,8 +674,8 @@ const actionReview = upsertAction({
   reasoningEffort: "high",
   inputs: [{ name: "集采计划", objectTypeId: otPlan }],
   outputs: [
-    { name: "审核评价", objectTypeId: otReview },
-    { name: "集采计划", objectTypeId: otPlan },
+    { name: "审核评价", objectTypeId: otReview, artifactPath: "review.md" },
+    { name: "集采计划", objectTypeId: otPlan, artifactPath: "reviewed-plan.md" },
   ],
   skillIds: [skillShenhe],
   toolIds: [],
@@ -696,7 +706,9 @@ const actionArchive = upsertAction({
     { name: "集采计划", objectTypeId: otPlan },
     { name: "审核评价", objectTypeId: otReview },
   ],
-  outputs: [{ name: "归档回执", objectTypeId: otReceipt }],
+  outputs: [
+    { name: "归档回执", objectTypeId: otReceipt, artifactPath: "archive-receipt.md" },
+  ],
   skillIds: [],
   toolIds: [toolSavePlan],
 });

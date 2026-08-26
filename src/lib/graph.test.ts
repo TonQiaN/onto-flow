@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyEdges,
   downstreamOf,
-  topologicalOrder,
+  exitsOf,
+  hasNamedExits,
   validateGraph,
   type GraphEdge,
   type ResolvedNode,
@@ -86,31 +88,66 @@ describe("validateGraph", () => {
     expect(issues.some((i) => i.message.includes("未连线"))).toBe(true);
   });
 
-  it("拒绝一个输入端口多条入线", () => {
+  it("允许一个输入端口接多条入线——那就是汇总", () => {
     const nodes = [
       inputNode("in1", TYPE_A),
       inputNode("in2", TYPE_A),
-      actionNode("a1", [{ name: "x", type: TYPE_A }], []),
+      actionNode("a", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]),
+      outputNode("out", TYPE_A),
     ];
     const edges = [
-      edge("e1", "in1", "value", "a1", "x"),
-      edge("e2", "in2", "value", "a1", "x"),
+      edge("e1", "in1", "value", "a", "x"),
+      edge("e2", "in2", "value", "a", "x"),
+      edge("e3", "a", "y", "out", "value"),
     ];
-    const issues = validateGraph(nodes, edges);
-    expect(issues.some((i) => i.message.includes("最多 1 条"))).toBe(true);
+    expect(validateGraph(nodes, edges)).toEqual([]);
   });
 
-  it("拒绝环路", () => {
-    const nodes = [
-      actionNode("a1", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]),
-      actionNode("a2", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]),
-    ];
+  it("允许回边，只要被回流的节点声明了重入上限", () => {
+    const fix = actionNode("fix", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]);
+    fix.maxReentries = 3;
+    fix.onExhausted = "fail";
+    const review = actionNode(
+      "review",
+      [{ name: "x", type: TYPE_A }],
+      [{ name: "通过", type: TYPE_A }, { name: "打回", type: TYPE_A }],
+    );
+    review.outputs[0].exitName = "通过";
+    review.outputs[1].exitName = "打回";
+    const nodes = [inputNode("in", TYPE_A), fix, review, outputNode("out", TYPE_A)];
     const edges = [
-      edge("e1", "a1", "y", "a2", "x"),
-      edge("e2", "a2", "y", "a1", "x"),
+      edge("e1", "in", "value", "fix", "x"),
+      edge("e2", "fix", "y", "review", "x"),
+      edge("e3", "review", "打回", "fix", "x"),
+      edge("e4", "review", "通过", "out", "value"),
+    ];
+    expect(validateGraph(nodes, edges)).toEqual([]);
+  });
+
+  it("回边的目标没有重入上限时报错", () => {
+    const fix = actionNode("fix", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]);
+    const review = actionNode("review", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]);
+    const nodes = [inputNode("in", TYPE_A), fix, review];
+    const edges = [
+      edge("e1", "in", "value", "fix", "x"),
+      edge("e2", "fix", "y", "review", "x"),
+      edge("e3", "review", "y", "fix", "x"),
     ];
     const issues = validateGraph(nodes, edges);
-    expect(issues.some((i) => i.message.includes("环路"))).toBe(true);
+    expect(issues.some((i) => i.message.includes("重入上限"))).toBe(true);
+  });
+
+  it("具名出口必须全有或全无", () => {
+    const a = actionNode(
+      "a",
+      [{ name: "x", type: TYPE_A }],
+      [{ name: "p", type: TYPE_A }, { name: "q", type: TYPE_A }],
+    );
+    a.outputs[0].exitName = "通过";
+    const nodes = [inputNode("in", TYPE_A), a];
+    const edges = [edge("e1", "in", "value", "a", "x")];
+    const issues = validateGraph(nodes, edges);
+    expect(issues.some((i) => i.message.includes("要么都归属"))).toBe(true);
   });
 
   it("拒绝指向不存在端口的连线", () => {
@@ -124,28 +161,63 @@ describe("validateGraph", () => {
   });
 });
 
-describe("topologicalOrder", () => {
-  it("按依赖顺序返回，同层按 id 稳定排序", () => {
+describe("classifyEdges", () => {
+  it("把指向仍在栈上的节点的边判为回边，且判定稳定", () => {
     const nodes = [
-      inputNode("b-in", TYPE_A),
-      inputNode("a-in", TYPE_A),
-      actionNode("mid", [
-        { name: "x", type: TYPE_A },
-        { name: "z", type: TYPE_A },
-      ], [{ name: "y", type: TYPE_A }]),
+      inputNode("in", TYPE_A),
+      actionNode("fix", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]),
+      actionNode("review", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]),
+    ];
+    const edges = [
+      edge("e1", "in", "value", "fix", "x"),
+      edge("e2", "fix", "y", "review", "x"),
+      edge("e3", "review", "y", "fix", "x"),
+    ];
+    const first = classifyEdges(nodes, edges).backEdgeIds;
+    expect([...first]).toEqual(["e3"]);
+    // 边的输入顺序不影响判定结果
+    const shuffled = classifyEdges(nodes, [edges[2], edges[0], edges[1]]).backEdgeIds;
+    expect([...shuffled]).toEqual(["e3"]);
+  });
+
+  it("无环图没有回边", () => {
+    const nodes = [
+      inputNode("in", TYPE_A),
+      actionNode("a", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]),
       outputNode("out", TYPE_A),
     ];
     const edges = [
-      edge("e1", "a-in", "value", "mid", "x"),
-      edge("e2", "b-in", "value", "mid", "z"),
-      edge("e3", "mid", "y", "out", "value"),
+      edge("e1", "in", "value", "a", "x"),
+      edge("e2", "a", "y", "out", "value"),
     ];
-    expect(topologicalOrder(nodes, edges)).toEqual([
-      "a-in",
-      "b-in",
-      "mid",
-      "out",
-    ]);
+    expect(classifyEdges(nodes, edges).backEdgeIds.size).toBe(0);
+  });
+});
+
+describe("exitsOf", () => {
+  it("默认出口在前，具名出口按名字排序", () => {
+    const node = actionNode(
+      "a",
+      [],
+      [{ name: "p", type: TYPE_A }, { name: "q", type: TYPE_A }],
+    );
+    node.outputs[0].exitName = "打回";
+    node.outputs[1].exitName = "通过";
+    expect(exitsOf(node).map((e) => e.name)).toEqual(["打回", "通过"]);
+    expect(hasNamedExits(node)).toBe(true);
+  });
+
+  it("没有具名出口时归入唯一的默认出口", () => {
+    const node = actionNode(
+      "a",
+      [],
+      [{ name: "p", type: TYPE_A }, { name: "q", type: TYPE_A }],
+    );
+    const exits = exitsOf(node);
+    expect(exits).toHaveLength(1);
+    expect(exits[0].name).toBeNull();
+    expect(exits[0].ports).toHaveLength(2);
+    expect(hasNamedExits(node)).toBe(false);
   });
 });
 

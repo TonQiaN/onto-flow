@@ -21,12 +21,13 @@ import {
   runNodes,
   skills,
 } from "@/db";
-import type { ResolvedNode, ResolvedPort } from "@/lib/graph";
+import { exitsOf, hasNamedExits, type ResolvedNode, type ResolvedPort } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
 import { DATA_DIR } from "@/server/fs-safety";
 import type { RunProcess } from "@/server/harness/runtime";
 import type { RunWorkspace } from "@/server/harness/workspace";
 import type { NodeSkillRegistration } from "@/server/harness/rpc/types";
+import type { NodeExit } from "@/lib/graph";
 import type { EventSinkContext } from "./events";
 // 循环依赖（runner → action → runner）在 ESM 下安全：isRunCancelled 是函数声明，
 // 且只在 runActionNode 执行期调用，那时 runner 模块体早已求值完毕。
@@ -36,13 +37,25 @@ export interface ActionNodeContext {
   runId: string;
   node: ResolvedNode;
   actionId: string;
-  /** 入端口名 → 上游交来的值（Action 上游是产物引用，输入节点上游是人给的值） */
-  inputs: Record<string, PortValue>;
+  /**
+   * 入端口名 → 上游交来的值**列表**。一个端口可以接多条入线（汇总），
+   * 因此这里恒是列表；只被回边喂的端口在第一轮直接缺席。
+   */
+  inputs: Record<string, PortValue[]>;
   /** 本次运行独占的 harness 子进程 */
   proc: RunProcess;
   workspace: RunWorkspace;
   /** 会话事件落库上下文表：本节点开跑前把自己登记进去 */
   sinks: Map<string, EventSinkContext>;
+  /** 第几轮执行；0 是首次，>0 说明本节点被回边重入了（ADR-0009） */
+  round: number;
+}
+
+/** 一次 Action 执行的结果：产物值加它走的那个出口。 */
+export interface ActionNodeResult {
+  outputs: Record<string, PortValue>;
+  /** 选中的出口名；null 表示这个 Action 没有具名出口 */
+  selectedExit: string | null;
 }
 
 /** 运行快照里的端口定义（只留展示所需，不留 id——实体删了也照样读得懂） */
@@ -50,8 +63,10 @@ export interface RunSnapshotPort {
   name: string;
   objectTypeName: string;
   kind: "text" | "file" | "json";
-  /** 输出端口的产物路径（相对工作区） */
+  /** 输出端口的产物路径（相对工作区，含本轮的 rounds/ 前缀） */
   artifactPath?: string;
+  /** 输出端口所属的具名出口 */
+  exitName?: string;
 }
 
 /** run_nodes.snapshot 的结构：该节点本次执行实际使用的完整配置 */
@@ -73,7 +88,7 @@ const NODE_TURN_TIMEOUT_MS = 900_000;
 
 export async function runActionNode(
   ctx: ActionNodeContext,
-): Promise<Record<string, PortValue>> {
+): Promise<ActionNodeResult> {
   assertNotCancelled(ctx.runId);
 
   const action = db.select().from(actions).where(eq(actions.id, ctx.actionId)).get();
@@ -86,7 +101,12 @@ export async function runActionNode(
 
   const skillRows = readActionSkills(ctx.actionId);
 
-  const outputPorts = ports.outputs;
+  const outputPorts = ports.outputs.map((port) => ({
+    ...port,
+    // 第 N 轮的产物落进 rounds/N/，不覆盖上一轮：上一轮的东西是下一轮的输入，
+    // 也是事后逐轮回看的唯一依据（ADR-0009）。
+    artifactPath: port.artifactPath === null ? null : roundPath(port.artifactPath, ctx.round),
+  }));
   for (const port of outputPorts) {
     if (!port.artifactPath) {
       throw new Error(
@@ -95,8 +115,18 @@ export async function runActionNode(
       );
     }
   }
+  const exits = exitsOf({ ...ctx.node, outputs: outputPorts as ResolvedPort[] });
+  const branching = hasNamedExits(ctx.node);
 
-  const renderedPrompt = buildPrompt(action.prompt, action.rule, ctx.inputs, ports);
+  const renderedPrompt = buildPrompt(
+    action.prompt,
+    action.rule,
+    ctx.inputs,
+    { inputs: ports.inputs, outputs: outputPorts },
+    exits,
+    branching,
+    ctx.round,
+  );
 
   const snapshot: RunSnapshot = {
     actionId: action.id,
@@ -112,14 +142,17 @@ export async function runActionNode(
     skills: skillRows.map((s) => ({ name: s.name, content: s.content })),
     ports: {
       inputs: ports.inputs.map(toSnapshotPort),
-      outputs: ports.outputs.map(toSnapshotPort),
+      // 输出记本轮真实生效的路径（含 rounds/ 前缀）与出口归属，
+      // 否则快照解释不了「那一轮的东西到底写在哪」。
+      outputs: outputPorts.map(toSnapshotPort),
     },
     renderedPrompt,
   };
   writeSnapshot(ctx, snapshot);
 
-  // 会话 id 就是节点 id：一个 Action 一轮执行独占一次会话（CONTEXT.md「会话」）。
-  const sessionId = ctx.node.id;
+  // 一个 Action 的一轮执行独占一次会话（CONTEXT.md「会话」）。循环的每一轮都是
+  // 全新的会话，不靠会话记忆延续，因此 id 要带上轮次。
+  const sessionId = ctx.round === 0 ? ctx.node.id : `${ctx.node.id}#${ctx.round + 1}`;
   // 登记要先于 runTurn：事件从第一个 chunk 起就会回调过来。
   ctx.sinks.set(sessionId, {
     runId: ctx.runId,
@@ -137,7 +170,7 @@ export async function runActionNode(
     {
       agentOptions: { provider: model.providerId, model: model.modelId },
       nodeOptions: {
-        outputSchema: buildOutputSchema(outputPorts),
+        outputSchema: buildOutputSchema(exits, branching),
         reasoningEffort: action.reasoningEffort,
         ...(skillRows.length === 0
           ? {}
@@ -158,10 +191,39 @@ export async function runActionNode(
     );
   }
 
-  const outputs = collectArtifacts(action.name, outputPorts, ctx.workspace);
+  const selectedExit = pickExit(action.name, exits, branching, captured.value);
+  const produced = exits.find((e) => e.name === selectedExit)?.ports ?? [];
+  const outputs = collectArtifacts(action.name, produced, ctx.workspace);
   // 会话用完即关：同一子进程里后续节点各自开自己的会话，互不可见。
   await ctx.proc.closeSession(sessionId);
-  return outputs;
+  return { outputs, selectedExit };
+}
+
+/** 第 0 轮用声明的原路径，之后落进 rounds/<轮次>/ 下的同名路径。 */
+function roundPath(artifactPath: string, round: number): string {
+  return round === 0 ? artifactPath : path.posix.join("rounds", String(round + 1), artifactPath);
+}
+
+/**
+ * 从数据面结果里读出这次走的是哪个出口。
+ * 没有具名出口的 Action 只有唯一答案，不问模型。
+ */
+function pickExit(
+  actionName: string,
+  exits: NodeExit[],
+  branching: boolean,
+  value: unknown,
+): string | null {
+  if (!branching) return null;
+  const chosen = (value as Record<string, unknown> | undefined)?.exit;
+  if (typeof chosen !== "string" || !exits.some((e) => e.name === chosen)) {
+    throw new Error(
+      `Action「${actionName}」没有报告合法的出口：期望 ${exits
+        .map((e) => `「${String(e.name)}」`)
+        .join(" / ")}，实际收到 ${JSON.stringify(chosen)}`,
+    );
+  }
+  return chosen;
 }
 
 function assertNotCancelled(runId: string): void {
@@ -178,6 +240,7 @@ function readActionPorts(actionId: string): {
       direction: actionPorts.direction,
       objectTypeId: actionPorts.objectTypeId,
       artifactPath: actionPorts.artifactPath,
+      exitName: actionPorts.exitName,
       objectTypeName: objectTypes.name,
       kind: objectTypes.kind,
     })
@@ -197,6 +260,7 @@ interface ActionPortRow {
   direction: "input" | "output";
   objectTypeId: string;
   artifactPath: string | null;
+  exitName: string | null;
   objectTypeName: string;
   kind: "text" | "file" | "json";
 }
@@ -231,12 +295,19 @@ function assertPortsUnchanged(
   }
 }
 
-function toSnapshotPort(port: ActionPortRow): RunSnapshotPort {
+function toSnapshotPort(port: {
+  name: string;
+  objectTypeName: string;
+  kind: "text" | "file" | "json";
+  artifactPath?: string | null;
+  exitName?: string | null;
+}): RunSnapshotPort {
   return {
     name: port.name,
     objectTypeName: port.objectTypeName,
     kind: port.kind,
     ...(port.artifactPath ? { artifactPath: port.artifactPath } : {}),
+    ...(port.exitName ? { exitName: port.exitName } : {}),
   };
 }
 
@@ -258,31 +329,66 @@ function writeSnapshot(ctx: ActionNodeContext, snapshot: RunSnapshot): void {
 }
 
 /**
- * 组装发给模型的完整提示：任务、上游产物指引、必须写出的产物、执行规则。
+ * 组装发给模型的完整提示：任务、上游产物指引、必须写出的产物、出口选择、执行规则。
  * `{{端口名}}` 占位符插值为该入端口的取用说明（文件读路径或字面值）。
  */
 function buildPrompt(
   prompt: string,
   rule: string,
-  inputs: Record<string, PortValue>,
-  ports: { inputs: ActionPortRow[]; outputs: ActionPortRow[] },
+  inputs: Record<string, PortValue[]>,
+  ports: { inputs: ActionPortRow[]; outputs: ResolvedPort[] },
+  exits: NodeExit[],
+  branching: boolean,
+  round: number,
 ): string {
   const sections: string[] = [interpolate(prompt, inputs)];
 
+  if (round > 0) {
+    sections.push(
+      `## 这是第 ${round + 1} 轮\n\n你之前跑过 ${round} 轮，本轮的产物写在 ` +
+        `\`rounds/${round + 1}/\` 下。上一轮的产物与针对它的意见都在工作区里，` +
+        `路径见下面「你要读的东西」——先读完再动手，不要凭空重来。`,
+    );
+  }
+
   if (ports.inputs.length > 0) {
-    const lines = ports.inputs.map((port) => {
-      const value = inputs[port.name];
-      return `- ${port.name}（${port.objectTypeName}）：${describeInput(value)}`;
+    const lines = ports.inputs.flatMap((port) => {
+      const values = inputs[port.name] ?? [];
+      if (values.length === 0) return [`- ${port.name}（${port.objectTypeName}）：本轮没有`];
+      if (values.length === 1) {
+        return [`- ${port.name}（${port.objectTypeName}）：${describeInput(values[0])}`];
+      }
+      // 汇总：这个口接了多条入线，下游要读齐全部产物，逐条列出来。
+      return [
+        `- ${port.name}（${port.objectTypeName}）：共 ${values.length} 份，都要读`,
+        ...values.map((v) => `  - ${describeInput(v)}`),
+      ];
     });
     sections.push(`## 你要读的东西\n\n${lines.join("\n")}`);
   }
 
-  const outLines = ports.outputs.map(
-    (port) => `- \`${port.artifactPath}\`（${port.objectTypeName}）`,
-  );
+  if (branching) {
+    const exitLines = exits.map((exit) => {
+      const artifacts = exit.ports
+        .map((p) => `\`${String(p.artifactPath)}\`（${p.objectTypeName}）`)
+        .join("、");
+      return `- **${String(exit.name)}**：走这个出口就写出 ${artifacts}`;
+    });
+    sections.push(
+      `## 你要选的出口\n\n本节点有多个出口，只能走一个。在 structured_output 的 ` +
+        `\`exit\` 字段里报告你走的是哪个，并且只写出那个出口的产物：\n\n${exitLines.join("\n")}`,
+    );
+  } else {
+    const outLines = exits
+      .flatMap((e) => e.ports)
+      .map((port) => `- \`${String(port.artifactPath)}\`（${port.objectTypeName}）`);
+    sections.push(
+      `## 你要写的东西\n\n把实质内容写进下面这些文件（路径相对当前目录）：\n\n${outLines.join("\n")}`,
+    );
+  }
+
   sections.push(
-    `## 你要写的东西\n\n把实质内容写进下面这些文件（路径相对当前目录）：\n\n${outLines.join("\n")}\n\n` +
-      `写完后调用 structured_output，每个字段填你实际写出的那个路径。` +
+    `写完后调用 structured_output，每个产物字段填你实际写出的那个路径。` +
       `不要把长文本塞进 structured_output——它会被完整拼进每个下游节点的提示。`,
   );
 
@@ -313,12 +419,12 @@ function workspaceRelative(dataRelPath: string): string {
   return idx === -1 ? dataRelPath : dataRelPath.slice(idx + marker.length);
 }
 
-function interpolate(text: string, inputs: Record<string, PortValue>): string {
+function interpolate(text: string, inputs: Record<string, PortValue[]>): string {
   let out = text;
-  for (const [name, value] of Object.entries(inputs)) {
+  for (const [name, values] of Object.entries(inputs)) {
     out = out.replace(
       new RegExp(`\\{\\{\\s*${escapeRegExp(name)}\\s*\\}\\}`, "g"),
-      describeInput(value),
+      values.map((v) => describeInput(v)).join("、"),
     );
   }
   return out;
@@ -329,23 +435,33 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * 数据面 schema：每个输出端口一个字段，值是该端口产物的实际路径。
- * 实质内容不进这里（ADR-0008）。
+ * 数据面 schema：每个输出端口一个字段，值是该端口产物的实际路径；有具名出口时
+ * 再加一个必填的 `exit`。实质内容不进这里（ADR-0008）。
+ *
+ * 有分支时端口字段一律可选——走哪个出口是模型运行时才定的，required 表达不了
+ * 「只有被选中那个出口的产物才必须存在」，这一条由产物落盘校验兜底。
  */
-function buildOutputSchema(outputPorts: ActionPortRow[]): Record<string, unknown> {
+function buildOutputSchema(exits: NodeExit[], branching: boolean): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
-  for (const port of outputPorts) {
-    properties[port.name] = {
+  const required: string[] = [];
+  if (branching) {
+    properties.exit = {
       type: "string",
-      description: `你写出的「${port.objectTypeName}」产物路径，应为 ${port.artifactPath}`,
+      enum: exits.map((e) => String(e.name)),
+      description: "你这次走的出口名",
     };
+    required.push("exit");
   }
-  return {
-    type: "object",
-    additionalProperties: false,
-    properties,
-    required: outputPorts.map((p) => p.name),
-  };
+  for (const exit of exits) {
+    for (const port of exit.ports) {
+      properties[port.name] = {
+        type: "string",
+        description: `你写出的「${port.objectTypeName}」产物路径，应为 ${String(port.artifactPath)}`,
+      };
+      if (!branching) required.push(port.name);
+    }
+  }
+  return { type: "object", additionalProperties: false, properties, required };
 }
 
 /**
@@ -354,7 +470,7 @@ function buildOutputSchema(outputPorts: ActionPortRow[]): Record<string, unknown
  */
 function collectArtifacts(
   actionName: string,
-  outputPorts: ActionPortRow[],
+  outputPorts: readonly ResolvedPort[],
   workspace: RunWorkspace,
 ): Record<string, PortValue> {
   const outputs: Record<string, PortValue> = {};
