@@ -4,7 +4,7 @@
  */
 import type { PortValue } from "@/lib/values";
 
-/** cancelled 是人为中止的独立终态，区别于 failed */
+/** cancelled 是人为终结的独立终态，区别于 failed */
 export type RunStatus = "running" | "success" | "failed" | "cancelled";
 export type NodeStatus =
   | "pending"
@@ -88,6 +88,73 @@ export interface RunEventRow {
   type: string;
   payload: Record<string, unknown> | null;
 }
+
+/** GET /api/runs/[id]/nodes/[nodeId]/trajectory 的详情片段。 */
+export interface TrajectoryDetail {
+  label: string;
+  content: string;
+  format: "text" | "json";
+  truncated: boolean;
+}
+
+export interface TrajectoryUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/** 一条会话轨迹记录；startedAt / finishedAt 同时供三泳道时间条投影。 */
+export interface TrajectoryRecord {
+  id: string;
+  seq: number;
+  kind: "system" | "user" | "context" | "assistant" | "tool" | "error";
+  lane: "input" | "model" | "tools";
+  label: string;
+  summary: string;
+  turn: number | null;
+  step: number | null;
+  startedAt: number;
+  finishedAt: number | null;
+  state: "complete" | "running" | "error";
+  callId?: string;
+  toolName?: string;
+  details: TrajectoryDetail[];
+  usage?: TrajectoryUsage;
+}
+
+export interface TrajectorySession {
+  id: string;
+  round: number;
+  status:
+    | "running"
+    | "completed"
+    | "error"
+    | "aborted"
+    | "blocked"
+    | "max-tokens"
+    | "interrupted"
+    | "unknown";
+  startedAt: number;
+  finishedAt: number | null;
+  durationMs: number | null;
+  provider: string;
+  model: string;
+  contextWindow: number | null;
+  turns: number;
+  steps: number;
+  calls: number;
+  records: TrajectoryRecord[];
+}
+
+export type AgentTrajectoryResponse =
+  | { available: true; sessions: TrajectorySession[] }
+  | {
+      available: false;
+      reason: "not-recorded" | "cleaned";
+      sessions: [];
+    };
 
 /** 时间归一：接受毫秒数 / ISO 字符串 / Date，其余返回 null */
 export function toMillis(value: unknown): number | null {

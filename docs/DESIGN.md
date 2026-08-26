@@ -39,6 +39,7 @@ src/
 | /api/runs?workflowId= | GET | 运行列表 |
 | /api/runs/[id] | GET | run + run_nodes 全量 |
 | /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
+| /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
 | /api/uploads | POST | multipart 单文件 → 存 `data/uploads/<uuid>/<原名>`，返回 PortValue(file) |
 | /api/documents | GET | purchase_plans 倒序列表 |
 
@@ -51,7 +52,7 @@ src/
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
 - 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。文件输入物化到 `workspace/inputs/`，Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
-- 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。
+- 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
 
 ## 引擎实现规范（DeepSeek Harness）
 
@@ -79,9 +80,13 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - **完成、取消与错误**：`session/prompt` 懒创建会话，Next 侧等待同一会话依次进入 running / idle；
   人工取消走 `session/cancel`，运行与节点进入独立的 `cancelled` 终态。节点完成后关闭会话，一次
   运行完成后关闭子进程；崩溃、超时与无产物都写入 run / run_node 的失败事实。
-- **事件与用量**：`session.event` 通知到达时立刻归一为 text / reasoning / tool /
+- **事件、轨迹与用量**：`session.event` 通知到达时立刻归一为 text / reasoning / tool /
   session.idle / session.error 并落库。每个 step 的 usage chunk 是不累积值，按
-  `(sessionId, turn:step)` 唯一化后求和；完整原始会话另存 `<run>/sessions/*.jsonl`。
+  `(sessionId, turn:step)` 唯一化后求和；完整原始会话另存 `<run>/sessions/**/session.jsonl`。
+  运行详情展开某个 Action 时，从数据库记录的 `runDir` 枚举 `nodeId` 与 `nodeId#N` 会话，使用
+  dsh 公共 codec 解包 chunk 行，再按回合与步骤折叠、按 `callId` 配对 Tool 调用与结果。界面只
+  返回有长度边界且物理路径脱敏的折叠记录，输入 / 模型 / 工具三泳道和选中记录详情由同一投影
+  生成；折叠状态不预取正文。
 
 ## 安全与健壮性约束（终审确认项）
 

@@ -118,6 +118,11 @@ _Avoid_: 中止
 一个 Action 执行一轮时独占的一次模型会话。
 _Avoid_: 对话
 
+**Agent 轨迹（Agent Trajectory）**:
+一个 Action 某轮会话的可检查过程记录，按回合与步骤组织输入、模型回复和工具调用；它回答
+“模型实际怎样完成这一轮”，不同于记录配置的运行快照和跨节点的实时摘要。
+_Avoid_: 对话日志, 运行快照, 事件日志
+
 **思考强度（Reasoning Effort）**:
 Action 执行时投入的推理深度档位。
 _Avoid_: 强度, 思考, variant
