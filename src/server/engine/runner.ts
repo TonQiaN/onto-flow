@@ -251,15 +251,22 @@ async function executeRun(
       (e) => !backEdgeIds.has(e.id) && e.targetNodeId === nodeId && e.targetPort === portName,
     );
 
-  /** 某个输入端口是否已被喂上：至少一条**前向**入线处于 satisfied。 */
-  const portFed = (nodeId: string, portName: string): boolean =>
-    edges.some(
-      (e) =>
-        !backEdgeIds.has(e.id) &&
-        e.targetNodeId === nodeId &&
-        e.targetPort === portName &&
-        edgeStatus.get(e.id) === "satisfied",
+  /**
+   * 某个输入端口是否可以开跑：全部前向入线都已结算（satisfied 或 dead），
+   * 且至少有一条 satisfied。
+   *
+   * 「全部结算」这一半是汇总的命根子：一个端口接六条入线时，只要有一条还没
+   * 结算就不能开跑，否则节点会抢在其余上游之前启动、只读到已经落盘的那几份产物。
+   * 实测中汇总节点正是这样漏读了一位评委的结论——六份产物都在磁盘上，它只读到五份。
+   */
+  const portFed = (nodeId: string, portName: string): boolean => {
+    const forward = edges.filter(
+      (e) => !backEdgeIds.has(e.id) && e.targetNodeId === nodeId && e.targetPort === portName,
     );
+    if (forward.length === 0) return false;
+    if (forward.some((e) => edgeStatus.get(e.id) === "pending")) return false;
+    return forward.some((e) => edgeStatus.get(e.id) === "satisfied");
+  };
 
   /** 某个输入端口是否已经没救：全部前向入线都 dead。 */
   const portDead = (nodeId: string, portName: string): boolean => {

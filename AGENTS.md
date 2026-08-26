@@ -55,9 +55,14 @@ npm test            # vitest run over src/**/*.test.ts and scripts/**/*.test.ts
 npm run test:e2e    # playwright over e2e/; workers: 1
 npx playwright test e2e/<name>.spec.ts   # one spec
 
-# 花钱的冒烟（真实调用模型，需要 DEEPSEEK_API_KEY）
-npx tsx scripts/smoke-harness.ts    # 只验子进程：boot、一轮对话、产物、结构化输出、收束
-npx tsx scripts/smoke-engine.ts     # 验整条引擎：两 Action 节点的线性工作流经 startRun 跑通
+# 花钱的冒烟与验收（真实调用模型，需要 DEEPSEEK_API_KEY）
+npx tsx scripts/smoke-harness.ts       # 只验子进程：boot、一轮对话、产物、结构化输出、收束
+npx tsx scripts/smoke-engine.ts        # 验整条引擎：两 Action 节点的线性工作流经 startRun 跑通
+npx tsx scripts/smoke-graph.ts         # 验图能力：扇出、汇总、具名出口、回边重入
+npx tsx scripts/smoke-capabilities.ts  # 验能力：技能被发现、工具被调用、停用工具从清单消失
+npx tsx scripts/seed-resume.ts         # 装入「简历匹配评分」工作流（不花钱）
+npx tsx scripts/run-procurement.ts     # 验收案例一：采购集采计划生成
+npx tsx scripts/run-resume.ts          # 验收案例二：简历匹配评分
 ```
 
 ### Checks
@@ -105,10 +110,12 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 - **Nominal port typing is an edit-time rule, not a TypeScript one and not a runtime one.** Two ports connect only when their `objectTypeId` values are equal ([ADR-0002](docs/adr/0002-nominal-port-typing.md), amended by [ADR-0008](docs/adr/0008-artifacts-not-values.md)); ids stay bare `string`. Nothing checks at runtime that the artifact holds what its type claims — the only mechanical backstop is that a declared artifact must exist on disk.
 - **The workflow graph is not a DAG.** Fan-out is one output port with several edges, synthesis is one input port with several edges, and an edge from an exit port back to an upstream Action is a legal cycle ([ADR-0009](docs/adr/0009-exit-ports-and-back-edges.md)). `classifyEdges` decides which edges are back edges by a stable DFS from the entry nodes, and that answer is load-bearing in three places: readiness ignores back edges (a node that waits on one deadlocks its own loop on the first pass), `downstreamOf` ignores them (or the closure swallows the whole cycle), and validation requires every back edge's target to declare a re-entry limit.
 - **Every output port declares an artifact path, and a branching Action reports its exit.** Ports sharing an `exitName` form one exit; the data-plane result names the exit taken and only that exit's edges activate, the rest go dead and their downstream is skipped. Re-entry bumps the whole loop body's round together, and round N writes under `rounds/N/` so an earlier round is never overwritten.
+- **A synthesis port waits for every incoming edge to settle, not for the first one.** Readiness on a port with several edges means all of them are satisfied-or-dead and at least one is satisfied. Treating "any edge satisfied" as ready lets a synthesis node start before its siblings finish and silently read a subset — observed as a six-critic report that only found five verdicts while all six were on disk.
 - **A run with output nodes but none reached is a failure, not a success.** An unreached output node on an untaken branch is normal; all of them unreached means the run produced nothing.
 - **A canvas node is a reference to the shared Action**, so editing it from the canvas edits that Action everywhere ([ADR-0004](docs/adr/0004-canvas-edits-the-shared-action.md)).
 - Input and output node ports are always named `"value"`.
 - **A Tool is a cordis plugin.** `tools.code` exports `name` / `inject` / `apply`; the run materializes it to `<run>/plugins/<name>.ts` and the per-run composition includes it by absolute path, so it registers on the global tool surface for every Action in that run. Module resolution walks up from the run directory to the repository root, so `node:` builtins and the repo's dependencies are importable — the old "cannot import anything from this repository" rule is gone with opencode.
+- **The JSON Schema subset is narrower than JSON Schema.** A type array (`type: ["integer", "null"]`) is rejected, and a Tool whose schema uses one fails at plugin load, which takes the whole run down before any node starts. Omit the field instead of typing it nullable. The same subset governs an Action's data-plane schema.
 - **`output.render` takes `(args, value)`, not `(value)`.** Getting it wrong renders `undefined` and the call dies with `output.render returned non-lossless JSON`, which reads like a serialization bug rather than an arity bug. The Tool template in `src/app/tools/tool-editor.tsx` carries the correct shape.
 - **A Skill is projected to disk, not injected.** `src/server/skill-library.ts` writes every Skill to `data/skills/<slug>/SKILL.md`; a run symlinks the declared ones into `workspace/.agents/skills/` and upstream `skill-filesystem` discovers them from the session cwd. The model sees name and description and loads what it judges relevant. Anything that must always apply belongs in the Action's rule or the workflow-level instructions in `workspace/AGENTS.md`.
 - **The skill directory name is an ASCII slug, never the library name.** Upstream enforces `/^[a-z0-9]+(?:-[a-z0-9]+)*$/` on skill names, and this repository names entities in Chinese — a Chinese name is dropped with nothing but a `warn` in the subprocess log, so the skill silently never reaches the model. `skillSlug()` derives the directory name and the frontmatter `name`; the Chinese name is prefixed onto the description, which is what the model actually matches on.
