@@ -157,17 +157,23 @@ test.describe("监控台 · Trace", () => {
     expect(count, "甘特图应至少有一条 span").toBeGreaterThan(0);
     await expect(page.getByText(`span（${count} 条）`)).toBeVisible();
 
-    // 摘要条：运行名 + span/节点/耗时等字段（下拉 option 里的同名文本不算）
+    // 摘要条与链路里的节点名都跟**被选中那次运行自己的载荷**比对：
+    // 最近一次运行是哪个工作流会随真实使用变化，写死工作流名与节点名早晚要红。
+    const detail = (await (await page.request.get(`/api/runs/${runId}`)).json()) as {
+      run: { workflowName: string };
+      nodes: Array<{ label: string }>;
+    };
     await expect(
-      page.getByText("采购集采计划生成").filter({ visible: true }).first(),
+      page.getByText(detail.run.workflowName).filter({ visible: true }).first(),
     ).toBeVisible();
     for (const field of ["开始", "总耗时", "span", "节点", "token", "费用"]) {
       await expect(page.getByText(field, { exact: true }).first()).toBeVisible();
     }
-    // 链路里的节点名（工作流固定含该审核节点）
+    const anyNode = detail.nodes[0]?.label;
+    expect(anyNode, "该次运行应有节点").toBeTruthy();
     await expect(
-      page.getByTestId("trace-span-row").filter({ hasText: "集采计划审核" }),
-    ).toHaveCount(1);
+      page.getByTestId("trace-span-row").filter({ hasText: anyNode! }).first(),
+    ).toBeVisible();
 
     // 每行右侧的耗时列：至少有一行是「N 秒 / N 分 N 秒 / N 毫秒」
     await expect(
@@ -325,16 +331,18 @@ test.describe("监控台 · 成本分析", () => {
 });
 
 test.describe("监控台 · 系统健康", () => {
-  test("opencode 状态卡出现，事件泵与数据库卡同在", async ({ page }) => {
+  test("执行引擎状态卡出现，运行子进程与数据库卡同在", async ({ page }) => {
     await page.goto("/monitor/health");
 
-    const panel = page.locator('section:has(h2:text-is("opencode server"))');
+    // 换成 dsh 引擎后没有常驻外部服务可探（ADR-0006）：就绪只取决于 runner 入口
+    // 与凭据引用，卡片报的是这两样而不是某个地址的可达性。
+    const panel = page.locator('section:has(h2:text-is("执行引擎"))');
     await expect(panel).toBeVisible({ timeout: 15_000 });
-    // 探活结论明确（可达 / 不可达），且带地址
-    await expect(panel.getByText(/^(可达|不可达)$/)).toBeVisible();
-    await expect(panel).toContainText("127.0.0.1:4977");
+    await expect(panel.getByText(/^(就绪|未就绪)$/)).toBeVisible();
+    await expect(panel).toContainText("runner.ts");
+    await expect(panel).toContainText("DEEPSEEK_API_KEY");
 
-    await expect(page.getByRole("heading", { name: "事件泵" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "运行子进程" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "数据库" })).toBeVisible();
     // 数据库表统计不是空的
     await expect(

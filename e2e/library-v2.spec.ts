@@ -29,11 +29,15 @@ test.describe("库 v2 新能力", () => {
   }) => {
     await page.goto("/actions");
 
-    // 未筛选时 4 个种子 Action 都在
+    // 未筛选的总数随真实使用增长，写死会红——从 API 取当前值再比对 DOM
+    // （这一类断言在本仓库已经踩过两次，见 AGENTS.md）。
+    const total = (
+      (await (await page.request.get("/api/actions?page=1")).json()) as { total: number }
+    ).total;
     await expect(
       page.getByRole("heading", { name: "集采计划生成", exact: true }),
     ).toBeVisible();
-    await expect(page.getByText("共 4 条")).toBeVisible();
+    await expect(page.getByText(`共 ${total} 条`)).toBeVisible();
 
     // 树上文件夹行的 title 是完整路径；卡片上的文件夹徽章 title 是
     // 「进入文件夹「…」」，用 exact 把两者区分开。
@@ -44,6 +48,7 @@ test.describe("库 v2 新能力", () => {
 
     // 列表收窄到「采购/集采」下的 3 个 Action，「采购/需求」下的需求整理消失
     await expect(page.getByText("共 3 条")).toBeVisible();
+    expect(total, "筛选后应比未筛选少").toBeGreaterThanOrEqual(3);
     await expect(
       page.getByRole("heading", { name: "需求整理", exact: true }),
     ).toHaveCount(0);
@@ -57,7 +62,7 @@ test.describe("库 v2 新能力", () => {
     // 与「全部折叠」区分开），URL 里的 folder 参数消失，列表恢复
     await page.getByRole("button", { name: "全部 清空筛选" }).click();
     await expect(page).not.toHaveURL(/[?&]folder=/);
-    await expect(page.getByText("共 4 条")).toBeVisible();
+    await expect(page.getByText(`共 ${total} 条`)).toBeVisible();
   });
 
   test("树上管理文件夹：「＋」新建根文件夹 → 右键重命名 → 右键删除", async ({

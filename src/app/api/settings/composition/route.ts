@@ -13,6 +13,7 @@ import { desc } from "drizzle-orm";
 import { db, runs } from "@/db";
 import { handle } from "@/lib/http";
 import { runCompositionEntries } from "@/server/harness/composition";
+import { mcpCompositionEntry } from "@/server/harness/entries";
 import type { RunWorkspace } from "@/server/harness/workspace";
 import { readSettings } from "@/server/settings";
 
@@ -37,17 +38,28 @@ function previewWorkspace(): RunWorkspace {
 export async function GET() {
   return handle(async () => {
     const settings = readSettings();
-    const entries = runCompositionEntries(previewWorkspace(), {
+    const mounted = runCompositionEntries(previewWorkspace(), {
       deepseek: {
         apiKeyEnv: settings.modelApiKeyEnv,
         ...(settings.modelBaseUrl ? { baseURL: settings.modelBaseUrl } : {}),
       },
       mcpServers: settings.mcpServers,
-    }).map((entry) => ({
-      id: entry.id,
-      name: entry.name,
-      disabled: entry.disabled === true,
-    }));
+    });
+    // 每运行组合把停用的 MCP 整条省略——它只描述这次运行的真实能力。但面板是给人
+    // 看的清单，「登记了但不会挂」也得看得见，所以这里把它们补回来并标停用。
+    const entries = [
+      ...mounted.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        disabled: entry.disabled === true,
+      })),
+      ...settings.mcpServers
+        .filter((server) => !server.enabled)
+        .map((server) => {
+          const entry = mcpCompositionEntry(server);
+          return { id: entry.id, name: entry.name, disabled: true };
+        }),
+    ];
 
     // 最近一次运行真实落盘的组合：文件在运行目录里，直接读回来。
     const lastRun = db

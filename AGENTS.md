@@ -75,14 +75,14 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 - Unit tests cover pure logic and non-obvious invariants — today `src/lib/graph.ts` and `src/server/folders.ts`; everything user-visible is covered by Playwright.
 - `test:e2e` starts a dev server or attaches to whatever already listens on 3592 (`reuseExistingServer`), so confirm that server was launched from the repository root or you are testing another database. A user-visible change runs its one matching spec, not the suite.
 
-### Test fixtures are unrecoverable
+### Test fixtures cost money, but they are reproducible
 
-`db:seed` writes the five libraries, their folders, a v1 revision each, the two `models` rows, and `data/samples/采购需求示例.txt` — and nothing else: no runs, no run_events, no node_usage, no purchase_plans. The run history, archived documents, and cost figures that `runs.spec.ts`, `documents.spec.ts`, and `monitor.spec.ts` assert against exist only in the gitignored local `data/ontoflow.db`, produced by paid real runs.
+`db:seed` writes the five libraries, their folders, a v1 revision each, the `models` rows, and the sample inputs under `data/samples/` — and nothing else: no runs, no run_events, no node_usage, no purchase_plans. The run history, archived documents, and cost figures the e2e specs read exist only in the gitignored local `data/ontoflow.db`.
 
-- Never delete `data/ontoflow.db`, never call `POST /api/monitor/cleanup` with `dryRun: false`, and never click 执行清理: the fixture cannot be regenerated without spending money.
+- **The run history can be rebuilt.** `scripts/run-procurement.ts` and `scripts/run-resume.ts` regenerate it from scratch against the current engine, so losing `data/ontoflow.db` costs money and time rather than being unrecoverable. Rebuilding still means paid model calls — treat it as expensive, not as impossible. (This section used to say the fixture could not be regenerated; that was true of the opencode engine, whose runs no longer have any way of being reproduced.)
 - E2E never starts a workflow run and never clicks 执行清理 / 确认删除 / 中止该运行; the cleanup panel is exercised only through `dryRun`.
-- E2E creates entities under a per-spec `e2e-` Chinese prefix and removes them in teardown through `cleanupByPrefix`, which skips `builtin` rows and re-checks the prefix.
-- Never assert a count, a first-page containment, or an exact row that real usage grows: wait for the API response and assert the DOM matches its payload. This bug class has already been fixed twice.
+- E2E creates entities under a per-spec `e2e-` Chinese prefix and removes them in teardown through `cleanupByPrefix`, which skips `builtin` rows and re-checks the prefix. `settings.spec.ts` is the exception the rule cannot cover: settings are one document rather than named entities, so it saves the whole document in `beforeAll` and writes it back in `afterAll`.
+- **Never assert a count, a first-page containment, or an exact row that real usage grows.** Fetch the API payload in the test and assert the DOM matches it. This bug class has now been fixed three times; the third time it was the run-detail spec asserting that the newest run was the procurement one.
 
 ## Conventions
 
