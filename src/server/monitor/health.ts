@@ -1,110 +1,81 @@
 /**
- * 系统健康：opencode 可达性、进程内事件泵、数据库与磁盘占用、孤儿运行。
+ * 系统健康：引擎就绪状态、在跑的运行子进程、数据库与磁盘占用、孤儿运行。
  *
- * 全部「不抛错」——健康检查自己挂了就没有健康检查了：opencode 探测超时 2 秒、
- * 磁盘统计遇到权限错误跳过该项，任何一段失败都退化成 reachable:false / 0，
- * 不让整个页面 500。
+ * 全部「不抛错」——健康检查自己挂了就没有健康检查了：任何一段失败都退化成
+ * ready:false / 0，不让整个页面 500。
+ *
+ * 换成 dsh 引擎后没有常驻外部服务可探（ADR-0006）：就绪与否只取决于 runner
+ * 入口在不在、凭据引用名有没有值；「活着的东西」是每次运行自己的子进程。
  */
 import fs from "node:fs";
 import path from "node:path";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { DATA_DIR } from "@/server/fs-safety";
-import { getOpencodeUrl, type SessionRoute } from "@/server/opencode/server";
+import { DEFAULT_CREDENTIAL_ENV } from "@/server/harness/entries";
+import { defaultRunnerEntry } from "@/server/harness/launch";
+import type { RunProcess } from "@/server/harness/runtime";
 import { dirStat } from "./disk";
 import type {
-  EventPumpRoute,
   HealthCounts,
   HealthDb,
   HealthDisk,
-  HealthEventPump,
-  HealthOpencode,
+  HealthEngine,
   HealthPayload,
+  HealthRunProcesses,
   HealthTable,
+  LiveRunProcess,
   OrphanRun,
 } from "./types";
 
-const PROBE_TIMEOUT_MS = 2000;
-
-/** 事件泵与会话路由挂在 globalThis（见 src/server/opencode/server.ts） */
-interface OpencodeGlobals {
-  ontoflowSessionRoutes?: Map<string, SessionRoute>;
-  ontoflowSessionPumps?: Map<string, AbortController>;
+/** 在跑运行的子进程表挂在 globalThis（见 src/server/engine/runner.ts） */
+interface RunnerGlobals {
+  ontoflowRunProcesses?: Map<string, RunProcess>;
 }
 
 export async function getHealth(): Promise<HealthPayload> {
-  // 注意：getOpencodeUrl() 会在 server 未启动时把它拉起来——这是探测唯一能拿到 baseUrl 的途径
-  const opencode = await probeOpencode();
-  const eventPump = readEventPump();
+  const runProcesses = readRunProcesses();
   return {
-    opencode,
-    eventPump,
+    engine: readEngine(),
+    runProcesses,
     db: readDb(),
     disk: readDisk(),
-    orphanRuns: listOrphanRuns(eventPump.routes),
+    orphanRuns: listOrphanRuns(runProcesses.runs),
     counts: readCounts(),
   };
 }
 
-/** 探测 opencode server：GET <url>/doc 拿 OpenAPI 里的版本号，失败退根路径，超时 2 秒 */
-async function probeOpencode(): Promise<HealthOpencode> {
-  let url = "";
+/** 引擎就绪：runner 入口在不在、凭据引用名有没有值。都不联网。 */
+function readEngine(): HealthEngine {
+  const credentialRef = DEFAULT_CREDENTIAL_ENV;
+  const credentialConfigured = (process.env[credentialRef] ?? "") !== "";
   try {
-    url = await getOpencodeUrl();
+    const runnerEntry = defaultRunnerEntry();
+    return {
+      runnerEntry,
+      ready: fs.existsSync(runnerEntry),
+      credentialRef,
+      credentialConfigured,
+    };
   } catch (err) {
-    return { url: "", reachable: false, error: message(err) };
-  }
-
-  try {
-    const res = await fetch(new URL("/doc", url), {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-    if (res.ok) {
-      const version = await readVersion(res);
-      return version
-        ? { url, reachable: true, version }
-        : { url, reachable: true };
-    }
-  } catch {
-    // 落到根路径再试一次
-  }
-
-  try {
-    const res = await fetch(url, {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-    });
-    return { url, reachable: res.ok || res.status < 500 };
-  } catch (err) {
-    return { url, reachable: false, error: message(err) };
+    return {
+      runnerEntry: "",
+      ready: false,
+      credentialRef,
+      credentialConfigured,
+      error: message(err),
+    };
   }
 }
 
-async function readVersion(res: Response): Promise<string | undefined> {
-  try {
-    const doc: unknown = await res.json();
-    if (doc && typeof doc === "object") {
-      const info = (doc as Record<string, unknown>).info;
-      if (info && typeof info === "object") {
-        const version = (info as Record<string, unknown>).version;
-        if (typeof version === "string") return version;
-      }
-    }
-  } catch {
-    // 不是 JSON 就算了，可达性已经确认
+/** 进程内在跑的运行子进程快照。 */
+function readRunProcesses(): HealthRunProcesses {
+  const g = globalThis as RunnerGlobals;
+  const runs: LiveRunProcess[] = [];
+  for (const [runId, proc] of g.ontoflowRunProcesses ?? []) {
+    runs.push({ runId, pid: proc.pid ?? null });
   }
-  return undefined;
-}
-
-function readEventPump(): HealthEventPump {
-  const g = globalThis as OpencodeGlobals;
-  const routes: EventPumpRoute[] = [];
-  for (const [sessionId, route] of g.ontoflowSessionRoutes ?? []) {
-    routes.push({ sessionId, runId: route.runId, nodeId: route.nodeId });
-  }
-  return {
-    activeSessions: g.ontoflowSessionPumps?.size ?? 0,
-    routes,
-  };
+  return { activeRuns: runs.length, runs };
 }
 
 function readDb(): HealthDb {
@@ -153,8 +124,8 @@ function readDisk(): HealthDisk {
  * 返回明细而非计数：控制台要能直接看出「是哪几次运行卡住了、卡在几个节点上」。
  * 注意串行引擎在两个节点之间有短暂无路由窗口，瞬时出现 1 条属正常，持续存在才是真孤儿。
  */
-function listOrphanRuns(routes: EventPumpRoute[]): OrphanRun[] {
-  const live = new Set(routes.map((r) => r.runId));
+function listOrphanRuns(live_runs: LiveRunProcess[]): OrphanRun[] {
+  const live = new Set(live_runs.map((r) => r.runId));
   const rows = db.all<{
     id: string;
     workflowName: string;

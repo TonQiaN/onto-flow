@@ -7,7 +7,7 @@ import type { FolderRef } from "@/components/library";
 import type { ValidationIssue } from "@/lib/graph";
 
 export type PortKind = "text" | "file" | "json";
-export type ReasoningEffort = "low" | "medium" | "high" | "max";
+export type ReasoningEffort = "off" | "low" | "high" | "max";
 export type RunNodeStatus =
   | "pending"
   | "running"
@@ -17,8 +17,8 @@ export type RunNodeStatus =
   | "cancelled";
 
 export const EFFORT_LABEL: Record<ReasoningEffort, string> = {
+  off: "关闭",
   low: "低",
-  medium: "中",
   high: "高",
   max: "最大",
 };

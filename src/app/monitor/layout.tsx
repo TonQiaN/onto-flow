@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 
 const TABS: Array<{ href: string; label: string; hint: string }> = [
   { href: "/monitor", label: "总览", hint: "实时指标与 24 小时趋势" },
-  { href: "/monitor/sessions", label: "实时会话", hint: "进行中的 opencode 会话" },
+  { href: "/monitor/sessions", label: "实时会话", hint: "进行中的 Action 会话" },
   { href: "/monitor/trace", label: "Trace", hint: "单次运行的全链路追踪" },
   { href: "/monitor/logs", label: "日志检索", hint: "跨运行的事件检索" },
   { href: "/monitor/cost", label: "成本分析", hint: "token 与费用归集" },

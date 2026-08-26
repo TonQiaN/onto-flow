@@ -26,7 +26,7 @@ import type { LogItem, LogsPayload } from "@/server/monitor/types";
 
 const PAGE_SIZE = 50;
 
-/** run_events.type 全集（引擎侧唯一出处：src/server/opencode/server.ts） */
+/** run_events.type 全集（引擎侧唯一出处：src/server/engine/events.ts） */
 const EVENT_TYPES: Array<{ value: string; label: string }> = [
   { value: "text", label: "文本增量" },
   { value: "tool", label: "工具调用" },

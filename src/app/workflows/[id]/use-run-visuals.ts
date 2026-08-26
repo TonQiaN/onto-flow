@@ -286,7 +286,7 @@ const EMPTY_ACTIVITY: NodeActivity = {
 
 /**
  * SSE log 帧（run_events 行）→ activity。
- * 事件类型由 src/server/opencode/server.ts 产出：
+ * 事件类型由 src/server/engine/events.ts 产出：
  * text / reasoning / tool / session.idle / session.error。
  * 纯函数：去重（按 run_events.id）在调用处完成，避免在 setState 更新器里写副作用。
  */

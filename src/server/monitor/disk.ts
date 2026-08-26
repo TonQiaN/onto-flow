@@ -3,7 +3,7 @@
  *
  * 只 stat 不读文件内容；data/runs 可能有成百上千个运行目录，因此用显式栈迭代
  * 而不是递归函数，并且遇到权限/竞态错误就跳过该项而不是整体抛错。
- * 独立成文件是为了让 cleanup.ts 不必经 health.ts 间接引入 opencode SDK。
+ * 独立成文件是为了让 cleanup.ts 不必经 health.ts 间接引入引擎模块。
  */
 import fs from "node:fs";
 import path from "node:path";

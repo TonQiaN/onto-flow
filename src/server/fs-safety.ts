@@ -1,7 +1,7 @@
 /**
  * 服务端路径安全工具。运行输入里的 file PortValue 来自不可信的请求体
  * （/api/workflows/[id]/run 直接接收前端 JSON），必须约束在 data/ 目录内，
- * 防止 `../` 目录穿越读取任意文件或写入 opencode 会扫描执行的工具目录。
+ * 防止 `../` 目录穿越读取任意文件或写入运行工作区之外的路径。
  */
 import path from "node:path";
 
