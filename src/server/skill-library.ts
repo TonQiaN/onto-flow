@@ -68,7 +68,12 @@ export function materializeSkill(skill: {
     "---",
     "",
   ].join("\n");
-  fs.writeFileSync(path.join(dir, "SKILL.md"), `${frontmatter}${skill.content}\n`, "utf8");
+  // 原子替换：运行启动时的 digestDirectory 在线程池里读本目录，与这次写入在
+  // OS 层任意交错；直接写 SKILL.md 会让它读到 O_TRUNC 之后的半写文件，把错误
+  // 摘要记进 runs.imports。先写临时文件再 rename，读方要么旧整体要么新整体。
+  const tmp = path.join(dir, ".SKILL.md.tmp");
+  fs.writeFileSync(tmp, `${frontmatter}${skill.content}\n`, "utf8");
+  fs.renameSync(tmp, path.join(dir, "SKILL.md"));
 }
 
 export function removeSkillDir(slug: string): void {

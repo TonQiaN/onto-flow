@@ -17,12 +17,12 @@ import {
   actions,
   db,
   models,
+  nodeUsage,
   objectTypes,
   runEvents,
   runNodes,
   skills,
 } from "@/db";
-import { usageCostCny } from "@/server/pricing";
 import { exitsOf, hasNamedExits, type ResolvedNode, type ResolvedPort } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
 import { DATA_DIR } from "@/server/fs-safety";
@@ -521,42 +521,39 @@ function guessMime(filePath: string): string {
 }
 
 /**
- * 会话用量汇总写回 run_nodes，并结算人民币费用。上游每个 step 发一条 usage chunk
- * 且不累积，直接求和即可——这里没有 opencode 那种同一条消息重复上报的坑。
+ * 会话用量汇总写回 run_nodes，并落一条结算事件。逐条明细（含按每条 usage
+ * 到达时刻计的峰谷费用）由 events.ts 在 chunk 到达当下写进 node_usage——
+ * 跨过峰谷边界的会话不能整段按收束时刻计价。这里从 node_usage 按会话求和：
+ * 原始流式事件不驻留内存（并行运行下会把 Next 堆推到 GB 级），且汇总与明细
+ * 同源同表，成本页和运行列表不会再各算各的。
  */
 function recordUsage(
   ctx: ActionNodeContext,
   sessionId: string,
   model: { providerId: string; modelId: string },
 ): void {
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let reasoningTokens = 0;
-  let cacheReadTokens = 0;
-  let cost = 0;
-  for (const event of ctx.proc.eventsOf(sessionId)) {
-    const raw = event as {
-      time?: number;
-      data?: { chunk?: { type?: string; usage?: Record<string, number> } };
-    };
-    const chunk = raw.data?.chunk;
-    if (chunk?.type !== "usage" || !chunk.usage) continue;
-    inputTokens += chunk.usage.inputTokens ?? 0;
-    outputTokens += chunk.usage.outputTokens ?? 0;
-    reasoningTokens += chunk.usage.reasoningTokens ?? 0;
-    cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
-    // 每条 usage 按自己的到达时刻计峰谷：跨过峰谷边界的会话不能整段按收束时刻计价。
-    cost += usageCostCny(
-      model.providerId,
-      model.modelId,
-      {
-        inputTokens: chunk.usage.inputTokens ?? 0,
-        outputTokens: chunk.usage.outputTokens ?? 0,
-        cacheReadTokens: chunk.usage.cacheReadTokens ?? 0,
-      },
-      new Date(typeof raw.time === "number" ? raw.time : Date.now()),
-    );
-  }
+  const totals = db
+    .select({
+      inputTokens: sql<number>`coalesce(sum(${nodeUsage.inputTokens}), 0)`,
+      outputTokens: sql<number>`coalesce(sum(${nodeUsage.outputTokens}), 0)`,
+      reasoningTokens: sql<number>`coalesce(sum(${nodeUsage.reasoningTokens}), 0)`,
+      cacheReadTokens: sql<number>`coalesce(sum(${nodeUsage.cacheReadTokens}), 0)`,
+      cost: sql<number>`coalesce(sum(${nodeUsage.cost}), 0)`,
+    })
+    .from(nodeUsage)
+    .where(
+      and(
+        eq(nodeUsage.runId, ctx.runId),
+        eq(nodeUsage.nodeId, ctx.node.id),
+        eq(nodeUsage.sessionId, sessionId),
+      ),
+    )
+    .get();
+  const inputTokens = totals?.inputTokens ?? 0;
+  const outputTokens = totals?.outputTokens ?? 0;
+  const reasoningTokens = totals?.reasoningTokens ?? 0;
+  const cacheReadTokens = totals?.cacheReadTokens ?? 0;
+  const cost = totals?.cost ?? 0;
   db.update(runNodes)
     // 每一轮是独立会话，但 run_nodes 是节点级汇总。原值必须保留，否则回边重入
     // 会把前几轮用量覆盖掉，运行总费用与监控统计都会少算（ADR-0009）。

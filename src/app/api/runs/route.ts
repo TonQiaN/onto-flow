@@ -47,6 +47,9 @@ export async function GET(request: Request) {
           ${runNodes.cacheWriteTokens}
         ), 0)`,
         totalCost: sql<number>`coalesce(sum(${runNodes.cost}), 0)`,
+        // 进度：导航「运行中」面板与列表都要展示 N/M 个节点，避免逐运行再打详情接口
+        nodesTotal: sql<number>`count(${runNodes.id})`,
+        nodesDone: sql<number>`coalesce(sum(case when ${runNodes.status} in ('success', 'failed', 'cancelled', 'skipped') then 1 else 0 end), 0)`,
       })
       .from(runs)
       .leftJoin(runNodes, eq(runNodes.runId, runs.id))

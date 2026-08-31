@@ -82,11 +82,22 @@ export async function launchRun(
         `harness 子进程未经收束退出（code=${String(exit.code)}，signal=${String(exit.signal)}）`,
       ),
   });
-  await proc.initialize({
-    cwd: workspace.workspaceDir,
-    provider: options.provider ?? DEEPSEEK_PROVIDER,
-    model: options.model ?? DEFAULT_DEEPSEEK_MODEL,
-    ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
-  });
+  try {
+    await proc.initialize({
+      cwd: workspace.workspaceDir,
+      provider: options.provider ?? DEEPSEEK_PROVIDER,
+      model: options.model ?? DEFAULT_DEEPSEEK_MODEL,
+      ...(options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens }),
+    });
+  } catch (cause) {
+    // initialize 失败时子进程已经 spawn 出来了；不收束就没有任何人持有它的句柄，
+    // 并行运行下这种僵尸会累积到拖垮机器。收束失败不掩盖首个错误。
+    try {
+      await proc.dispose();
+    } catch {
+      // 收束尽力而为：dispose 的阶梯打到 SIGKILL 还不退才会抛，此时只能带着原错误返回。
+    }
+    throw cause;
+  }
   return proc;
 }

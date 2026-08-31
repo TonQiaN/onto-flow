@@ -58,7 +58,16 @@ function Divider() {
   return <span className="text-zinc-300">·</span>;
 }
 
-export function RunBar({ visuals }: { visuals: RunVisuals }) {
+export function RunBar({
+  visuals,
+  runsInFlight = [],
+  onSwitch,
+}: {
+  visuals: RunVisuals;
+  /** 本工作流当前进行中的全部运行（editor 轮询喂入），用于并行切换 */
+  runsInFlight?: Array<{ id: string; startedAt: string | number }>;
+  onSwitch?: (runId: string) => void;
+}) {
   const [confirming, setConfirming] = useState(false);
 
   const {
@@ -92,6 +101,12 @@ export function RunBar({ visuals }: { visuals: RunVisuals }) {
   const percent =
     totals.total > 0 ? Math.round((totals.done / totals.total) * 100) : 0;
 
+  // 并行切换器：本工作流同时有多路运行，或正跟着的这路已结束而别的还在跑时出现。
+  const followedInFlight = runsInFlight.some((run) => run.id === runId);
+  const showSwitcher =
+    onSwitch !== undefined &&
+    (runsInFlight.length > 1 || (runsInFlight.length === 1 && !followedInFlight));
+
   return (
     <div className={`ff-fade-in relative border-b ${theme.bar}`}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-xs">
@@ -99,6 +114,32 @@ export function RunBar({ visuals }: { visuals: RunVisuals }) {
           <span className={`h-1.5 w-1.5 rounded-full ${theme.dot}`} />
           {theme.label}
         </span>
+
+        {showSwitcher && (
+          <>
+            <Divider />
+            <label className="flex items-center gap-1.5 text-zinc-600">
+              <span>并行 {runsInFlight.length} 路</span>
+              <select
+                data-testid="run-switcher"
+                value={followedInFlight ? runId : ""}
+                onChange={(e) => {
+                  if (e.target.value) onSwitch(e.target.value);
+                }}
+                className="rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 font-mono text-[11px] text-zinc-700"
+              >
+                {!followedInFlight && (
+                  <option value="">{runId.slice(0, 8)}（已结束）</option>
+                )}
+                {runsInFlight.map((run, index) => (
+                  <option key={run.id} value={run.id}>
+                    第 {index + 1} 路 · {run.id.slice(0, 8)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
 
         <Divider />
         <span className="tabular-nums text-zinc-600">

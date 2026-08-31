@@ -207,10 +207,10 @@ export default function RunDetailPage() {
                 {run.status === "running" && id && (
                   <CancelButton runId={id} onCancelled={() => void reload()} />
                 )}
-                {/* 画布挂载时会自动重连进行中的运行（editor.tsx），这里只负责把人送回去 */}
+                {/* 带 runId 深链：多路并行时画布要精确跟到这一条，而不是最新一条 */}
                 {run.status === "running" && (
                   <Link
-                    href={`/workflows/${encodeURIComponent(run.workflowId)}`}
+                    href={`/workflows/${encodeURIComponent(run.workflowId)}?runId=${encodeURIComponent(run.id)}`}
                     className="text-sm text-zinc-500 underline transition-colors hover:text-zinc-900"
                   >
                     回画布看动画

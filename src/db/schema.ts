@@ -354,16 +354,24 @@ export const runNodes = sqliteTable(
   (t) => [uniqueIndex("run_nodes_unique").on(t.runId, t.nodeId)],
 );
 
-export const runEvents = sqliteTable("run_events", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  runId: text("run_id")
-    .notNull()
-    .references(() => runs.id, { onDelete: "cascade" }),
-  nodeId: text("node_id"),
-  ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
-  type: text("type").notNull(),
-  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(),
-});
+export const runEvents = sqliteTable(
+  "run_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    nodeId: text("node_id"),
+    ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
+    type: text("type").notNull(),
+    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(),
+  },
+  (t) => [
+    // SSE 轮询（run_id=? and id>?）、tool/result 的 call 关联查询与删除运行时的
+    // 外键级联都按运行过滤；没有它们全是整表扫描，并行运行的交错写入把扫描越推越深。
+    index("run_events_by_run").on(t.runId, t.id),
+  ],
+);
 
 /**
  * 逐 step 的用量明细，由 dsh usage chunk 到达时实时捕获落库。
@@ -393,11 +401,12 @@ export const nodeUsage = sqliteTable(
     ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [
-    // 唯一键必须带 runId：会话 id 就是节点 id，同一工作流重复运行时跨 run 重复，
-    // 只按 (session, message) 去重会让第二次运行起的明细被 onConflictDoNothing
-    // 静默吞掉——实测同一工作流第三次运行 node_usage 一行都没落。
+    // 唯一键必须带 runId：会话 id 取的是画布节点 id、messageId 每会话从头计数，
+    // 同一工作流并行或先后运行会撞出相同 (sessionId, messageId)，缺 runId 时
+    // 后到运行的整份用量明细被 onConflictDoNothing 静默丢弃，成本统计系统性少记
+    //（实测同一工作流第三次运行 node_usage 一行都没落）。
+    // runId 前缀同时服务按运行的查询，原 node_usage_by_run 并入此索引。
     uniqueIndex("node_usage_message").on(t.runId, t.sessionId, t.messageId),
-    index("node_usage_by_run").on(t.runId),
   ],
 );
 

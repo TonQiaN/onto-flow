@@ -46,6 +46,15 @@ CREATE TABLE run_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT,
   ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
 );
+CREATE TABLE node_usage (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL,
+  session_id TEXT NOT NULL, message_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL DEFAULT '', model_id TEXT NOT NULL DEFAULT '',
+  variant TEXT, input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0, finish TEXT, ts INTEGER NOT NULL
+);
 `);
 (globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, {
   schema,
@@ -93,17 +102,25 @@ function context(options?: {
   const proc = {
     runTurn: async (...args: Parameters<ActionNodeContext["proc"]["runTurn"]>) => {
       await options?.runTurn?.(...args);
+      // 真实链路里用量由 events.ts 在 usage chunk 到达当下写进 node_usage；
+      // 这里在回合收束前落一行等价明细，recordUsage 从库里求和。
+      if (options?.usage) {
+        sqlite
+          .prepare(
+            "insert into node_usage (id, run_id, node_id, session_id, message_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, ts) values (?, 'run-1', 'node-1', ?, 'turn1-step1', ?, ?, ?, ?, ?)",
+          )
+          .run(
+            `usage-${sessionId}`,
+            sessionId,
+            options.usage.inputTokens ?? 0,
+            options.usage.outputTokens ?? 0,
+            options.usage.reasoningTokens ?? 0,
+            options.usage.cacheReadTokens ?? 0,
+            Date.now(),
+          );
+      }
       return sessionId;
     },
-    eventsOf: (id: string) =>
-      id === sessionId && options?.usage
-        ? [
-            {
-              type: "assistant/chunk",
-              data: { chunk: { type: "usage", usage: options.usage } },
-            },
-          ]
-        : [],
     sessionOutput: async () => ({ captured: true, value: { result: "result.md" } }),
     closeSession: async () => {},
   };
@@ -133,6 +150,7 @@ function context(options?: {
 beforeEach(() => {
   sqlite.exec(`
     DELETE FROM run_nodes;
+    DELETE FROM node_usage;
     DELETE FROM action_skills;
     DELETE FROM action_ports;
     DELETE FROM actions;
