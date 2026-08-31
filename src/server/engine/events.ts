@@ -148,7 +148,9 @@ function insert(
 
 /**
  * 每个 step 一条用量明细。上游一个 step 只发一条 usage chunk 且不累积，
- * 所以直接按 (sessionId, turn:step) 唯一化即可——不存在同一条消息重复上报。
+ * 按 (runId, sessionId, turn:step) 唯一化去重——会话 id 是画布节点 id，
+ * 同一工作流的多次运行会撞出相同 (sessionId, messageId)，必须由 runId 区分。
+ * 冲突目标显式声明，只吞同键重放，不吞其他约束错误。
  */
 function recordUsage(
   ctx: EventSinkContext,
@@ -173,7 +175,9 @@ function recordUsage(
         cacheReadTokens: usage.cacheReadTokens ?? 0,
         ts,
       })
-      .onConflictDoNothing()
+      .onConflictDoNothing({
+        target: [nodeUsage.runId, nodeUsage.sessionId, nodeUsage.messageId],
+      })
       .run();
   } catch (err) {
     console.error("[engine] 用量落库失败", ctx.runId, ctx.nodeId, err);

@@ -35,9 +35,9 @@ src/
 | /api/actions/[id] | GET, PUT, DELETE | 被 workflow 节点引用时 DELETE 409 |
 | /api/workflows | GET, POST | |
 | /api/workflows/[id] | GET, PUT, DELETE | GET 返回 nodes+edges+校验结果；PUT 保存整图（nodes+edges 整体替换，节点 id 由前端生成保持连线引用） |
-| /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；校验不通过 422 `{ issues }`；通过则建 run 异步执行，返回 `{ runId }` |
-| /api/runs?workflowId= | GET | 运行列表 |
-| /api/runs/[id] | GET | run + run_nodes 全量 |
+| /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；校验不通过 422 `{ issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
+| /api/runs?workflowId=&status= | GET | 运行列表；每行带 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用） |
+| /api/runs/[id] | GET, DELETE | GET：run + run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage 外键级联，连同运行目录），running 时 409 |
 | /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
 | /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
 | /api/uploads | POST | multipart 单文件 → 存 `data/uploads/<uuid>/<原名>`，返回 PortValue(file) |
@@ -51,6 +51,8 @@ src/
 - UI 文案全部中文；Tailwind 工具类直接写，不引组件库；整体风格与既有外壳（zinc 系工作台）一致。
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
 - 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
+- 运行之间并行且互相独立：同一个工作流可同时发起多次运行，跨运行状态一律按 runId 隔离（工作区目录、子进程、globalThis 上的取消/进程/输入表）。唯一的准入闸门在 `startRun`：同时 running 的运行数达 `MAX_CONCURRENT_RUNS`（16）即返回 429 而不排队——每个运行是一整个 node+tsx+dsh 子进程，队列归外部调用方管。
+- 多路运行的界面契约：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running`），点击深链 `/workflows/<id>?runId=<runId>` 精确跟随那一路；画布运行条在同一工作流多路并行时出现切换器，「运行」按钮在运行中仍可再次发起（发起后运行条切到新的一路，旧的经切换器回看）；运行详情的「回画布看动画」同样带 runId 深链。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。文件输入物化到 `workspace/inputs/`，Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
 - 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
 

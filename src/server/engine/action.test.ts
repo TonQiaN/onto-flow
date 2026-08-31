@@ -91,15 +91,12 @@ function context(options?: {
       await options?.runTurn?.(...args);
       return sessionId;
     },
-    eventsOf: (id: string) =>
-      id === sessionId && options?.usage
-        ? [
-            {
-              type: "assistant/chunk",
-              data: { chunk: { type: "usage", usage: options.usage } },
-            },
-          ]
-        : [],
+    usageOf: (id: string) => ({
+      inputTokens: (id === sessionId && options?.usage?.inputTokens) || 0,
+      outputTokens: (id === sessionId && options?.usage?.outputTokens) || 0,
+      reasoningTokens: (id === sessionId && options?.usage?.reasoningTokens) || 0,
+      cacheReadTokens: (id === sessionId && options?.usage?.cacheReadTokens) || 0,
+    }),
     sessionOutput: async () => ({ captured: true, value: { result: "result.md" } }),
     closeSession: async () => {},
   };

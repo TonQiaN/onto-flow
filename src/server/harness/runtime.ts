@@ -63,12 +63,26 @@ export function buildChildEnv(explicit: Record<string, string>): Record<string, 
   return { ...scrubbedParentEnv(), ...explicit };
 }
 
+/** 一个会话到目前为止的用量累计。 */
+export interface SessionUsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+}
+
 export class RunProcess {
   readonly #child: ChildProcess;
   readonly #transport: JsonRpcLineTransport;
   readonly #stderrStream: WriteStream;
   readonly #requestTimeoutMs: number;
-  readonly #eventsBySession = new Map<string, SessionEvent[]>();
+  /**
+   * usage chunk 到达即累加，原始事件不驻留内存：一次长运行的全量流式 chunk
+   * 常驻 Next 堆，会随并行运行数放大到 GB 级；权威转录本来就在运行目录的
+   * sessions/*.jsonl 里，进程内只需要总和与条数。
+   */
+  readonly #usageBySession = new Map<string, SessionUsageTotals>();
+  readonly #eventCountBySession = new Map<string, number>();
   readonly #statusLog: { sessionId: string; status: "idle" | "running"; seq: number }[] = [];
   #statusSeq = 0;
   #statusWaiters: (() => void)[] = [];
@@ -138,13 +152,24 @@ export class RunProcess {
     return this.#exit;
   }
 
-  /** 已收集的某会话事件快照（来自 session.event 通知）。 */
-  eventsOf(sessionId: string): SessionEvent[] {
-    return [...(this.#eventsBySession.get(sessionId) ?? [])];
+  /** 某会话的用量累计快照（usage chunk 到达时实时累加）。 */
+  usageOf(sessionId: string): SessionUsageTotals {
+    const totals = this.#usageBySession.get(sessionId);
+    return totals
+      ? { ...totals }
+      : { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0 };
+  }
+
+  /** 某会话已到达的事件条数（诊断用；事件本体不驻留）。 */
+  eventCountOf(sessionId: string): number {
+    return this.#eventCountBySession.get(sessionId) ?? 0;
   }
 
   async initialize(params: InitializeParams): Promise<InitializeResult> {
-    const result = await this.#request("initialize", params);
+    // initialize 要等子进程完成 tsx 编译加 cordis 全树装配；并行准入放行的
+    // 冷启动风暴（16 路同时 spawn）会把这一步拖过默认 30s，批量误杀刚起的运行。
+    // 给它专属宽限；此后的常规 RPC 仍用默认超时。
+    const result = await this.#request("initialize", params, 120_000);
     if (typeof (result as InitializeResult)?.serverInfo?.name !== "string") {
       throw new RunProcessError("initialize 响应缺少 serverInfo");
     }
@@ -182,6 +207,9 @@ export class RunProcess {
 
   async closeSession(sessionId: string): Promise<void> {
     await this.#request("session/close", { sessionId });
+    // 会话关闭即释放它的累计条目；调用方（action.ts）在 close 之前已读走用量。
+    this.#usageBySession.delete(sessionId);
+    this.#eventCountBySession.delete(sessionId);
   }
 
   /** 已观察到的最新状态通知序号；配合 waitForStatus 界定「此后」的状态。 */
@@ -304,9 +332,23 @@ export class RunProcess {
       const sessionId = params["sessionId"];
       if (typeof sessionId !== "string") return;
       const event = params["event"] as SessionEvent;
-      const list = this.#eventsBySession.get(sessionId) ?? [];
-      list.push(event);
-      this.#eventsBySession.set(sessionId, list);
+      this.#eventCountBySession.set(
+        sessionId,
+        (this.#eventCountBySession.get(sessionId) ?? 0) + 1,
+      );
+      const chunk = (
+        event as { data?: { chunk?: { type?: string; usage?: Record<string, number> } } }
+      ).data?.chunk;
+      if (chunk?.type === "usage" && chunk.usage) {
+        const totals =
+          this.#usageBySession.get(sessionId) ??
+          { inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0 };
+        totals.inputTokens += chunk.usage.inputTokens ?? 0;
+        totals.outputTokens += chunk.usage.outputTokens ?? 0;
+        totals.reasoningTokens += chunk.usage.reasoningTokens ?? 0;
+        totals.cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
+        this.#usageBySession.set(sessionId, totals);
+      }
       try {
         this.#onSessionEvent?.(sessionId, event);
       } catch (err) {

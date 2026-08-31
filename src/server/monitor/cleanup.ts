@@ -218,6 +218,31 @@ function cleanRuns(
   return { target: "runs", affected: { count, bytes }, deleted: !dryRun, detail };
 }
 
+// ---------------- 单个运行 ----------------
+
+/**
+ * 删除单个已结束的运行：runs 行（run_nodes / run_events / node_usage 外键级联）
+ * 加工作区目录。对外暴露运行 API 后，调用方要能清理自己发起的运行，e2e 也靠它
+ * 收走测试运行。与 cleanRuns 同属本模块这条破坏性路径，纪律一致：
+ * running 永不动、目录先收敛进 data/runs 再删。
+ */
+export function deleteRun(
+  runId: string,
+): { ok: true } | { ok: false; status: 404 | 409; error: string } {
+  const row = db.get<{ status: string; runDir: string | null }>(
+    sql`select status, run_dir as runDir from runs where id = ${runId}`,
+  );
+  if (!row) return { ok: false, status: 404, error: "运行不存在" };
+  if (row.status === "running") {
+    return { ok: false, status: 409, error: "运行仍在进行，不能删除；先取消它" };
+  }
+  // 越界的 run_dir 由 targetFromStoredRunDir 抛 CleanupError，路由层映射为 400。
+  const target = targetFromStoredRunDir(row.runDir);
+  db.run(sql`delete from runs where id = ${runId} and status <> 'running'`);
+  if (target) removeDir(target);
+  return { ok: true };
+}
+
 // ---------------- helpers ----------------
 
 function readDirs(root: string): string[] {

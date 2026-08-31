@@ -524,23 +524,11 @@ function guessMime(filePath: string): string {
 
 /**
  * 会话用量汇总写回 run_nodes。上游每个 step 发一条 usage chunk 且不累积，
- * 直接求和即可——这里没有 opencode 那种同一条消息重复上报的坑。
+ * RunProcess 在 chunk 到达时实时累加（原始事件不驻留内存），这里读总和即可。
  */
 function recordUsage(ctx: ActionNodeContext, sessionId: string): void {
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let reasoningTokens = 0;
-  let cacheReadTokens = 0;
-  for (const event of ctx.proc.eventsOf(sessionId)) {
-    const data = (event as { data?: { chunk?: { type?: string; usage?: Record<string, number> } } })
-      .data;
-    const chunk = data?.chunk;
-    if (chunk?.type !== "usage" || !chunk.usage) continue;
-    inputTokens += chunk.usage.inputTokens ?? 0;
-    outputTokens += chunk.usage.outputTokens ?? 0;
-    reasoningTokens += chunk.usage.reasoningTokens ?? 0;
-    cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
-  }
+  const { inputTokens, outputTokens, reasoningTokens, cacheReadTokens } =
+    ctx.proc.usageOf(sessionId);
   db.update(runNodes)
     // 每一轮是独立会话，但 run_nodes 是节点级汇总。原值必须保留，否则回边重入
     // 会把前几轮用量覆盖掉，运行总费用与监控统计都会少算（ADR-0009）。

@@ -45,7 +45,7 @@ import { recordSessionEvent, type EventSinkContext } from "./events";
 
 export type StartRunResult =
   | { ok: true; runId: string }
-  | { ok: false; status: 404; error: string }
+  | { ok: false; status: 404 | 429; error: string }
   | { ok: false; status: 422; error: string; issues: ValidationIssue[] };
 
 export type CancelRunResult =
@@ -152,17 +152,43 @@ export async function startRun(
     return { ok: false, status: 422, error: "工作流校验未通过", issues };
   }
 
+  // 全局并发准入：每个运行都是一个独立子进程，无上限的对外调用会把机器拖垮。
+  // 计数查库（含尚未 launch 的运行），且从查数到 insert 之间没有 await——
+  // better-sqlite3 同步执行，两个并发 startRun 不会同时读到同一个空位。
+  const active = db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(eq(runs.status, "running"))
+    .all().length;
+  if (active >= MAX_CONCURRENT_RUNS) {
+    return {
+      ok: false,
+      status: 429,
+      error: `并行运行已达上限 ${MAX_CONCURRENT_RUNS}，请等待现有运行结束后重试`,
+    };
+  }
+
   const runId = crypto.randomUUID();
-  db.insert(runs)
-    .values({
-      id: runId,
-      workflowId,
-      // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
-      workflowName: resolved.workflow.name,
-      status: "running",
-      startedAt: new Date(),
-    })
-    .run();
+  try {
+    db.insert(runs)
+      .values({
+        id: runId,
+        workflowId,
+        // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
+        workflowName: resolved.workflow.name,
+        status: "running",
+        startedAt: new Date(),
+      })
+      .run();
+  } catch (err) {
+    // resolveWorkflow 的 await 与这次 insert 之间，工作流可能被并发 DELETE 掉
+    //（删除守卫只挡有 running 运行的工作流）。外键失败在这里就是「工作流已不存在」，
+    // 不能让对外 API 以 500 的面目报出来。
+    if (err instanceof Error && err.message.includes("FOREIGN KEY constraint failed")) {
+      return { ok: false, status: 404, error: "工作流不存在（可能刚被删除）" };
+    }
+    throw err;
+  }
   for (const node of resolved.nodes) {
     db.insert(runNodes)
       .values({ runId, nodeId: node.id, label: node.label, status: "pending" })
@@ -179,6 +205,13 @@ export async function startRun(
 
 /** 一次运行内同时执行的 Action 上限。扇出宽了也不会把并发无限放大。 */
 const MAX_CONCURRENT_NODES = 10;
+
+/**
+ * 同时进行的运行总数上限。运行彼此独立（各自的工作区 + 子进程），并行本身
+ * 是支持的；这个上限只是对外暴露 API 后的准入保护——超限返回 429 而不是排队，
+ * 队列由外部调用方自己管。每个子进程是一份 node+tsx+dsh，内存以百 MB 计。
+ */
+const MAX_CONCURRENT_RUNS = 16;
 
 type NodeStatus = "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
 
@@ -396,8 +429,15 @@ async function executeRun(
       state.round = nextRound;
       updateRunNode(runId, id, { status: "pending", error: null, finishedAt: null });
       for (const e of edges) {
-        // 目标节点的入线要保留刚满足的那条回边，其余下游的边重新变回 pending。
-        if (affected.has(e.targetNodeId) && e.targetNodeId !== target.node.id) {
+        // 只重置环体内部的边：目标节点的入线保留刚满足的那条回边；来自环外
+        // 已完成节点的入线保持已结算——那些源不会重跑，重置它们会让环内节点
+        // 的该端口在下一轮永远等不齐（实测：题目输入同时喂环内写码与测试两个
+        // 节点的图，第一次回流即整环死锁）。
+        if (
+          affected.has(e.targetNodeId) &&
+          e.targetNodeId !== target.node.id &&
+          affected.has(e.sourceNodeId)
+        ) {
           edgeStatus.set(e.id, "pending");
         }
       }
@@ -554,17 +594,19 @@ async function executeRun(
   }
 
   // 终态判定：cancelled 与 failed 是两个独立终态，取消不算失败、run.error 留空
-  const now = new Date();
-  if (cancelled || isRunCancelled(runId)) {
-    db.update(runNodes)
-      .set({ status: "skipped", finishedAt: now })
-      .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
-      .run();
-    db.update(runs)
-      .set({ status: "cancelled", error: null, finishedAt: now })
-      .where(eq(runs.id, runId))
-      .run();
-  } else {
+  const writeTerminalState = (): void => {
+    const now = new Date();
+    if (cancelled || isRunCancelled(runId)) {
+      db.update(runNodes)
+        .set({ status: "skipped", finishedAt: now })
+        .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
+        .run();
+      db.update(runs)
+        .set({ status: "cancelled", error: null, finishedAt: now })
+        .where(eq(runs.id, runId))
+        .run();
+      return;
+    }
     db.update(runNodes)
       .set({ status: "skipped", finishedAt: now })
       .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
@@ -585,6 +627,16 @@ async function executeRun(
       )
       .where(eq(runs.id, runId))
       .run();
+  };
+  try {
+    writeTerminalState();
+  } catch (err) {
+    // 清理面板的 VACUUM 之类长写锁可能顶穿 busy_timeout。终态绝不能因此丢——
+    // 否则 run 卡在 running：占死一个并发名额、SSE 永不结束，直到进程重启对账。
+    // 等一拍再试一次；仍失败则抛给 startRun 的兜底（failWholeRun 自身也带重试）。
+    console.error("[engine] 终态落库失败，1.5 秒后重试", runId, err);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    writeTerminalState();
   }
   cancelledRuns.delete(runId);
 }
@@ -654,8 +706,8 @@ function updateRunNode(
     .run();
 }
 
-/** 兜底：executeRun 自身抛出的异常也不留 running 悬挂 */
-function failWholeRun(runId: string, message: string): void {
+/** 兜底：executeRun 自身抛出的异常也不留 running 悬挂；落库失败自身有界重试 */
+function failWholeRun(runId: string, message: string, attempt = 0): void {
   try {
     const wasCancelled = cancelledRuns.has(runId);
     cancelledRuns.delete(runId);
@@ -689,6 +741,11 @@ function failWholeRun(runId: string, message: string): void {
       .run();
   } catch (err) {
     console.error("[engine] 运行失败状态落库失败", err);
+    // 这是终态的最后防线：吞掉异常就等于把 run 永久留在 running。
+    // 有界重试两次，扛过清理 VACUUM 这类秒级长写锁。
+    if (attempt < 2) {
+      setTimeout(() => failWholeRun(runId, message, attempt + 1), 2000);
+    }
   }
 }
 

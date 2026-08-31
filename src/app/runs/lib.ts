@@ -39,6 +39,9 @@ export interface RunListItem {
   finishedAt: string | number | null;
   totalTokens: number;
   totalCost: number;
+  /** 节点总数与已收束数（success/failed/cancelled/skipped），驱动进度展示 */
+  nodesTotal: number;
+  nodesDone: number;
 }
 
 /** runs 表行（GET /api/runs/[id] 与 SSE snapshot 中的 run） */

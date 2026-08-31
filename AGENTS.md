@@ -60,7 +60,10 @@ npx tsx scripts/smoke-harness.ts       # 只验子进程：boot、一轮对话�
 npx tsx scripts/smoke-engine.ts        # 验整条引擎：两 Action 节点的线性工作流经 startRun 跑通
 npx tsx scripts/smoke-graph.ts         # 验图能力：扇出、汇总、具名出口、回边重入
 npx tsx scripts/smoke-capabilities.ts  # 验能力：技能被发现、工具被调用、停用工具从清单消失
+npx tsx scripts/smoke-parallel.ts [并发数]  # 验并行：同一工作流同时 10 个运行全部成功、产物互不串号
 npx tsx scripts/seed-resume.ts         # 装入「简历匹配评分」工作流（不花钱）
+npx tsx scripts/seed-leetcode.ts       # 装入「LeetCode 解题验收」工作流：解题⇄测试回边循环 + run_python 工具（不花钱）
+npx tsx scripts/run-leetcode.ts [并发数]  # 跑 LeetCode 工作流并对定稿脚本做本地独立验收；并发数默认 1
 npx tsx scripts/run-procurement.ts     # 验收案例一：采购集采计划生成
 npx tsx scripts/run-resume.ts [data内岗位路径] [data内简历路径]  # 验收案例二；省略参数用 Markdown 样例
 ```
@@ -80,7 +83,7 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 `db:seed` writes the five libraries, their folders, a v1 revision each, the `models` rows, and the sample inputs under `data/samples/` — and nothing else: no runs, no run_events, no node_usage, no purchase_plans. The run history, archived documents, and cost figures the e2e specs read exist only in the gitignored local `data/ontoflow.db`.
 
 - **The run history can be rebuilt.** `scripts/run-procurement.ts` and `scripts/run-resume.ts` regenerate it from scratch against the current engine, so losing `data/ontoflow.db` costs money and time rather than being unrecoverable. Rebuilding still means paid model calls — treat it as expensive, not as impossible. (This section used to say the fixture could not be regenerated; that was true of the opencode engine, whose runs no longer have any way of being reproduced.)
-- E2E never starts a workflow run and never clicks 执行清理 / 确认删除 / 中止该运行; the cleanup panel is exercised only through `dryRun`.
+- E2E never starts a run that contains an Action node (that spends money) and never clicks 执行清理 / 确认删除 / 中止该运行; the cleanup panel is exercised only through `dryRun`. The one sanctioned run-starting shape is `parallel-runs.spec.ts`: an input→output workflow with no Action nodes costs nothing, still exercises the full engine lifecycle, and deletes its runs in teardown via `DELETE /api/runs/[id]`.
 - E2E creates entities under a per-spec `e2e-` Chinese prefix and removes them in teardown through `cleanupByPrefix`, which skips `builtin` rows and re-checks the prefix. `settings.spec.ts` is the exception the rule cannot cover: settings are one document rather than named entities, so it saves the whole document in `beforeAll` and writes it back in `afterAll`.
 - **Never assert a count, a first-page containment, or an exact row that real usage grows.** Fetch the API payload in the test and assert the DOM matches it. This bug class has now been fixed three times; the third time it was the run-detail spec asserting that the newest run was the procurement one.
 
@@ -103,7 +106,7 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 - **All five library list GETs return `{ items, total, page, pageSize }`**, built from `parseListQuery` + `selectLibraryPage` + `listEnvelope` in `src/server/writers/list.ts`. Every other GET defines its own shape.
 - The five library pages reuse `src/components/library/`; no page grows its own tree, toolbar, folder picker, or revision panel. Their filter state lives in the URL through `use-library-query`, never in component state.
 - Workflows never enter folders; gate every folder path on `isFolderEntityKind`, not an ad-hoc comparison ([ADR-0005](docs/adr/0005-folders-not-tags.md)).
-- **Delete protection is per-owner and there are exactly three.** The four referenceable libraries answer 409 through `usedByNames()`; workflow DELETE has its own running-run guard; folder DELETE has its own name-collision guard. Do not add a fourth, and do not hand-write a reference join — `src/server/references.ts` is the only module that joins references.
+- **Delete protection is per-owner and there are exactly four.** The four referenceable libraries answer 409 through `usedByNames()`; workflow DELETE has its own running-run guard; folder DELETE has its own name-collision guard; run DELETE refuses a running run with 409 through `deleteRun` in `monitor/cleanup.ts` — the destructive path stays in that one module. Do not add a fifth, and do not hand-write a reference join — `src/server/references.ts` is the only module that joins references.
 - **Every entity write records a revision inside the same transaction**, capturing the complete definition including relations, and rollback replays the same `write<Kind>()`; a route that can reach revision restore carries `import "@/server/writers";` or restore silently answers 501.
 - Untrusted paths pass through `@/server/fs-safety` (`isWithinData` at the request boundary, `resolveWithinData` and `safeBasename` at use); the run subprocess reads and writes whatever is in its workspace.
 - Ids are `crypto.randomUUID()` from the schema default; a caller supplies an id only when it must return that id before insert or preserve client-side edge references.
@@ -126,6 +129,7 @@ Nothing runs on commit, push, or pull request: there is no CI, no git hook, no l
 Every rule here was learned the hard way while replacing opencode with dsh. Read the header comments of `src/server/harness/runtime.ts`, `src/server/harness/rpc/server.ts` and `src/server/engine/action.ts` before touching sessions, events, usage, or cancellation.
 
 - **One run, one subprocess, one workspace.** `executeRun` creates the run directory, spawns `node --import tsx src/server/harness/runner.ts <cordis.yml>`, and disposes it in a `finally`. There is no build step for server code: the subprocess loads the same TypeScript the Next process does.
+- **Runs execute in parallel and are mutually independent.** Nothing serializes runs: cross-run state is keyed by runId on `globalThis` or lives inside the run's own directory, and anything new must follow suit. `startRun` is the only admission gate — at `MAX_CONCURRENT_RUNS` simultaneously running runs it answers 429 instead of queueing, because each run is a whole node+tsx+dsh subprocess; the external caller owns any queue.
 - **The RPC plugin is named in the composition by absolute path, not by package name.** The cordis loader resolves bare specifiers from its own location inside `node_modules`, and this repository has no self-referencing symlink there, so a bare name fails at boot. `boot`'s `bareModuleBaseUrl` does not rescue it.
 - **Pin every user-level root inside the run directory.** `skill-filesystem` defaults `agentsHome` to `~/.agents`, so a run will happily discover and load the machine owner's personal skills — observed in practice as an agent looping through unrelated skills and then failing to read their resources. The per-run composition pins both `dshHome` and `agentsHome` under the run's home directory; workspace isolation is not automatic.
 - **Cap the steps of a node.** Upstream `agent-loop` has no step limit, so a looping agent burns tokens until the node's wall-clock timeout. Each session registers an `agent/pre-step` guard from `NODE_MAX_STEPS`; exceeding it ends the turn with no structured output, which fails the node.

@@ -184,8 +184,172 @@ function resolvedWorkflow(): ResolvedWorkflow {
   };
 }
 
+/**
+ * 回边重入图：输入同时喂环内两个节点（写码与测试），测试节点具名出口，
+ * 不通过时经回边把写码节点连同环体拉回下一轮。
+ */
+function loopWorkflow(): ResolvedWorkflow {
+  const workflow = {
+    id: "workflow-loop",
+    name: "回边重入测试",
+    description: "",
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+  const port = (name: string) => ({
+    name,
+    objectTypeId: "text-type",
+    objectTypeName: "文本",
+    kind: "text" as const,
+  });
+  const writerRow = {
+    id: "writer-node",
+    workflowId: workflow.id,
+    kind: "action" as const,
+    actionId: "action-writer",
+    objectTypeId: null,
+    label: "写码",
+    x: 0,
+    y: 0,
+  };
+  const testerRow = {
+    id: "tester-node",
+    workflowId: workflow.id,
+    kind: "action" as const,
+    actionId: "action-tester",
+    objectTypeId: null,
+    label: "测试",
+    x: 0,
+    y: 0,
+  };
+  return {
+    workflow,
+    nodes: [
+      { id: "input-node", kind: "input", label: "题目", inputs: [], outputs: [port("value")] },
+      {
+        id: "writer-node",
+        kind: "action",
+        label: "写码",
+        inputs: [port("题目"), port("意见")],
+        outputs: [port("脚本")],
+        maxReentries: 2,
+        onExhausted: "fail",
+      },
+      {
+        id: "tester-node",
+        kind: "action",
+        label: "测试",
+        inputs: [port("题目"), port("脚本")],
+        outputs: [
+          { ...port("定稿"), exitName: "通过" },
+          { ...port("意见"), exitName: "不通过" },
+        ],
+      },
+      { id: "output-node", kind: "output", label: "产出", inputs: [port("value")], outputs: [] },
+    ],
+    edges: [
+      {
+        id: "e1-题目到写码",
+        sourceNodeId: "input-node",
+        sourcePort: "value",
+        targetNodeId: "writer-node",
+        targetPort: "题目",
+      },
+      {
+        id: "e2-题目到测试",
+        sourceNodeId: "input-node",
+        sourcePort: "value",
+        targetNodeId: "tester-node",
+        targetPort: "题目",
+      },
+      {
+        id: "e3-脚本",
+        sourceNodeId: "writer-node",
+        sourcePort: "脚本",
+        targetNodeId: "tester-node",
+        targetPort: "脚本",
+      },
+      {
+        id: "e4-回边意见",
+        sourceNodeId: "tester-node",
+        sourcePort: "意见",
+        targetNodeId: "writer-node",
+        targetPort: "意见",
+      },
+      {
+        id: "e5-定稿",
+        sourceNodeId: "tester-node",
+        sourcePort: "定稿",
+        targetNodeId: "output-node",
+        targetPort: "value",
+      },
+    ],
+    nodeRows: new Map([
+      [writerRow.id, writerRow],
+      [testerRow.id, testerRow],
+    ]),
+  };
+}
+
 beforeAll(async () => {
   ({ startRun, cancelRun } = await import("./runner"));
+});
+
+describe("回边重入", () => {
+  it("环外输入喂环内多个节点时，回流后下一轮仍能等齐并收束成功", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(loopWorkflow());
+
+    const rounds: Array<{ node: string; round: number }> = [];
+    controls.runActionNode.mockImplementation(
+      async (ctx: { node: { id: string }; round: number }) => {
+        rounds.push({ node: ctx.node.id, round: ctx.round });
+        if (ctx.node.id === "writer-node") {
+          return {
+            outputs: { 脚本: { kind: "text", text: `第${ctx.round + 1}版脚本` } },
+            selectedExit: null,
+          };
+        }
+        // 测试节点：第一轮不通过（走回边），第二轮通过（走定稿）。
+        return ctx.round === 0
+          ? {
+              outputs: { 意见: { kind: "text", text: "有用例失败" } },
+              selectedExit: "不通过",
+            }
+          : {
+              outputs: { 定稿: { kind: "text", text: "验收通过的脚本" } },
+              selectedExit: "通过",
+            };
+      },
+    );
+
+    const startedRun = await startRun("workflow-loop", {
+      "input-node": { kind: "text", text: "两数之和" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("success");
+      expect(run.error).toBeNull();
+    });
+
+    // 两个环内节点各跑两轮，轮次成对推进。
+    expect(rounds).toEqual([
+      { node: "writer-node", round: 0 },
+      { node: "tester-node", round: 0 },
+      { node: "writer-node", round: 1 },
+      { node: "tester-node", round: 1 },
+    ]);
+    const output = sqlite
+      .prepare("SELECT status, outputs FROM run_nodes WHERE run_id = ? AND node_id = 'output-node'")
+      .get(startedRun.runId) as { status: string; outputs: string };
+    expect(output.status).toBe("success");
+    expect(output.outputs).toContain("验收通过的脚本");
+  });
 });
 
 describe("运行取消终态", () => {
