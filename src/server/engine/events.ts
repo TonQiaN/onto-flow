@@ -7,9 +7,12 @@
  * 事件词汇沿用既有的五种：text / reasoning / tool / session.idle / session.error；
  * 上游 dsh 的事件种类远多于这些，只有能落到这五种上的才记，其余丢弃——
  * 完整的会话记录本来就在运行目录的 sessions/*.jsonl 里，这里只是给人看的摘要。
+ * 另有一种引擎自产的 usage 结算事件：节点收束时由 action.ts 的 recordUsage 写入，
+ * 载荷是该会话的 token 汇总与人民币费用，让事件日志里能看到每个 Action 花了多少钱。
  */
 import { sql } from "drizzle-orm";
 import { db, nodeUsage, runEvents } from "@/db";
+import { usageCostCny } from "@/server/pricing";
 
 /** 上游 SessionEvent 的结构在 wire 上是开放的，这里只narrow 出用得上的形状。 */
 interface RawEvent {
@@ -171,6 +174,16 @@ function recordUsage(
         outputTokens: usage.outputTokens ?? 0,
         reasoningTokens: usage.reasoningTokens ?? 0,
         cacheReadTokens: usage.cacheReadTokens ?? 0,
+        cost: usageCostCny(
+          ctx.providerId,
+          ctx.modelId,
+          {
+            inputTokens: usage.inputTokens ?? 0,
+            outputTokens: usage.outputTokens ?? 0,
+            cacheReadTokens: usage.cacheReadTokens ?? 0,
+          },
+          ts,
+        ),
         ts,
       })
       .onConflictDoNothing()

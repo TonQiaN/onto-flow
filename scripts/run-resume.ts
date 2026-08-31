@@ -69,20 +69,17 @@ async function main(): Promise<void> {
   let totalCost = 0;
   const nodeRows = db.select().from(runNodes).where(eq(runNodes.runId, started.runId)).all();
   for (const n of nodeRows) {
+    // reasoning 已含在 outputTokens 里（适配器直取 completion_tokens），不重复相加。
     const nodeTokens =
-      n.inputTokens +
-      n.outputTokens +
-      n.reasoningTokens +
-      n.cacheReadTokens +
-      n.cacheWriteTokens;
+      n.inputTokens + n.outputTokens + n.cacheReadTokens + n.cacheWriteTokens;
     totalTokens += nodeTokens;
     totalCost += n.cost;
     console.log(
       `  ${n.label.padEnd(10)} ${n.status.padEnd(8)} tokens=${nodeTokens}` +
-        `${n.error ? " error=yes" : ""}`,
+        ` cost=¥${n.cost.toFixed(4)}${n.error ? " error=yes" : ""}`,
     );
   }
-  console.log(`  合计 tokens=${totalTokens} cost=${totalCost.toFixed(6)}`);
+  console.log(`  合计 tokens=${totalTokens} cost=¥${totalCost.toFixed(4)}`);
 
   const ws = row!.runDir ? path.join(process.cwd(), row!.runDir, "workspace") : null;
   const expectedArtifacts = [

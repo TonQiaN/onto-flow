@@ -237,10 +237,11 @@ export function formatTokens(n: number): string {
 }
 
 /** 费用为美元，保留 4 位；极小的非零值不显示成 $0.0000 */
+/** 费用单位是人民币：按 DeepSeek 官方峰谷价在落库时计算（src/server/pricing.ts）。 */
 export function formatCost(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "$0";
-  if (n < 0.0001) return "<$0.0001";
-  return `$${n.toFixed(4)}`;
+  if (!Number.isFinite(n) || n <= 0) return "¥0";
+  if (n < 0.0001) return "<¥0.0001";
+  return `¥${n.toFixed(4)}`;
 }
 
 /** run_nodes.snapshot 的展示形态（服务端 RunSnapshot 的宽松镜像） */
@@ -327,31 +328,12 @@ export function asPortValue(value: unknown): PortValue | null {
   if (o.kind === "file" && typeof o.file === "object" && o.file !== null) {
     const f = o.file as Record<string, unknown>;
     if (typeof f.name === "string" && typeof f.path === "string") {
-      const rawPreprocessed =
-        typeof f.preprocessed === "object" && f.preprocessed !== null
-          ? (f.preprocessed as Record<string, unknown>)
-          : null;
-      const pageImagePaths = rawPreprocessed?.pageImagePaths;
-      const preprocessed =
-        rawPreprocessed?.kind === "pdf" &&
-        typeof rawPreprocessed.pageCount === "number" &&
-        typeof rawPreprocessed.textPath === "string" &&
-        Array.isArray(pageImagePaths) &&
-        pageImagePaths.every((entry) => typeof entry === "string")
-          ? {
-              kind: "pdf" as const,
-              pageCount: rawPreprocessed.pageCount,
-              textPath: rawPreprocessed.textPath,
-              pageImagePaths,
-            }
-          : undefined;
       return {
         kind: "file",
         file: {
           path: f.path,
           name: f.name,
           mime: typeof f.mime === "string" ? f.mime : "",
-          ...(preprocessed === undefined ? {} : { preprocessed }),
         },
       };
     }

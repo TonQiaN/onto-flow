@@ -80,15 +80,11 @@ CREATE TABLE run_nodes (
   ontoflowDb?: unknown;
   ontoflowCancelledRuns?: Set<string>;
   ontoflowRunProcesses?: Map<string, unknown>;
-  ontoflowInputControllers?: Map<string, AbortController>;
 }).ontoflowDb = drizzle(sqlite, { schema });
 (globalThis as unknown as { ontoflowCancelledRuns?: Set<string> }).ontoflowCancelledRuns =
   new Set();
 (globalThis as unknown as { ontoflowRunProcesses?: Map<string, unknown> }).ontoflowRunProcesses =
   new Map();
-(globalThis as unknown as {
-  ontoflowInputControllers?: Map<string, AbortController>;
-}).ontoflowInputControllers = new Map();
 
 let startRun: typeof import("./runner").startRun;
 let cancelRun: typeof import("./runner").cancelRun;

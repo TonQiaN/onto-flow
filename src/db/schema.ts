@@ -8,7 +8,6 @@ import {
   uniqueIndex,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
-import { FILE_PREPROCESSORS } from "@/lib/object-types";
 
 const id = () =>
   text("id")
@@ -115,11 +114,6 @@ export const objectTypes = sqliteTable("object_types", {
   description: text("description").notNull().default(""),
   /** kind=json 时可选的 JSON Schema（序列化字符串），同时用作结构化输出 schema */
   jsonSchema: text("json_schema"),
-  /**
-   * kind=file 时可选的输入预处理器。pdf 会保留原文件、抽取文本层并逐页栅格化；
-   * 非 PDF 文件仍原样进入工作区。对象类型在输入节点上才触发这项行为。
-   */
-  filePreprocessor: text("file_preprocessor", { enum: FILE_PREPROCESSORS }),
   /** 内置类型（text/file/json 兜底）不可删除 */
   builtin: integer("builtin", { mode: "boolean" }).notNull().default(false),
   ...timestamps,
@@ -347,6 +341,7 @@ export const runNodes = sqliteTable(
     reasoningTokens: integer("reasoning_tokens").notNull().default(0),
     cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
     cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    /** 人民币；节点各轮会话费用的累计，口径同 node_usage.cost。 */
     cost: real("cost").notNull().default(0),
     /** PortValue 映射的 JSON：{ [portName]: PortValue } */
     inputs: text("inputs", { mode: "json" }).$type<Record<string, unknown>>(),
@@ -392,12 +387,16 @@ export const nodeUsage = sqliteTable(
     reasoningTokens: integer("reasoning_tokens").notNull().default(0),
     cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
     cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    /** 人民币；按该条 usage 到达时刻的官方峰谷单价计算（src/server/pricing.ts）。 */
     cost: real("cost").notNull().default(0),
     finish: text("finish"),
     ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [
-    uniqueIndex("node_usage_message").on(t.sessionId, t.messageId),
+    // 唯一键必须带 runId：会话 id 就是节点 id，同一工作流重复运行时跨 run 重复，
+    // 只按 (session, message) 去重会让第二次运行起的明细被 onConflictDoNothing
+    // 静默吞掉——实测同一工作流第三次运行 node_usage 一行都没落。
+    uniqueIndex("node_usage_message").on(t.runId, t.sessionId, t.messageId),
     index("node_usage_by_run").on(t.runId),
   ],
 );

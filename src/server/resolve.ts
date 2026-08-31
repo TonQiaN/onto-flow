@@ -78,7 +78,6 @@ export async function resolveWorkflow(
       objectTypeId: row.objectTypeId,
       objectTypeName: type?.name ?? "未知类型",
       kind: type?.kind ?? "text",
-      filePreprocessor: type?.filePreprocessor ?? null,
       artifactPath: row.artifactPath ?? null,
       exitName: row.exitName ?? null,
     };
@@ -106,7 +105,6 @@ export async function resolveWorkflow(
       objectTypeId: row.objectTypeId ?? "",
       objectTypeName: type?.name ?? "未知类型",
       kind: type?.kind ?? "text",
-      filePreprocessor: type?.filePreprocessor ?? null,
     };
     const label =
       row.label || (row.kind === "input" ? `输入·${port.objectTypeName}` : `输出·${port.objectTypeName}`);

@@ -18,9 +18,11 @@ import {
   db,
   models,
   objectTypes,
+  runEvents,
   runNodes,
   skills,
 } from "@/db";
+import { usageCostCny } from "@/server/pricing";
 import { exitsOf, hasNamedExits, type ResolvedNode, type ResolvedPort } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
 import { DATA_DIR } from "@/server/fs-safety";
@@ -194,7 +196,7 @@ export async function runActionNode(
   );
 
   assertNotCancelled(ctx.runId);
-  recordUsage(ctx, sessionId);
+  recordUsage(ctx, sessionId, model);
 
   const captured = await ctx.proc.sessionOutput(sessionId);
   if (!captured.captured) {
@@ -405,23 +407,19 @@ function buildPrompt(
   return sections.join("\n\n");
 }
 
-/** 一个入端口的取用说明：文件说路径，字面值直接给。 */
+/**
+ * 一个入端口的取用说明：文件说路径，字面值直接给。
+ * 文件一律是原件——平台不做任何格式预处理，转换（抽文本、栅格化、OCR 等）
+ * 是模型在会话里用 bash 自己的工作（ADR-0011）。
+ */
 function describeInput(value: PortValue | undefined): string {
   if (!value) return "（上游未提供）";
   switch (value.kind) {
     case "file":
-      if (value.file.preprocessed?.kind === "pdf") {
-        const pdf = value.file.preprocessed;
-        const pages = pdf.pageImagePaths
-          .map((page, index) => `第 ${index + 1} 页 \`${workspaceRelative(page)}\``)
-          .join("、");
-        return (
-          `PDF 已预处理：先读文本层 \`${workspaceRelative(pdf.textPath)}\`，` +
-          `再逐页调用 read_image 核对页面图（共 ${pdf.pageCount} 页：${pages}）；` +
-          `原文件在 \`${workspaceRelative(value.file.path)}\``
-        );
-      }
-      return `读文件 \`${workspaceRelative(value.file.path)}\``;
+      return (
+        `读文件 \`${workspaceRelative(value.file.path)}\`（原件，未经预处理；` +
+        `直接读不动的格式就用 bash 自行转换成能读的形态）`
+      );
     case "text":
       return value.text.length > 200 ? `${value.text.slice(0, 200)}…` : value.text;
     case "json":
@@ -523,23 +521,41 @@ function guessMime(filePath: string): string {
 }
 
 /**
- * 会话用量汇总写回 run_nodes。上游每个 step 发一条 usage chunk 且不累积，
- * 直接求和即可——这里没有 opencode 那种同一条消息重复上报的坑。
+ * 会话用量汇总写回 run_nodes，并结算人民币费用。上游每个 step 发一条 usage chunk
+ * 且不累积，直接求和即可——这里没有 opencode 那种同一条消息重复上报的坑。
  */
-function recordUsage(ctx: ActionNodeContext, sessionId: string): void {
+function recordUsage(
+  ctx: ActionNodeContext,
+  sessionId: string,
+  model: { providerId: string; modelId: string },
+): void {
   let inputTokens = 0;
   let outputTokens = 0;
   let reasoningTokens = 0;
   let cacheReadTokens = 0;
+  let cost = 0;
   for (const event of ctx.proc.eventsOf(sessionId)) {
-    const data = (event as { data?: { chunk?: { type?: string; usage?: Record<string, number> } } })
-      .data;
-    const chunk = data?.chunk;
+    const raw = event as {
+      time?: number;
+      data?: { chunk?: { type?: string; usage?: Record<string, number> } };
+    };
+    const chunk = raw.data?.chunk;
     if (chunk?.type !== "usage" || !chunk.usage) continue;
     inputTokens += chunk.usage.inputTokens ?? 0;
     outputTokens += chunk.usage.outputTokens ?? 0;
     reasoningTokens += chunk.usage.reasoningTokens ?? 0;
     cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
+    // 每条 usage 按自己的到达时刻计峰谷：跨过峰谷边界的会话不能整段按收束时刻计价。
+    cost += usageCostCny(
+      model.providerId,
+      model.modelId,
+      {
+        inputTokens: chunk.usage.inputTokens ?? 0,
+        outputTokens: chunk.usage.outputTokens ?? 0,
+        cacheReadTokens: chunk.usage.cacheReadTokens ?? 0,
+      },
+      new Date(typeof raw.time === "number" ? raw.time : Date.now()),
+    );
   }
   db.update(runNodes)
     // 每一轮是独立会话，但 run_nodes 是节点级汇总。原值必须保留，否则回边重入
@@ -549,8 +565,32 @@ function recordUsage(ctx: ActionNodeContext, sessionId: string): void {
       outputTokens: sql`${runNodes.outputTokens} + ${outputTokens}`,
       reasoningTokens: sql`${runNodes.reasoningTokens} + ${reasoningTokens}`,
       cacheReadTokens: sql`${runNodes.cacheReadTokens} + ${cacheReadTokens}`,
+      cost: sql`${runNodes.cost} + ${cost}`,
       sessionId,
     })
     .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
     .run();
+  // 结算事件：让事件日志里能直接看到这个 Action 本轮花了多少钱。写失败不拦运行，
+  // 权威数字在 run_nodes / node_usage。
+  try {
+    db.insert(runEvents)
+      .values({
+        runId: ctx.runId,
+        nodeId: ctx.node.id,
+        ts: new Date(),
+        type: "usage",
+        payload: {
+          sessionId,
+          model: model.modelId,
+          inputTokens,
+          outputTokens,
+          reasoningTokens,
+          cacheReadTokens,
+          costCny: Math.round(cost * 1e6) / 1e6,
+        },
+      })
+      .run();
+  } catch (err) {
+    console.error("[engine] 用量结算事件落库失败", ctx.runId, ctx.node.id, err);
+  }
 }

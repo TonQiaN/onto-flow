@@ -40,7 +40,11 @@ CREATE TABLE run_nodes (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, snapshot TEXT,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  session_id TEXT
+  cost REAL NOT NULL DEFAULT 0, session_id TEXT
+);
+CREATE TABLE run_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT,
+  ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
 );
 `);
 (globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, {
@@ -146,7 +150,7 @@ beforeEach(() => {
     INSERT INTO action_ports VALUES (
       'port-1', 'action-1', 'output', 'result', 'type-1', 0, 'result.md', NULL
     );
-    INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, NULL);
+    INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, NULL);
   `);
   fs.rmSync(path.join(workspaceRoot, "result.md"), { force: true });
   fs.rmSync(path.join(workspaceRoot, "rounds"), { recursive: true, force: true });
@@ -225,7 +229,7 @@ describe("Action 执行时边界", () => {
     });
   });
 
-  it("PDF 派生输入在真实会话提示中逐页要求调用 read_image", async () => {
+  it("文件输入在真实会话提示中给出原件路径并指示自行转换", async () => {
     fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
     let renderedPrompt = "";
 
@@ -236,18 +240,9 @@ describe("Action 执行时边界", () => {
             {
               kind: "file",
               file: {
-                path: "runs/workflow/run/workspace/inputs/input/source/resume.pdf",
+                path: "runs/workflow/run/workspace/inputs/input/resume.pdf",
                 name: "resume.pdf",
                 mime: "application/pdf",
-                preprocessed: {
-                  kind: "pdf",
-                  pageCount: 2,
-                  textPath: "runs/workflow/run/workspace/inputs/input/derived/text-layer.txt",
-                  pageImagePaths: [
-                    "runs/workflow/run/workspace/inputs/input/derived/pages/page-1.png",
-                    "runs/workflow/run/workspace/inputs/input/derived/pages/page-2.png",
-                  ],
-                },
               },
             },
           ],
@@ -258,9 +253,8 @@ describe("Action 执行时边界", () => {
       }),
     );
 
-    expect(renderedPrompt).toContain("逐页调用 read_image");
-    expect(renderedPrompt).toContain("inputs/input/derived/text-layer.txt");
-    expect(renderedPrompt).toContain("inputs/input/derived/pages/page-1.png");
-    expect(renderedPrompt).toContain("inputs/input/derived/pages/page-2.png");
+    expect(renderedPrompt).toContain("inputs/input/resume.pdf");
+    expect(renderedPrompt).toContain("原件，未经预处理");
+    expect(renderedPrompt).toContain("用 bash 自行转换");
   });
 });

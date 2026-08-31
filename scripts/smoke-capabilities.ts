@@ -81,6 +81,9 @@ function upsertObjectType(name: string, kind: "text" | "file" | "json"): string 
   return id;
 }
 
+/** 冒烟前的完整设置文档；结束时原样写回。 */
+let priorSettings: ReturnType<typeof readSettings> | undefined;
+
 async function main(): Promise<void> {
   if (!process.env.DEEPSEEK_API_KEY) throw new Error("缺少 DEEPSEEK_API_KEY");
   const model = db
@@ -90,10 +93,12 @@ async function main(): Promise<void> {
     .get();
   if (!model) throw new Error("找不到模型行");
 
-  // 全局设置：确保 bash 在默认停用清单里，这条冒烟要验证拦截真的发生。
-  const current = readSettings();
-  if (!current.disabledTools.includes("bash")) {
-    writeSettings({ ...current, disabledTools: [...current.disabledTools, "bash"] });
+  // 全局设置：临时把 bash 加进停用清单，验证真实注册的工具会被摘掉（ADR-0011 之后
+  // bash 是每个会话的基础工具）。整份文档先存后还——settings 是单文档，残留的
+  // disabledTools 会让之后每一次真实运行都失去 bash，实测踩过。
+  priorSettings = readSettings();
+  if (!priorSettings.disabledTools.includes("bash")) {
+    writeSettings({ ...priorSettings, disabledTools: [...priorSettings.disabledTools, "bash"] });
   }
 
   // Skill：写库并物化磁盘投影
@@ -258,4 +263,9 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+try {
+  await main();
+} finally {
+  // 无论冒烟成败都把设置文档原样写回，不给后续运行留下停用残留。
+  if (priorSettings !== undefined) writeSettings(priorSettings);
+}

@@ -28,7 +28,7 @@ src/
 
 | 路由 | 方法 | 说明 |
 |---|---|---|
-| /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建；对象类型载荷含 `filePreprocessor: "pdf" | null` |
+| /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建 |
 | /api/object-types/[id] 等同上三者 | GET, PUT, DELETE | 详情/更新/删除；被引用时 DELETE 返回 409 `{ error, usedBy }`；builtin 类型不可删改 |
 | /api/models | GET | 模型白名单 |
 | /api/actions | GET, POST | POST/PUT 载荷含 `ports: {direction,name,objectTypeId,position,artifactPath,exitName}[]`、`maxReentries`、`onExhausted`、`skillIds`、`toolIds`，整体替换；每个输出端口的 `artifactPath` 必填，输入端口两字段归一为 null |
@@ -95,12 +95,15 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `data/` 内（`isWithinData` 在 startRun 入口 422 拦截，`resolveWithinData` 在 runner.ts
   物化时纵深兜底），`file.name` 用 `safeBasename` 只取 basename——防目录穿越读任意文件外泄、
   或覆盖工作区目标目录之外的文件。
-- **PDF 预处理由对象类型声明**：`object_types.file_preprocessor = "pdf"` 的输入节点在工作区
-  保留原文件，调用 Poppler 抽取 `text-layer.txt` 并按页生成 PNG；模型提示必须同时给出文本层、
-  页面图与原文件路径。文件签名而不是 multipart MIME/扩展名决定是否处理；声称是 PDF 但签名
-  不符直接失败。上传请求体在 multipart 解析前流式限流；单份 PDF 上限 32 MiB / 20 页，文本层
-  上限 16 MiB、全部派生文件合计上限 128 MiB。Poppler 通过可取消的异步子进程逐项执行，失败
-  或取消删除半成品；页面图不齐时不得启动模型。非 PDF 文件原样物化。
+- **文件输入原样物化，平台不做任何预处理（ADR-0011）**：所有文件输入原样拷贝为
+  `inputs/<节点id>/<文件名>`；格式转换（抽文本、栅格化、逐页 `read_image`）是 Action 会话里
+  模型用 `bash` 自己的工作。上传请求体在 multipart 解析前流式限流，单文件上限 32 MiB。
+- **每个会话都有 `bash`，写入被沙箱圈定**：`bash` 与 `read`/`write`/`edit`/`read_image`/`skill`
+  同为基础工具面，对所有 Action 可见。bash 与 write/edit 共用一份 `workspace-write` 沙箱策略，
+  写入只放行运行工作区与系统临时目录，但两族的围栏强度不同：bash 的命令经 Seatbelt
+  （`sandbox-exec`）内核围栏执行，runner 不可用时 fail-closed 拒绝执行命令；write/edit 走
+  `dsh-fs-sandbox` 的进程内路径检查，上游明言它是策略围栏而非内核边界，也不经 runner。
+  read 与网络两族都不受限；模型请求的沙箱升级因 `approval policy: "never"` 一律拒绝。
 - **孤儿运行对账**：`src/instrumentation.ts` 启动钩子调用 `reconcileOrphanRuns`，把上次进程
   遗留的 `running` run 及其 running/pending 节点失败化——否则 SSE 结束条件永假、无限轮询。
 - **模型输出用作文件名前先净化**：`save_purchase_plan` 里 `plan_no` 由模型产出，拼进备份
@@ -128,10 +131,11 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 
 - 工作流「简历匹配评分」是两个文件输入 → 一个解析 Action → 六个评委扇出 → 一个汇总 →
   一个输出的 11 节点图。
-- `岗位JD文件` 与 `简历文件` 的 `filePreprocessor` 都是 `pdf`：PDF 生成文本层与逐页 PNG，
-  Markdown/纯文本原样物化。
-- 只有「简历评分·解析」使用 `deepseek-v4-flash-vision-exp`。它必须把输入当不可信数据，先读
-  文本层、再逐页调用 `read_image`；扫描件文本层为空也不得跳页，页面与文本冲突时以可见页面为准。
+- `岗位JD文件` 与 `简历文件` 都以原件进入工作区，PDF、Markdown、纯文本一视同仁。
+- 只有「简历评分·解析」使用 `deepseek-v4-flash-vision-exp`。它必须把输入当不可信数据，自己用
+  bash 处理 PDF：`pdfinfo` 确认页数、`pdftotext` 抽文本层、`pdftoppm` 逐页栅格化后逐页调用
+  `read_image` 核对，需要时写脚本裁剪放大局部；扫描件文本层为空也不得跳页，页面与文本冲突时
+  以可见页面为准。
 - 六个评委与汇总使用 `deepseek-v4-flash`。评委只经 `job.md` / `resume.md` 读解析结果；汇总等
   六份 `scores/*.md` 全部结算后，再回看 `job.md` / `resume.md`，自动裁决评委分歧、证据缺口、
   分数不自洽与不允许的评分依据。最终 `report.md` 必须给出推荐判断、最终分、证据充分度、否决
