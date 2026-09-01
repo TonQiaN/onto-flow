@@ -13,12 +13,15 @@ describe("简历评分闭环裁决契约", () => {
     expect(source).toContain("本维度判断必须在当前材料内完成");
   });
 
-  it("要求评委处理证据缺口，最终汇总回看原文并完成裁决", () => {
+  it("要求评委处理证据缺口，最终汇总输出严格 JSON 并完成机械校验", () => {
     expect(source).toContain("## 证据缺口及计分处理");
-    expect(source).toContain("## 最终判断");
-    expect(source).toContain("## 硬性条件最终裁决");
-    expect(source).toContain("## 自动裁决记录");
-    expect(source).toContain("报告不得保留未裁决项");
+    expect(source).toContain("RESUME_MATCH_RESULT_SCHEMA_TEXT");
+    expect(source).toContain("match-result.json");
+    expect(source).toContain("validate_resume_match_result");
+    expect(source).toContain("const __name = <T>(target: T, _value: string): T => target");
+    expect(source).toContain("没有拿到 `valid=true` 不得提交结构化输出");
+    expect(source).toContain("结果不得保留未裁决项");
+    expect(source).toMatch(/toolIds: \[validateResultTool\]/);
   });
 
   it("把岗位、简历和六份评委结论全部接入最终汇总", () => {

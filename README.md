@@ -87,13 +87,20 @@ npm run dev
 简历都可上传 PDF、Markdown 或纯文本；文件以原件进入工作区，「简历评分·解析」使用
 DeepSeek V4 Flash Vision，自己用 bash 调 Poppler 抽取文本层、逐页栅格化并对每页执行视觉核对，
 六个评委与汇总继续使用文本模型。最终汇总会回看岗位与简历原文，自动裁决评委分歧、证据缺口和分数不自洽，并把明确的
-推荐判断、依据、证据充分度及所有改分记录写进 `report.md`，不留下未裁决项。命令行付费验收可运行：
+推荐判断、依据、证据充分度及所有改分记录写进严格的 `match-result.json`。汇总必须调用
+`validate_resume_match_result` 校验字段和总分/档位/否决等跨字段关系，得到 `valid=true` 才能提交。
+
+内部调用方先把岗位和简历分别传给 `/api/uploads`，再把返回的两个 file PortValue 作为
+`{ job, resume }` POST 到 `/api/internal/resume-matches`；接口返回 `runId`，随后 GET
+`/api/internal/resume-matches/<runId>` 查询状态与最终 JSON，不需要知道工作流或节点 id。
+命令行付费验收会真实走这组 HTTP 接口，并继续核对运行历史、工作区产物与 Agent 轨迹：
 
 ```bash
 npx tsx scripts/run-resume.ts [data/ 内岗位路径] [data/ 内简历路径]
 ```
 
-该脚本只打印 run id、节点/产物计数、token 与费用等脱敏指标，不回显简历或报告正文。
+运行前需保持 `npm run dev` 在仓库根启动。脚本只打印 run id、最终分/档位、节点/产物/轨迹计数、
+token 与费用等脱敏指标，不回显岗位、简历或结果正文。
 
 ## 测试
 

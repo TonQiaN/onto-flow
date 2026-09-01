@@ -65,7 +65,7 @@ npx tsx scripts/seed-resume.ts         # 装入「简历匹配评分」工作流
 npx tsx scripts/seed-leetcode.ts       # 装入「LeetCode 解题验收」工作流：解题⇄测试回边循环 + run_python 工具（不花钱）
 npx tsx scripts/run-leetcode.ts [并发数]  # 跑 LeetCode 工作流并对定稿脚本做本地独立验收；并发数默认 1
 npx tsx scripts/run-procurement.ts     # 验收案例一：采购集采计划生成
-npx tsx scripts/run-resume.ts [data内岗位路径] [data内简历路径]  # 验收案例二；省略参数用 Markdown 样例
+npx tsx scripts/run-resume.ts [data内岗位路径] [data内简历路径]  # 经内部 API 验收案例二；先保持 npm run dev 运行
 ```
 
 ### Checks
