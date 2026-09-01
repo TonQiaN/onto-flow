@@ -29,11 +29,13 @@ export interface ResolvedActionDefinition {
   action: typeof actions.$inferSelect;
   model: typeof models.$inferSelect;
   ports: { inputs: ResolvedActionPort[]; outputs: ResolvedActionPort[] };
-  skills: Array<typeof skills.$inferSelect>;
+  /** 只冻结 Action→Skill 身份关系；正文按活链接契约在会话启动前从工作区读取。 */
+  skills: Array<Pick<typeof skills.$inferSelect, "id" | "name">>;
 }
 
 export interface ResolvedCapabilities {
-  skills: Array<typeof skills.$inferSelect>;
+  /** 建立工作区 symlink 只需要稳定的实体身份，不把准入时正文冒充运行时正文。 */
+  skills: Array<Pick<typeof skills.$inferSelect, "id" | "name">>;
   tools: Array<typeof tools.$inferSelect>;
   toolNamesByActionId: ReadonlyMap<string, readonly string[]>;
 }
@@ -46,7 +48,7 @@ export interface ResolvedWorkflow {
   nodeRows: Map<string, typeof workflowNodes.$inferSelect>;
   /** 端口引用的对象类型行；业务预检不得在 resolve 后重新读一版 Schema。 */
   objectTypes: ReadonlyMap<string, typeof objectTypes.$inferSelect>;
-  /** Action、模型、端口与 Skill 引用在 resolve 时一次冻结。 */
+  /** Action、模型、端口与 Skill 身份关系在 resolve 时一次冻结。 */
   actionDefinitions: ReadonlyMap<string, ResolvedActionDefinition>;
   /** Tool 源码与 Action→Tool 归属在 resolve 时冻结；执行器直接物化这里的行。 */
   capabilities: ResolvedCapabilities;
@@ -180,7 +182,7 @@ export async function resolveWorkflow(
       skills: actionSkillRows.flatMap((relation) => {
         if (relation.actionId !== action.id) return [];
         const skill = skillById.get(relation.skillId);
-        return skill ? [skill] : [];
+        return skill ? [{ id: skill.id, name: skill.name }] : [];
       }),
     });
   }
@@ -229,7 +231,7 @@ export async function resolveWorkflow(
     objectTypes: types,
     actionDefinitions,
     capabilities: {
-      skills: skillRows,
+      skills: skillRows.map((skill) => ({ id: skill.id, name: skill.name })),
       tools: toolRows,
       toolNamesByActionId: new Map(
         actionIds.map((actionId) => [

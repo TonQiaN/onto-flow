@@ -5,6 +5,7 @@ import { and, desc, eq, lte } from "drizzle-orm";
 import {
   db,
   revisions,
+  runEvents,
   runNodes,
   runs,
   workflows,
@@ -319,19 +320,40 @@ function outputFile(value: unknown): ResumeMatchFileInput | null {
   return typeof parsed === "string" ? null : parsed;
 }
 
-function revisionOutputNodeId(payload: Record<string, unknown>): string | null {
-  if (!Array.isArray(payload.nodes)) return null;
-  const outputIds = payload.nodes.flatMap((value) => {
+interface HistoricalResultNodes {
+  outputNodeId: string;
+  validatorNodeId: string;
+}
+
+function revisionResultNodes(payload: Record<string, unknown>): HistoricalResultNodes | null {
+  if (!Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) return null;
+  const nodes = payload.nodes.flatMap((value) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
-    const node = value as Record<string, unknown>;
-    return node.kind === "output" &&
+    return [value as Record<string, unknown>];
+  });
+  const outputs = nodes.filter(
+    (node) =>
+      node.kind === "output" &&
       node.label === RESUME_MATCH_OUTPUT_LABEL &&
       typeof node.id === "string" &&
-      node.id !== ""
-      ? [node.id]
+      node.id !== "",
+  );
+  if (outputs.length !== 1) return null;
+  const outputNodeId = outputs[0].id as string;
+  const incoming = payload.edges.flatMap((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+    const edge = value as Record<string, unknown>;
+    return edge.targetNodeId === outputNodeId &&
+      edge.targetPort === "value" &&
+      typeof edge.sourceNodeId === "string" &&
+      edge.sourceNodeId !== ""
+      ? [edge.sourceNodeId]
       : [];
   });
-  return outputIds.length === 1 ? outputIds[0] : null;
+  if (incoming.length !== 1) return null;
+  const validatorNodeId = incoming[0];
+  if (!nodes.some((node) => node.id === validatorNodeId && node.kind === "action")) return null;
+  return { outputNodeId, validatorNodeId };
 }
 
 /**
@@ -339,7 +361,7 @@ function revisionOutputNodeId(payload: Record<string, unknown>): string | null {
  * 快照：从 run.startedAt 之前倒序找，且节点 id 必须真实存在于该次 run_nodes，
  * 因而并发保存产生的新修订也不能把另一张图的 output 错配给这次运行。
  */
-function historicalOutputNodeId(run: typeof runs.$inferSelect): string | null {
+function historicalResultNodes(run: typeof runs.$inferSelect): HistoricalResultNodes | null {
   const runNodeIds = new Set(
     db
       .select({ nodeId: runNodes.nodeId })
@@ -361,10 +383,56 @@ function historicalOutputNodeId(run: typeof runs.$inferSelect): string | null {
     .orderBy(desc(revisions.createdAt), desc(revisions.versionNo))
     .all();
   for (const revision of history) {
-    const nodeId = revisionOutputNodeId(revision.payload);
-    if (nodeId && runNodeIds.has(nodeId)) return nodeId;
+    const nodes = revisionResultNodes(revision.payload);
+    if (
+      nodes &&
+      runNodeIds.has(nodes.outputNodeId) &&
+      runNodeIds.has(nodes.validatorNodeId)
+    ) {
+      return nodes;
+    }
   }
   return null;
+}
+
+function isValidValidatorReceipt(payload: Record<string, unknown> | null): boolean {
+  if (
+    payload?.tool !== RESUME_MATCH_VALIDATOR_TOOL_NAME ||
+    payload.status !== "ok" ||
+    typeof payload.output !== "string"
+  ) {
+    return false;
+  }
+  try {
+    const receipt = JSON.parse(payload.output) as unknown;
+    return (
+      typeof receipt === "object" &&
+      receipt !== null &&
+      !Array.isArray(receipt) &&
+      (receipt as Record<string, unknown>).valid === true &&
+      Array.isArray((receipt as Record<string, unknown>).errors) &&
+      ((receipt as Record<string, unknown>).errors as unknown[]).length === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** 成功结果只接受汇总 Action 自己持久化下来的 validator valid=true 回执。 */
+function hasValidatorReceipt(runId: string, nodeId: string): boolean {
+  return db
+    .select({ payload: runEvents.payload })
+    .from(runEvents)
+    .where(
+      and(
+        eq(runEvents.runId, runId),
+        eq(runEvents.nodeId, nodeId),
+        eq(runEvents.type, "tool"),
+      ),
+    )
+    .orderBy(desc(runEvents.id))
+    .all()
+    .some((row) => isValidValidatorReceipt(row.payload));
 }
 
 function readResultArtifact(
@@ -416,8 +484,8 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
   };
   if (run.status !== "success") return writeOk({ ...base, result: null });
 
-  const outputNodeId = historicalOutputNodeId(run);
-  if (!outputNodeId) return writeFail(500, "成功运行缺少可追溯的评分输出节点定义");
+  const resultNodes = historicalResultNodes(run);
+  if (!resultNodes) return writeFail(500, "成功运行缺少可追溯的评分输出节点定义");
 
   // 展示名不是节点身份：Action 也可以叫「评分结果」。修订只用来恢复节点 id，
   // 权威结果仍以 (runId, nodeId) 精确读取，不能退回按 label 猜测。
@@ -427,7 +495,7 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
     .where(
       and(
         eq(runNodes.runId, run.id),
-        eq(runNodes.nodeId, outputNodeId),
+        eq(runNodes.nodeId, resultNodes.outputNodeId),
       ),
     )
     .get();
@@ -440,6 +508,12 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
   const parsed = parseResumeMatchResult(artifact.content);
   if (!parsed.ok) {
     return writeFail(500, "工作流产出的 JSON 未通过结果契约", parsed.errors);
+  }
+  if (!hasValidatorReceipt(run.id, resultNodes.validatorNodeId)) {
+    return writeFail(
+      500,
+      `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的 valid=true 持久回执`,
+    );
   }
   return writeOk({ ...base, result: parsed.data });
 }

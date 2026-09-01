@@ -15,6 +15,7 @@ import {
   RESUME_MATCH_RESUME_OBJECT_TYPE_NAME,
   RESUME_MATCH_RESUME_PARSE_PORT,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
+  type ResumeMatchResult,
 } from "../lib/resume-match";
 import type { ResolvedActionDefinition, ResolvedWorkflow } from "./resolve";
 
@@ -82,6 +83,10 @@ CREATE TABLE run_nodes (
   inputs TEXT, outputs TEXT, session_id TEXT, error TEXT,
   started_at INTEGER, finished_at INTEGER
 );
+CREATE TABLE run_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT,
+  ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
+);
 `);
 (globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
 
@@ -99,6 +104,74 @@ const invocation = {
   job: { kind: "file" as const, file: { path: "uploads/job.md", name: "job.md", mime: "text/markdown" } },
   resume: { kind: "file" as const, file: { path: "uploads/resume.md", name: "resume.md", mime: "text/markdown" } },
 };
+
+function validResult(): ResumeMatchResult {
+  return {
+    schemaVersion: "1.0",
+    decision: "recommend",
+    overallScore: 75,
+    matchLevel: "good",
+    evidenceConfidence: "low",
+    summary: "当前材料支持推荐，匹配结论以现有证据为限。",
+    decisiveReasons: ["四个非否决维度达到推荐线，且没有否决项。"],
+    veto: { triggered: false, dimensions: [], reasons: [] },
+    hardRequirements: [
+      {
+        requirement: "具备岗位要求的核心技术经验",
+        status: "met",
+        evidence: "负责核心服务的设计与实现。",
+        impact: "硬性条件有直接证据支持。",
+      },
+    ],
+    dimensions: {
+      mustHave: {
+        reviewerScore: 100,
+        finalScore: 100,
+        evidenceConfidence: "high",
+        conclusion: "全部硬性条件有证据支持。",
+      },
+      skillMatch: {
+        reviewerScore: 80,
+        finalScore: 80,
+        evidenceConfidence: "high",
+        conclusion: "核心技能多数直接命中。",
+      },
+      experienceDepth: {
+        reviewerScore: 70,
+        finalScore: 70,
+        evidenceConfidence: "medium",
+        conclusion: "职责深度达到岗位基本要求。",
+      },
+      domainFit: {
+        reviewerScore: 60,
+        finalScore: 60,
+        evidenceConfidence: "low",
+        conclusion: "存在可迁移经验。",
+      },
+      stability: {
+        reviewerScore: 90,
+        finalScore: 90,
+        evidenceConfidence: "high",
+        conclusion: "时间线完整且自洽。",
+      },
+      authenticityRisk: {
+        reviewerScore: 100,
+        finalScore: 100,
+        evidenceConfidence: "high",
+        conclusion: "未发现足以否决的内部矛盾。",
+      },
+    },
+    strengths: [{ point: "核心技能有项目证据", evidence: "负责核心服务的设计与实现。" }],
+    concerns: [
+      {
+        point: "直接领域经验有限",
+        evidenceStatus: "unverified",
+        impact: "领域匹配维度按现有证据计分。",
+      },
+    ],
+    adjustments: [],
+  };
+}
 
 function resolved(
   options: {
@@ -340,7 +413,7 @@ function resolved(
 
 beforeEach(() => {
   sqlite.exec(
-    "DELETE FROM run_nodes; DELETE FROM runs; DELETE FROM revisions; DELETE FROM action_tools; DELETE FROM tools; DELETE FROM settings; DELETE FROM workflow_nodes; DELETE FROM object_types; DELETE FROM workflows;",
+    "DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM runs; DELETE FROM revisions; DELETE FROM action_tools; DELETE FROM tools; DELETE FROM settings; DELETE FROM workflow_nodes; DELETE FROM object_types; DELETE FROM workflows;",
   );
   fs.rmSync(tempRoot, { recursive: true, force: true });
   fs.mkdirSync(tempRoot, { recursive: true });
@@ -529,6 +602,94 @@ describe("简历匹配工作流预检", () => {
 });
 
 describe("简历匹配运行结果", () => {
+  it("严格 JSON 仍须汇总 Action 留下 validator valid=true 持久回执", () => {
+    const result = validResult();
+    const resultPath = path.join(tempRoot, RESUME_MATCH_RESULT_ARTIFACT);
+    fs.writeFileSync(resultPath, JSON.stringify(result), "utf8");
+    sqlite
+      .prepare(
+        "insert into revisions (id, entity_kind, entity_id, version_no, payload, created_at) values (?, 'workflow', ?, 1, ?, 50)",
+      )
+      .run(
+        "revision-with-validator-node",
+        workflowId,
+        JSON.stringify({
+          nodes: [
+            { id: "report-action", kind: "action", label: "简历评分·汇总" },
+            { id: "result-output", kind: "output", label: "评分结果" },
+          ],
+          edges: [
+            {
+              sourceNodeId: "report-action",
+              sourcePort: "结果",
+              targetNodeId: "result-output",
+              targetPort: "value",
+            },
+          ],
+        }),
+      );
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, workflow_name, run_dir, started_at, finished_at) values ('run-1', ?, 'success', ?, ?, 100, 101)",
+      )
+      .run(workflowId, "简历匹配评分", tempRoot);
+    sqlite
+      .prepare(
+        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('report-row', 'run-1', 'report-action', '简历评分·汇总', 'success', '{}')",
+      )
+      .run();
+    sqlite
+      .prepare(
+        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('output-row', 'run-1', 'result-output', '评分结果', 'success', ?)",
+      )
+      .run(
+        JSON.stringify({
+          value: {
+            kind: "file",
+            file: {
+              path: resultPath,
+              name: RESUME_MATCH_RESULT_ARTIFACT,
+              mime: "application/json",
+            },
+          },
+        }),
+      );
+    sqlite
+      .prepare(
+        "insert into run_events (run_id, node_id, ts, type, payload) values ('run-1', 'report-action', 100, 'tool', ?)",
+      )
+      .run(
+        JSON.stringify({
+          tool: RESUME_MATCH_VALIDATOR_TOOL_NAME,
+          status: "ok",
+          output: JSON.stringify({ valid: false, errors: ["未通过"] }),
+        }),
+      );
+
+    expect(readResumeMatchRun("run-1")).toEqual({
+      ok: false,
+      status: 500,
+      error: `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的 valid=true 持久回执`,
+    });
+
+    sqlite
+      .prepare(
+        "insert into run_events (run_id, node_id, ts, type, payload) values ('run-1', 'report-action', 101, 'tool', ?)",
+      )
+      .run(
+        JSON.stringify({
+          tool: RESUME_MATCH_VALIDATOR_TOOL_NAME,
+          status: "ok",
+          output: JSON.stringify({ valid: true, errors: [] }),
+        }),
+      );
+
+    expect(readResumeMatchRun("run-1")).toMatchObject({
+      ok: true,
+      data: { status: "success", result },
+    });
+  });
+
   it("按运行时修订的 output 节点 id 读取，不受同名 Action 与当前图改写影响", () => {
     sqlite
       .prepare(
@@ -543,6 +704,14 @@ describe("简历匹配运行结果", () => {
             { id: "same-label-action", kind: "action", label: "评分结果" },
             { id: "result-output", kind: "output", label: "评分结果" },
           ],
+          edges: [
+            {
+              sourceNodeId: "same-label-action",
+              sourcePort: "结果",
+              targetNodeId: "result-output",
+              targetPort: "value",
+            },
+          ],
         }),
         50,
       );
@@ -556,6 +725,7 @@ describe("简历匹配运行结果", () => {
         2,
         JSON.stringify({
           nodes: [{ id: "replacement-output", kind: "output", label: "评分结果" }],
+          edges: [],
         }),
         150,
       );

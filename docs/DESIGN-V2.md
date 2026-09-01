@@ -155,7 +155,8 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 ## 六、引擎改动（阶段一部分）
 
 1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口与 Tool 定义；`runActionNode`
-   不再回读共享库，只把这份定义和本轮实际渲染提示写进 `run_nodes.snapshot`：
+   不再回读这些共享库行，只把这份定义和本轮实际渲染提示写进 `run_nodes.snapshot`。Skill 只冻结
+   引用关系，正文在会话启动前从工作区活链接读取，并把当时的完整 `SKILL.md` 一并写入：
    ```ts
    { actionId, actionName, prompt, rule, model:{providerId,modelId,displayName},
      reasoningEffort, skills:[{name,content}], renderedPrompt,

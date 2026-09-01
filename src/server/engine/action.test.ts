@@ -71,6 +71,7 @@ const {
   recordSessionEvent,
   unpersistedUsageForSession,
 } = await import("./events");
+const { skillSlug } = await import("../skill-library");
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-action-test-"));
 
 function resolvedNode(exitName: string | null = null): ResolvedNode {
@@ -246,6 +247,7 @@ beforeEach(() => {
   clearUnpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1#2" });
   fs.rmSync(path.join(workspaceRoot, "result.md"), { force: true });
   fs.rmSync(path.join(workspaceRoot, "rounds"), { recursive: true, force: true });
+  fs.rmSync(path.join(workspaceRoot, ".agents"), { recursive: true, force: true });
 });
 
 afterAll(() => {
@@ -298,6 +300,31 @@ describe("Action 执行时边界", () => {
     expect(JSON.parse(row.snapshot)).toMatchObject({
       prompt: "写报告",
       ports: { outputs: [{ artifactPath: "result.md" }] },
+    });
+  });
+
+  it("Skill 关系冻结但节点快照记录会话启动前的活投影正文", async () => {
+    const skill = { id: "skill-live", name: "核对规范" };
+    const definition = admittedDefinition();
+    definition.skills = [skill];
+    const skillDir = path.join(workspaceRoot, ".agents", "skills", skillSlug(skill));
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: live\n---\n\n编辑后的正文\n",
+    );
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+
+    await runActionNode(context({ definition }));
+
+    const row = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
+    expect(JSON.parse(row.snapshot)).toMatchObject({
+      skills: [
+        {
+          name: "核对规范",
+          content: "---\nname: live\n---\n\n编辑后的正文\n",
+        },
+      ],
     });
   });
 

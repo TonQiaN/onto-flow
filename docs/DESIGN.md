@@ -69,8 +69,9 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   子进程 stdout 只承载 JSON-RPC，stderr 写 `<run>/logs/harness.stderr.log`，运行结束在 `finally`
   中逐级收束子进程，任何路径都不得遗留 `running`。
 - **受理时执行快照**：`resolveWorkflow` 在同一个事件循环片段内一次读取图所引用的 Object Type、
-  Action、模型、端口、Skill 关系、Tool 源码与 Action→Tool 归属。运行受理、Tool 物化和稍后启动的
-  每个 Action 都消费同一对象；共享库的并发保存只影响下一次运行。Skill 文件仍按下条的活链接契约读取。
+  Action、模型、端口、Skill 身份关系、Tool 源码与 Action→Tool 归属。运行受理、Tool 物化和稍后
+  启动的每个 Action 都消费同一对象；共享库的并发保存只影响下一次运行。Skill 正文仍按下条的活链接
+  契约读取，并在各 Action 会话启动前把当时可读的工作区投影全文写进节点快照。
 - **能力与隔离**：工作流级指令写 `workspace/AGENTS.md`；Skill 以 ASCII slug 链进
   `workspace/.agents/skills/`，由 `skill-filesystem` 按描述发现，不强制拼进提示。Tool 以 ASCII id
   物化为 `<run>/plugins/tool-<id>.ts` cordis 插件；工作流并集进入全局工具面后，每个 Action
@@ -165,9 +166,10 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   分数不自洽与不允许的评分依据。最终产物固定为 `match-result.json`：JSON Schema 禁止额外字段，
   `src/lib/resume-match.ts` 再核对总分、档位、否决、证据充分度、硬性条件及改分记录的跨字段关系。
 - 汇总 Action 独享 `validate_resume_match_result` Tool；它写出文件后必须反复调用，直到轨迹留下
-  `valid=true` 才能提交。内部工作流调用入口在成功响应时用同一个校验函数再验一次，Agent 自检与
-  API 边界不会各自维护一套规则。该入口还会验证汇总 Action 仍引用此 Tool、源码 SHA-256 匹配
-  内置 pin，且本次全局设置快照没有停用它。岗位 JD 与简历输入还必须各自使用指定 Object Type，
-  并分别连到解析 Action 的对应端口；随后把通过预检的同一图、Action/Tool 定义与设置对象交给
-  `startResolvedRun`，并发画布或共享库保存不能换掉实际执行快照。缺失或被改写的契约不得先产生
-  模型费用再失败。
+  `valid=true` 才能提交。内部工作流调用入口在成功响应时用同一个校验函数再验一次，并要求汇总
+  Action 自己的持久工具事件里存在 `valid=true`、错误为空的回执；只写出合法 JSON 却跳过 Tool
+  不能被 API 接受。Agent 自检与 API 边界不会各自维护一套规则。该入口还会验证汇总 Action 仍引用
+  此 Tool、源码 SHA-256 匹配内置 pin，且本次全局设置快照没有停用它。岗位 JD 与简历输入还必须
+  各自使用指定 Object Type，并分别连到解析 Action 的对应端口；随后把通过预检的同一图、
+  Action/Tool 定义与设置对象交给 `startResolvedRun`，并发画布或共享库保存不能换掉实际执行快照。
+  缺失或被改写的契约不得先产生模型费用再失败。

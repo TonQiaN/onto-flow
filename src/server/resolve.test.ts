@@ -70,7 +70,7 @@ const { resolveWorkflow } = await import("./resolve");
 afterAll(() => sqlite.close());
 
 describe("工作流执行定义快照", () => {
-  it("resolve 后共享 Action、模型、端口、Skill 与 Tool 改写都不替换快照", async () => {
+  it("resolve 后冻结 Action、模型、端口、Skill 关系与 Tool 源码", async () => {
     const resolved = await resolveWorkflow("workflow-1");
     expect(resolved).not.toBeNull();
     if (!resolved) return;
@@ -90,8 +90,9 @@ describe("工作流执行定义快照", () => {
       action: { prompt: "原始任务", rule: "原始规则" },
       model: { modelId: "model-v1", displayName: "模型 V1" },
       ports: { outputs: [{ artifactPath: "result.md" }] },
-      skills: [{ content: "原始技能" }],
+      skills: [{ id: "skill-1", name: "核对" }],
     });
+    expect(resolved.capabilities.skills).toEqual([{ id: "skill-1", name: "核对" }]);
     expect(resolved.objectTypes.get("type-1")?.name).toBe("报告");
     expect(resolved.capabilities.tools).toMatchObject([{ code: "original tool code" }]);
     expect(resolved.capabilities.toolNamesByActionId.get("action-1")).toEqual([

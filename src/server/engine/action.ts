@@ -5,8 +5,8 @@
  * - 实质内容一律走工作区文件。连线不搬运内容，只在提示里生成「去读哪个文件」。
  * - 数据面 schema 由输出端口生成：每个输出端口一个字段，值是该端口产物的实际路径。
  * - 产物没写出来是唯一的机械兜底：文件不存在即节点失败，不管模型说了什么。
- * - Action、模型、端口与能力关系在运行受理时已经冻结；本节点只消费那份定义，
- *   并把实际渲染的提示写进 run_nodes.snapshot，不在付费执行中回读共享库。
+ * - Action、模型、端口与能力关系在运行受理时已经冻结；Skill 正文按活链接契约
+ *   在会话启动前读取工作区投影，并与实际渲染的提示一起写进 run_nodes.snapshot。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -22,7 +22,11 @@ import type { PortValue } from "@/lib/values";
 import { DATA_DIR } from "@/server/fs-safety";
 import type { NodeToolFilter } from "@/server/harness/rpc/types";
 import type { RunProcess } from "@/server/harness/runtime";
-import type { RunWorkspace } from "@/server/harness/workspace";
+import {
+  WORKSPACE_SKILLS_SUBDIR,
+  type RunWorkspace,
+} from "@/server/harness/workspace";
+import { skillSlug } from "@/server/skill-library";
 import type { ResolvedActionDefinition, ResolvedActionPort } from "@/server/resolve";
 import type { NodeExit } from "@/lib/graph";
 import {
@@ -173,7 +177,7 @@ export async function runActionNode(
       displayName: model.displayName,
     },
     reasoningEffort: action.reasoningEffort,
-    skills: skillRows.map((s) => ({ name: s.name, content: s.content })),
+    skills: readProjectedSkills(ctx.workspace, skillRows, action.name),
     ports: {
       inputs: ports.inputs.map(toSnapshotPort),
       // 输出记本轮真实生效的路径（含 rounds/ 前缀）与出口归属，
@@ -271,6 +275,33 @@ export async function runActionNode(
   // 会话用完即关：同一子进程里后续节点各自开自己的会话，互不可见。
   await ctx.proc.closeSession(sessionId);
   return { outputs, selectedExit };
+}
+
+/**
+ * Skill 关系在准入时冻结，正文却有意保持活链接。紧贴会话创建前读取 symlink
+ * 实际指向的 SKILL.md，节点快照才解释得了这次模型可见的版本；投影缺失则失败。
+ */
+function readProjectedSkills(
+  workspace: RunWorkspace,
+  skillRows: ResolvedActionDefinition["skills"],
+  actionName: string,
+): RunSnapshot["skills"] {
+  return skillRows.map((skill) => {
+    const file = path.join(
+      workspace.workspaceDir,
+      WORKSPACE_SKILLS_SUBDIR,
+      skillSlug(skill),
+      "SKILL.md",
+    );
+    try {
+      return { name: skill.name, content: fs.readFileSync(file, "utf8") };
+    } catch (error) {
+      throw new Error(
+        `Action「${actionName}」引用的 Skill「${skill.name}」投影不可读：` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  });
 }
 
 /** 第 0 轮用声明的原路径，之后落进 rounds/<轮次>/ 下的同名路径。 */
