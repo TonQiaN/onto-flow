@@ -106,12 +106,17 @@ export async function GET(
       return jsonError(404, "文件不存在（工作区可能已被清理）");
     }
     if (content.includes(0)) return jsonError(415, "二进制文件不支持预览");
+    // 截断点可能落在中文等多字节字符中间。stream=true 会保留末尾未完成序列而
+    // 不输出 U+FFFD；decoder 随请求丢弃，返回值因此始终是完整 UTF-8 字符前缀。
+    const preview = new TextDecoder("utf-8").decode(content, {
+      stream: size > content.byteLength,
+    });
 
     return NextResponse.json({
       name: path.basename(real),
       size,
       truncated: size > PREVIEW_MAX_BYTES,
-      content: content.toString("utf8"),
+      content: preview,
     });
   });
 }

@@ -240,6 +240,21 @@ test.describe("并行运行", () => {
     expect(oversizedBody.size).toBe(262_145);
     expect(oversizedBody.truncated).toBe(true);
 
+    const oversizedChinese = path.join(firstRunRoot, "workspace", "oversized-chinese.txt");
+    fs.writeFileSync(oversizedChinese, "中".repeat(87_382));
+    const chineseRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, oversizedChinese))}`,
+    );
+    expect(chineseRes.ok()).toBeTruthy();
+    const chineseBody = (await chineseRes.json()) as {
+      content: string;
+      size: number;
+      truncated: boolean;
+    };
+    expect(chineseBody.content).toBe("中".repeat(87_381));
+    expect(chineseBody.content).not.toContain("�");
+    expect(chineseBody.size).toBe(262_146);
+    expect(chineseBody.truncated).toBe(true);
     // 逐运行查日志：运行目录独立存在，harness 子进程的 stderr 日志已落盘。
     const runDirs = new Set<string>();
     for (const [runId, detail] of details) {
