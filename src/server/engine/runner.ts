@@ -33,7 +33,7 @@ import {
   type RunWorkspace,
 } from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
-import { readSettings } from "@/server/settings";
+import { readSettings, type SettingsDocument } from "@/server/settings";
 import { runActionNode } from "./action";
 import {
   collectCapabilities,
@@ -111,7 +111,18 @@ export async function startRun(
 ): Promise<StartRunResult> {
   const resolved = await resolveWorkflow(workflowId);
   if (!resolved) return { ok: false, status: 404, error: "工作流不存在" };
+  return startResolvedRun(resolved, inputs, readSettings());
+}
 
+/**
+ * 受理已经解析并由调用方检查过的精确图快照。专用入口可把业务预检与实际执行
+ * 绑定在同一个 ResolvedWorkflow 上；设置也在受理时冻结，运行中修改只影响下一次。
+ */
+export async function startResolvedRun(
+  resolved: ResolvedWorkflow,
+  inputs: Record<string, unknown>,
+  settings: SettingsDocument = readSettings(),
+): Promise<StartRunResult> {
   const issues = validateGraph(resolved.nodes, resolved.edges);
   for (const node of resolved.nodes) {
     try {
@@ -188,7 +199,7 @@ export async function startRun(
     db.insert(runs)
       .values({
         id: runId,
-        workflowId,
+        workflowId: resolved.workflow.id,
         // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
         workflowName: resolved.workflow.name,
         status: "running",
@@ -213,7 +224,7 @@ export async function startRun(
   // 异步执行，立即返回 runId。activeRuns 覆盖 executeRun 启动前到异常兜底后的
   // 全部生命期；cancelRun 提前写下 cancelled 也不能让清理路径误判为已经静止。
   activeRuns.add(runId);
-  void executeRun(runId, resolved, runInputs)
+  void executeRun(runId, resolved, runInputs, settings)
     .catch((err) => {
       failWholeRun(runId, err instanceof Error ? err.message : String(err));
     })
@@ -259,6 +270,7 @@ async function executeRun(
   runId: string,
   resolved: ResolvedWorkflow,
   rawInputs: Record<string, PortValue>,
+  globalSettings: SettingsDocument,
 ): Promise<void> {
   const { nodes, edges } = resolved;
   const { backEdgeIds } = classifyEdges(nodes, edges);
@@ -297,8 +309,7 @@ async function executeRun(
   // 每个 Action 在开跑前把自己的落库上下文登记进来，事件回调据此把 dsh 事件
   // 即时写成 run_events / node_usage。
   const sinks = new Map<string, EventSinkContext>();
-  // 设置在运行启动时读一次：改设置在下一次运行生效，在跑的运行持有启动时刻的快照。
-  const globalSettings = readSettings();
+  // 设置已在准入时冻结：工作区创建期间发生的网页修改也只影响下一次运行。
   const proc = await launchRun(workspace, {
     credentialRefs: globalSettings.credentialRefs.map((r) => r.name),
     composition: {

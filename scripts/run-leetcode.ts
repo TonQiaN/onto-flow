@@ -11,7 +11,12 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import { db, runNodes, runs } from "../src/db";
 import { DATA_DIR } from "../src/server/fs-safety";
-import { startRun } from "../src/server/engine/runner";
+import {
+  cancelRun,
+  isRunExecutionActive,
+  startRun,
+} from "../src/server/engine/runner";
+import { requireWholeBatch } from "./batch-runs";
 import { seedLeetcodeWorkflow, LEETCODE_INPUT_NODE_ID } from "./seed-leetcode";
 import { runSandboxedPythonVerification } from "./leetcode-verifier";
 import type { PortValue } from "../src/lib/values";
@@ -61,10 +66,9 @@ async function main(): Promise<void> {
       }),
     ),
   );
-  const runIds: string[] = [];
-  started.forEach((s, i) => {
-    if (!s.ok) throw new Error(`第 ${i + 1} 个运行启动失败：${JSON.stringify(s)}`);
-    runIds.push(s.runId);
+  const runIds = await requireWholeBatch(started, {
+    cancelRun,
+    isRunExecutionActive,
   });
 
   const t0 = Date.now();

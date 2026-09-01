@@ -191,10 +191,20 @@ function cleanRuns(
   beforeDays: number,
   dryRun: boolean,
 ): CleanupResult {
+  const activeIds = activeRunExecutionIds();
+  const activeFilter =
+    activeIds.length === 0
+      ? sql``
+      : sql`and r.id not in (${sql.join(
+          activeIds.map((id) => sql`${id}`),
+          sql`, `,
+        )})`;
   const rows = db.all<{ id: string; runDir: string | null }>(sql`
-    select id, run_dir as runDir
-    from runs where started_at < ${cutoff} and status <> 'running'
-  `).filter((row) => !isRunExecutionActive(row.id));
+    select r.id, r.run_dir as runDir
+    from runs r
+    where r.started_at < ${cutoff} and r.status <> 'running'
+      ${activeFilter}
+  `);
   const count = rows.length;
   const targets = new Map<string, WorkspaceTarget>();
   for (const row of rows) {
@@ -202,22 +212,19 @@ function cleanRuns(
     if (target) targets.set(target.absolutePath, target);
   }
 
-  const detailStat = rows.reduce(
-    (sum, row) => {
-      const stat = db.get<{ nodes: number; events: number; usage: number }>(sql`
-        select
-          (select count(*) from run_nodes where run_id = ${row.id}) as nodes,
-          (select count(*) from run_events where run_id = ${row.id}) as events,
-          (select count(*) from node_usage where run_id = ${row.id}) as usage
-      `);
-      return {
-        nodes: sum.nodes + (stat?.nodes ?? 0),
-        events: sum.events + (stat?.events ?? 0),
-        usage: sum.usage + (stat?.usage ?? 0),
-      };
-    },
-    { nodes: 0, events: 0, usage: 0 },
-  );
+  // 影响面按 eligible CTE 一次聚合；不能随历史规模退化成每个 run 三次同步 count。
+  const detailStat = db.get<{ nodes: number; events: number; usage: number }>(sql`
+    with eligible as (
+      select r.id
+      from runs r
+      where r.started_at < ${cutoff} and r.status <> 'running'
+        ${activeFilter}
+    )
+    select
+      (select count(*) from run_nodes n where n.run_id in (select id from eligible)) as nodes,
+      (select count(*) from run_events e where e.run_id in (select id from eligible)) as events,
+      (select count(*) from node_usage u where u.run_id in (select id from eligible)) as usage
+  `) ?? { nodes: 0, events: 0, usage: 0 };
 
   const bytes = [...targets.values()].reduce(
     (sum, target) => sum + dirStat(target.absolutePath).bytes,
@@ -225,11 +232,16 @@ function cleanRuns(
   );
 
   if (!dryRun && count > 0) {
-    db.transaction((tx) => {
-      for (const row of rows) {
-        tx.run(sql`delete from runs where id = ${row.id} and status <> 'running'`);
-      }
-    });
+    // 单条 DELETE 让外键级联留在 SQLite 内完成；activeFilter 与预览共用同一快照，
+    // cancelled 但执行器尚在 finally 收尾的运行仍被排除。
+    db.run(sql`
+      delete from runs where id in (
+        select r.id
+        from runs r
+        where r.started_at < ${cutoff} and r.status <> 'running'
+          ${activeFilter}
+      )
+    `);
     for (const target of targets.values()) removeDir(target);
   }
 

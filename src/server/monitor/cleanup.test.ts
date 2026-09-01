@@ -167,4 +167,34 @@ describe("运行工作区清理", () => {
     expect(deleteRun("run-settling")).toEqual({ ok: true });
     expect(fs.existsSync(workspace)).toBe(false);
   });
+
+  it("运行影响面一次汇总并由单条条件删除排除活动执行器", () => {
+    for (const id of ["run-a", "run-b", "run-active"]) {
+      sqlite
+        .prepare(
+          "insert into runs (id, workflow_id, status, run_dir, started_at) values (?, 'workflow-batch', 'success', NULL, ?)",
+        )
+        .run(id, old);
+    }
+    activeRuns.add("run-active");
+    sqlite.exec(`
+      INSERT INTO run_nodes (run_id) VALUES ('run-a'), ('run-a'), ('run-b'),
+        ('run-active'), ('run-active'), ('run-active'), ('run-active'), ('run-active');
+      INSERT INTO run_events (run_id, ts, payload) VALUES
+        ('run-a', ${old}, '{}'), ('run-b', ${old}, '{}'), ('run-active', ${old}, '{}');
+      INSERT INTO node_usage (run_id) VALUES
+        ('run-a'), ('run-b'), ('run-b'), ('run-b'),
+        ('run-active'), ('run-active'), ('run-active'), ('run-active');
+    `);
+
+    const preview = runCleanup({ target: "runs", beforeDays: 1, dryRun: true });
+    expect(preview.affected.count).toBe(2);
+    expect(preview.detail).toContain("级联 3 个节点、2 条事件、4 条用量明细");
+
+    const deleted = runCleanup({ target: "runs", beforeDays: 1, dryRun: false });
+    expect(deleted.affected).toEqual(preview.affected);
+    expect(sqlite.prepare("select id from runs order by id").all()).toEqual([
+      { id: "run-active" },
+    ]);
+  });
 });

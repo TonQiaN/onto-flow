@@ -22,7 +22,12 @@ import {
   workflowNodes,
   workflows,
 } from "../src/db";
-import { startRun } from "../src/server/engine/runner";
+import {
+  cancelRun,
+  isRunExecutionActive,
+  startRun,
+} from "../src/server/engine/runner";
+import { requireWholeBatch } from "./batch-runs";
 import {
   createAction,
   loadActionDto,
@@ -293,10 +298,9 @@ async function main(): Promise<void> {
       startRun(wf.id, { [INPUT_NODE_ID]: { kind: "text", text: `${marker}：这是本运行的专属需求，原样誊写即可。` } }),
     ),
   );
-  const runIds: string[] = [];
-  started.forEach((s, i) => {
-    if (!s.ok) throw new Error(`第 ${i + 1} 个运行启动失败：${JSON.stringify(s)}`);
-    runIds.push(s.runId);
+  const runIds = await requireWholeBatch(started, {
+    cancelRun,
+    isRunExecutionActive,
   });
   console.log(`已同时启动 ${runIds.length} 个运行`);
 
