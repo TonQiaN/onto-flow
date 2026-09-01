@@ -48,7 +48,10 @@ function parseGraphPayload(
     try {
       assertSafeId("节点 id", nodeId);
     } catch {
-      return writeFail(400, "节点 id 只能由字母数字开头，并只含字母数字、点、下划线或连字符");
+      return writeFail(
+        400,
+        "节点 id 只能由字母数字开头，并只含字母数字、点、下划线或连字符，且不能超过 120 个 ASCII 字符",
+      );
     }
     if (nodeIds.has(nodeId)) return writeFail(400, `节点 id 重复：${nodeId}`);
     nodeIds.add(nodeId);

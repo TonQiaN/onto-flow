@@ -112,6 +112,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - **文件输入原样物化，平台不做任何预处理（ADR-0011）**：所有文件输入原样拷贝为
   `inputs/<节点id>/<文件名>`；格式转换（抽文本、栅格化、逐页 `read_image`）是 Action 会话里
   模型用 `bash` 自己的工作。上传请求体在 multipart 解析前流式限流，单文件上限 32 MiB。
+- **节点 id 在 Workflow 写入边界限制为 120 个 ASCII 字符**：它会直接成为
+  `inputs/<节点id>/` 的目录段，不能让超长 id 在运行已受理后才以 `ENAMETOOLONG` 异步失败。
 - **每个会话都有 `bash`，写入被沙箱圈定**：`bash` 与 `read`/`write`/`edit`/`read_image`/`skill`
   同为基础工具面，对所有 Action 可见。bash 与 write/edit 共用一份 `workspace-write` 沙箱策略，
   写入只放行运行工作区与系统临时目录，但两族的围栏强度不同：bash 的命令经 Seatbelt
