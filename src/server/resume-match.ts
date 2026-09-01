@@ -2,7 +2,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { and, eq } from "drizzle-orm";
-import { db, objectTypes, runNodes, runs, workflows } from "@/db";
+import {
+  db,
+  objectTypes,
+  runNodes,
+  runs,
+  workflowNodes,
+  workflows,
+} from "@/db";
 import type { ValidationIssue } from "@/lib/graph";
 import {
   parseResumeMatchResult,
@@ -273,13 +280,29 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
   };
   if (run.status !== "success") return writeOk({ ...base, result: null });
 
+  const outputDefinitions = db
+    .select({ id: workflowNodes.id })
+    .from(workflowNodes)
+    .where(
+      and(
+        eq(workflowNodes.workflowId, run.workflowId),
+        eq(workflowNodes.kind, "output"),
+      ),
+    )
+    .all();
+  if (outputDefinitions.length !== 1) {
+    return writeFail(500, "成功运行对应的评分输出节点定义已失效");
+  }
+
+  // 展示名不是节点身份：Action 也可以叫「评分结果」。先由工作流定义取得唯一
+  // output 节点 id，再读这次运行的对应行，避免同名 Action 的 outputs 被误认。
   const outputNode = db
     .select()
     .from(runNodes)
     .where(
       and(
         eq(runNodes.runId, run.id),
-        eq(runNodes.label, RESUME_MATCH_OUTPUT_LABEL),
+        eq(runNodes.nodeId, outputDefinitions[0].id),
       ),
     )
     .get();

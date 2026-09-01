@@ -271,6 +271,13 @@ export function apply(ctx: Context): void {
         return { valid: false, errors: ["result_path 必须是工作区相对路径"] };
       }
       const candidate = path.resolve(root, args.result_path);
+      const expected = path.resolve(root, ${JSON.stringify(RESUME_MATCH_RESULT_ARTIFACT)});
+      if (candidate !== expected) {
+        return {
+          valid: false,
+          errors: ["result_path 必须指向固定产物 ${RESUME_MATCH_RESULT_ARTIFACT}"],
+        };
+      }
       if (!inside(root, candidate)) {
         return { valid: false, errors: ["result_path 越界工作区"] };
       }
