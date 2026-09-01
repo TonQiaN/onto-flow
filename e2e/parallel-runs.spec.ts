@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -214,6 +215,15 @@ test.describe("并行运行", () => {
       `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, binary))}`,
     );
     expect(binaryRes.status(), "二进制文件不进入文本预览").toBe(415);
+
+    const fifo = path.join(firstRunRoot, "workspace", "blocking.fifo");
+    const mkfifo = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
+    expect(mkfifo.status, `mkfifo 失败：${mkfifo.stderr}`).toBe(0);
+    const fifoRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, fifo))}`,
+      { timeout: 2_000 },
+    );
+    expect(fifoRes.status(), "FIFO 必须被已打开描述符校验拒绝且不能阻塞服务").toBe(400);
 
     const oversized = path.join(firstRunRoot, "workspace", "oversized.txt");
     fs.writeFileSync(oversized, "x".repeat(262_145));

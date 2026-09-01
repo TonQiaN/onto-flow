@@ -65,37 +65,52 @@ export async function GET(
       return jsonError(400, "路径不在该运行的目录内");
     }
 
-    let stat: fs.Stats;
+    let expected: fs.Stats;
     try {
-      stat = fs.statSync(real);
+      expected = fs.lstatSync(real);
     } catch {
       return jsonError(404, "文件不存在（工作区可能已被清理）");
     }
-    if (!stat.isFile()) return jsonError(400, "路径不是文件");
+    if (!expected.isFile()) return jsonError(400, "路径不是文件");
 
-    const length = Math.min(stat.size, PREVIEW_MAX_BYTES);
-    const buffer = Buffer.alloc(length);
-    let bytesRead: number;
+    let size: number;
+    let content: Buffer;
     try {
-      const fd = fs.openSync(real, "r");
+      // O_NOFOLLOW 拒绝最终分量在校验后被换成软链；O_NONBLOCK 保证被换成
+      // FIFO 时不会把同步 Next 进程挂死。真正决定可读性的必须是已打开的 fd，
+      // 不能继续相信 open 前的 pathname 检查结果。
+      const fd = fs.openSync(
+        real,
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+      );
       try {
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile()) return jsonError(400, "路径不是文件");
+        // realpath/lstat 与 open 之间若发生替换，fd 的设备号或 inode 会变化；
+        // 拒绝这次读取，而不是把新目标当成刚才验证过的文件。
+        if (opened.dev !== expected.dev || opened.ino !== expected.ino) {
+          return jsonError(404, "文件在读取前发生变化，请重试");
+        }
+        size = opened.size;
+        const length = Math.min(size, PREVIEW_MAX_BYTES);
+        const buffer = Buffer.alloc(length);
         // readSync 返回实读字节；短读时只取有效前缀，尾部零字节不当二进制误判。
-        bytesRead = fs.readSync(fd, buffer, 0, length, 0);
+        const bytesRead = fs.readSync(fd, buffer, 0, length, 0);
+        content = buffer.subarray(0, bytesRead);
       } finally {
         fs.closeSync(fd);
       }
     } catch {
-      // statSync 与 openSync 之间文件被清理/删除：语义上是 404，且不让底层 fs
+      // 校验与 openSync 之间文件被清理/替换：语义上是 404，且不让底层 fs
       // 错误经 handle() 以 500 把服务器绝对路径泄漏给调用方。
       return jsonError(404, "文件不存在（工作区可能已被清理）");
     }
-    const content = buffer.subarray(0, bytesRead);
     if (content.includes(0)) return jsonError(415, "二进制文件不支持预览");
 
     return NextResponse.json({
       name: path.basename(real),
-      size: stat.size,
-      truncated: stat.size > PREVIEW_MAX_BYTES,
+      size,
+      truncated: size > PREVIEW_MAX_BYTES,
       content: content.toString("utf8"),
     });
   });
