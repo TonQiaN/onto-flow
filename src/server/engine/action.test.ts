@@ -94,6 +94,7 @@ function context(options?: {
   runTurn?: (
     ...args: Parameters<ActionNodeContext["proc"]["runTurn"]>
   ) => Promise<void>;
+  runTurnError?: Error;
   usage?: Record<string, number>;
   inputs?: ActionNodeContext["inputs"];
 }): ActionNodeContext {
@@ -107,7 +108,7 @@ function context(options?: {
       if (options?.usage) {
         sqlite
           .prepare(
-            "insert into node_usage (id, run_id, node_id, session_id, message_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, ts) values (?, 'run-1', 'node-1', ?, 'turn1-step1', ?, ?, ?, ?, ?)",
+            "insert into node_usage (id, run_id, node_id, session_id, message_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cost, ts) values (?, 'run-1', 'node-1', ?, 'turn1-step1', ?, ?, ?, ?, ?, ?)",
           )
           .run(
             `usage-${sessionId}`,
@@ -116,9 +117,11 @@ function context(options?: {
             options.usage.outputTokens ?? 0,
             options.usage.reasoningTokens ?? 0,
             options.usage.cacheReadTokens ?? 0,
+            options.usage.cost ?? 0,
             Date.now(),
           );
       }
+      if (options?.runTurnError) throw options.runTurnError;
       return sessionId;
     },
     sessionOutput: async () => ({ captured: true, value: { result: "result.md" } }),
@@ -245,6 +248,42 @@ describe("Action 执行时边界", () => {
       cacheReadTokens: 7,
       sessionId: "node-1#2",
     });
+  });
+
+  it("模型轮次失败后仍把已经落库的用量与费用汇总到节点", async () => {
+    await expect(
+      runActionNode(
+        context({
+          usage: {
+            inputTokens: 17,
+            outputTokens: 8,
+            reasoningTokens: 3,
+            cacheReadTokens: 2,
+            cost: 0.125,
+          },
+          runTurnError: new Error("provider 中途失败"),
+        }),
+      ),
+    ).rejects.toThrow("provider 中途失败");
+
+    expect(
+      sqlite
+        .prepare(
+          "select input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens, cost from run_nodes",
+        )
+        .get(),
+    ).toEqual({
+      inputTokens: 17,
+      outputTokens: 8,
+      reasoningTokens: 3,
+      cacheReadTokens: 2,
+      cost: 0.125,
+    });
+    expect(
+      sqlite
+        .prepare("select type, payload from run_events where type = 'usage'")
+        .get(),
+    ).toMatchObject({ type: "usage" });
   });
 
   it("文件输入在真实会话提示中给出原件路径并指示自行转换", async () => {

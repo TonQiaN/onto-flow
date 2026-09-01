@@ -180,23 +180,27 @@ export async function runActionNode(
     .run();
   assertNotCancelled(ctx.runId);
 
-  await ctx.proc.runTurn(
-    sessionId,
-    [{ type: "text", text: renderedPrompt }],
-    {
-      agentOptions: { provider: model.providerId, model: model.modelId },
-      nodeOptions: {
-        outputSchema: buildOutputSchema(exits, branching),
-        reasoningEffort: action.reasoningEffort,
-        maxSteps: NODE_MAX_STEPS,
-        ...(ctx.toolFilter === undefined ? {} : { toolFilter: ctx.toolFilter }),
+  try {
+    await ctx.proc.runTurn(
+      sessionId,
+      [{ type: "text", text: renderedPrompt }],
+      {
+        agentOptions: { provider: model.providerId, model: model.modelId },
+        nodeOptions: {
+          outputSchema: buildOutputSchema(exits, branching),
+          reasoningEffort: action.reasoningEffort,
+          maxSteps: NODE_MAX_STEPS,
+          ...(ctx.toolFilter === undefined ? {} : { toolFilter: ctx.toolFilter }),
+        },
+        timeoutMs: NODE_TURN_TIMEOUT_MS,
       },
-      timeoutMs: NODE_TURN_TIMEOUT_MS,
-    },
-  );
+    );
+  } finally {
+    // usage chunk 到达时已产生费用；provider 报错、超时或取消不能跳过节点汇总。
+    recordUsage(ctx, sessionId, model);
+  }
 
   assertNotCancelled(ctx.runId);
-  recordUsage(ctx, sessionId, model);
 
   const captured = await ctx.proc.sessionOutput(sessionId);
   if (!captured.captured) {

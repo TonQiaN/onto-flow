@@ -10,28 +10,95 @@ import fs from "node:fs";
 import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import {
-  actionPorts,
   actions,
   db,
+  type EntityKind,
   models,
   nodeUsage,
   objectTypes,
+  revisions,
   runs,
   workflowEdges,
   workflowNodes,
   workflows,
 } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
+import {
+  createAction,
+  loadActionDto,
+  writeAction,
+  type ActionPayload,
+} from "../src/server/writers/action";
+import {
+  createObjectType,
+  writeObjectType,
+  type ObjectTypePayload,
+} from "../src/server/writers/object-type";
+import type { WriteResult } from "../src/server/writers/types";
+import {
+  createWorkflow,
+  writeWorkflow,
+  type EdgePayload,
+  type NodePayload,
+} from "../src/server/writers/workflow";
 
 const PREFIX = "并行冒烟";
 const RUN_COUNT = Number(process.argv[2] ?? 10);
+const INPUT_NODE_ID = "parallel-smoke-input";
+const ACTION_NODE_ID = "parallel-smoke-action";
+const OUTPUT_NODE_ID = "parallel-smoke-output";
 
 function upsertObjectType(name: string, kind: "text" | "file"): string {
+  const desired: ObjectTypePayload = {
+    name,
+    kind,
+    description: "冒烟用",
+    jsonSchema: null,
+  };
   const existing = db.select().from(objectTypes).where(eq(objectTypes.name, name)).get();
-  if (existing) return existing.id;
-  const id = crypto.randomUUID();
-  db.insert(objectTypes).values({ id, name, kind, description: "冒烟用" }).run();
-  return id;
+  if (!existing) return unwrap(createObjectType(desired)).id;
+  const current: ObjectTypePayload = {
+    name: existing.name,
+    kind: existing.kind,
+    description: existing.description,
+    jsonSchema: existing.jsonSchema,
+  };
+  if (!sameDefinition(current, desired) || !hasRevision("object_type", existing.id)) {
+    unwrap(writeObjectType(existing.id, desired));
+  }
+  return existing.id;
+}
+
+function unwrap<T>(result: WriteResult<T>): T {
+  if (!result.ok) throw new Error(`${result.status}: ${result.error}`);
+  return result.data;
+}
+
+function hasRevision(kind: EntityKind, entityId: string): boolean {
+  return !!db
+    .select({ id: revisions.id })
+    .from(revisions)
+    .where(and(eq(revisions.entityKind, kind), eq(revisions.entityId, entityId)))
+    .limit(1)
+    .get();
+}
+
+function sameDefinition(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function normalizedAction(payload: ActionPayload): ActionPayload {
+  return {
+    ...payload,
+    ports: [...payload.ports].sort(
+      (left, right) =>
+        left.direction.localeCompare(right.direction) ||
+        left.position - right.position ||
+        left.name.localeCompare(right.name),
+    ),
+    skillIds: [...payload.skillIds].sort(),
+    toolIds: [...payload.toolIds].sort(),
+  };
 }
 
 async function main(): Promise<void> {
@@ -53,67 +120,166 @@ async function main(): Promise<void> {
     "先用 write 工具把需求原文一字不差写进 out.md（不增不减、不加标题），" +
     "确认写入成功后再调用 structured_output 报告路径。不写文件就报告，本节点即失败。";
   const rule = "只写需求原文，不解释、不加前后缀。";
+  const desiredAction: ActionPayload = {
+    name: actionName,
+    description: "冒烟用",
+    prompt,
+    rule,
+    modelId: model.id,
+    reasoningEffort: "low",
+    maxReentries: 0,
+    onExhausted: "fail",
+    ports: [
+      {
+        direction: "input",
+        name: "需求",
+        objectTypeId: tNeed,
+        position: 0,
+        artifactPath: null,
+        exitName: null,
+      },
+      {
+        direction: "output",
+        name: "产出",
+        objectTypeId: tOut,
+        position: 0,
+        artifactPath: "out.md",
+        exitName: null,
+      },
+    ],
+    skillIds: [],
+    toolIds: [],
+  };
   const existing = db.select().from(actions).where(eq(actions.name, actionName)).get();
-  const actionId = existing?.id ?? crypto.randomUUID();
-  if (existing) {
-    db.update(actions)
-      .set({ prompt, rule, modelId: model.id, reasoningEffort: "low" })
-      .where(eq(actions.id, actionId))
-      .run();
+  let actionId: string;
+  if (!existing) {
+    actionId = unwrap(createAction(desiredAction)).id;
   } else {
-    db.insert(actions)
-      .values({
-        id: actionId,
-        name: actionName,
-        description: "冒烟用",
-        prompt,
-        rule,
-        modelId: model.id,
-        reasoningEffort: "low",
-      })
-      .run();
-    db.insert(actionPorts)
-      .values([
-        { actionId, direction: "input", name: "需求", objectTypeId: tNeed, position: 0 },
-        {
-          actionId,
-          direction: "output",
-          name: "产出",
-          objectTypeId: tOut,
-          artifactPath: "out.md",
-          position: 0,
-        },
-      ])
-      .run();
+    actionId = existing.id;
+    const dto = loadActionDto(actionId);
+    if (!dto) throw new Error(`Action「${actionName}」读取失败`);
+    const currentAction: ActionPayload = {
+      name: dto.name,
+      description: dto.description,
+      prompt: dto.prompt,
+      rule: dto.rule,
+      modelId: dto.modelId,
+      reasoningEffort: dto.reasoningEffort,
+      maxReentries: dto.maxReentries,
+      onExhausted: dto.onExhausted,
+      ports: dto.ports.map((port) => ({
+        direction: port.direction,
+        name: port.name,
+        objectTypeId: port.objectTypeId,
+        position: port.position,
+        artifactPath: port.artifactPath,
+        exitName: port.exitName,
+      })),
+      skillIds: dto.skillIds,
+      toolIds: dto.toolIds,
+    };
+    if (
+      !sameDefinition(normalizedAction(currentAction), normalizedAction(desiredAction)) ||
+      !hasRevision("action", actionId)
+    ) {
+      unwrap(writeAction(actionId, desiredAction));
+    }
   }
 
   const wfName = `${PREFIX}·单节点`;
+  const wfDescription = "并行验收：输入 → 誊写 → 输出";
   let wf = db.select().from(workflows).where(eq(workflows.name, wfName)).get();
-  if (!wf) {
-    const id = crypto.randomUUID();
-    db.insert(workflows)
-      .values({ id, name: wfName, description: "并行验收：输入 → 誊写 → 输出" })
-      .run();
-    wf = db.select().from(workflows).where(eq(workflows.id, id)).get()!;
+  if (!wf) wf = unwrap(createWorkflow({ name: wfName, description: wfDescription }));
+  const desiredNodes: NodePayload[] = [
+    {
+      id: INPUT_NODE_ID,
+      kind: "input",
+      actionId: null,
+      objectTypeId: tNeed,
+      label: "需求",
+      x: 0,
+      y: 0,
+    },
+    {
+      id: ACTION_NODE_ID,
+      kind: "action",
+      actionId,
+      objectTypeId: null,
+      label: "誊写",
+      x: 240,
+      y: 0,
+    },
+    {
+      id: OUTPUT_NODE_ID,
+      kind: "output",
+      actionId: null,
+      objectTypeId: tOut,
+      label: "产出",
+      x: 480,
+      y: 0,
+    },
+  ];
+  const desiredEdges: EdgePayload[] = [
+    {
+      id: "parallel-smoke-edge-input",
+      sourceNodeId: INPUT_NODE_ID,
+      sourcePort: "value",
+      targetNodeId: ACTION_NODE_ID,
+      targetPort: "需求",
+    },
+    {
+      id: "parallel-smoke-edge-output",
+      sourceNodeId: ACTION_NODE_ID,
+      sourcePort: "产出",
+      targetNodeId: OUTPUT_NODE_ID,
+      targetPort: "value",
+    },
+  ];
+  const byId = <T extends { id: string }>(items: T[]) =>
+    [...items].sort((left, right) => left.id.localeCompare(right.id));
+  const currentDefinition = {
+    name: wf.name,
+    description: wf.description,
+    nodes: byId(
+      db
+        .select()
+        .from(workflowNodes)
+        .where(eq(workflowNodes.workflowId, wf.id))
+        .all()
+        .map(({ id, kind, actionId: nodeActionId, objectTypeId, label, x, y }) => ({
+          id,
+          kind,
+          actionId: nodeActionId,
+          objectTypeId,
+          label,
+          x,
+          y,
+        })),
+    ),
+    edges: byId(
+      db
+        .select()
+        .from(workflowEdges)
+        .where(eq(workflowEdges.workflowId, wf.id))
+        .all()
+        .map(({ id, sourceNodeId, sourcePort, targetNodeId, targetPort }) => ({
+          id,
+          sourceNodeId,
+          sourcePort,
+          targetNodeId,
+          targetPort,
+        })),
+    ),
+  };
+  const desiredDefinition = {
+    name: wfName,
+    description: wfDescription,
+    nodes: byId(desiredNodes),
+    edges: byId(desiredEdges),
+  };
+  if (!sameDefinition(currentDefinition, desiredDefinition) || !hasRevision("workflow", wf.id)) {
+    wf = unwrap(writeWorkflow(wf.id, desiredDefinition));
   }
-  db.delete(workflowEdges).where(eq(workflowEdges.workflowId, wf.id)).run();
-  db.delete(workflowNodes).where(eq(workflowNodes.workflowId, wf.id)).run();
-  const nIn = crypto.randomUUID();
-  const nAct = crypto.randomUUID();
-  const nOut = crypto.randomUUID();
-  db.insert(workflowNodes)
-    .values([
-      { id: nIn, workflowId: wf.id, kind: "input", objectTypeId: tNeed, label: "需求", x: 0, y: 0 },
-      { id: nAct, workflowId: wf.id, kind: "action", actionId, label: "誊写", x: 240, y: 0 },
-      { id: nOut, workflowId: wf.id, kind: "output", objectTypeId: tOut, label: "产出", x: 480, y: 0 },
-    ])
-    .run();
-  db.insert(workflowEdges)
-    .values([
-      { workflowId: wf.id, sourceNodeId: nIn, sourcePort: "value", targetNodeId: nAct, targetPort: "需求" },
-      { workflowId: wf.id, sourceNodeId: nAct, sourcePort: "产出", targetNodeId: nOut, targetPort: "value" },
-    ])
-    .run();
   console.log(`工作流已就绪：${wfName}（${wf.id}），并发 ${RUN_COUNT} 次`);
 
   // 标记等长零填充：`标记-1` 是 `标记-10` 的子串，会把串号检查误报成阳性。
@@ -124,7 +290,7 @@ async function main(): Promise<void> {
   );
   const started = await Promise.all(
     markers.map((marker) =>
-      startRun(wf.id, { [nIn]: { kind: "text", text: `${marker}：这是本运行的专属需求，原样誊写即可。` } }),
+      startRun(wf.id, { [INPUT_NODE_ID]: { kind: "text", text: `${marker}：这是本运行的专属需求，原样誊写即可。` } }),
     ),
   );
   const runIds: string[] = [];
