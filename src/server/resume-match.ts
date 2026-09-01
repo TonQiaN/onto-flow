@@ -2,17 +2,26 @@
 import fs from "node:fs";
 import path from "node:path";
 import { and, eq } from "drizzle-orm";
-import { db, runNodes, runs, workflowNodes, workflows } from "@/db";
+import { db, objectTypes, runNodes, runs, workflows } from "@/db";
+import type { ValidationIssue } from "@/lib/graph";
 import {
   parseResumeMatchResult,
   RESUME_MATCH_JOB_INPUT_LABEL,
   RESUME_MATCH_OUTPUT_LABEL,
+  RESUME_MATCH_RESULT_ARTIFACT,
+  RESUME_MATCH_RESULT_SCHEMA_TEXT,
   RESUME_MATCH_RESUME_INPUT_LABEL,
   RESUME_MATCH_WORKFLOW_NAME,
   type ResumeMatchResult,
 } from "@/lib/resume-match";
 import { isWithinData, resolveWithinData } from "@/server/fs-safety";
-import { startRun, type StartRunResult } from "@/server/engine/runner";
+import { startRun } from "@/server/engine/runner";
+import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import {
+  type WriteResult,
+  writeFail,
+  writeOk,
+} from "@/server/writers/types";
 
 const MAX_RESULT_BYTES = 1024 * 1024;
 
@@ -26,15 +35,6 @@ export interface ResumeMatchInvocation {
   resume: ResumeMatchFileInput;
 }
 
-export type ParseResumeMatchInvocationResult =
-  | { ok: true; data: ResumeMatchInvocation }
-  | { ok: false; error: string };
-
-export type StartResumeMatchResult =
-  | { ok: true; runId: string }
-  | Exclude<StartRunResult, { ok: true }>
-  | { ok: false; status: 500; error: string };
-
 export interface ResumeMatchRunView {
   runId: string;
   status: "running" | "success" | "failed" | "cancelled";
@@ -44,11 +44,6 @@ export interface ResumeMatchRunView {
   result: ResumeMatchResult | null;
   historyUrl: string;
 }
-
-export type ReadResumeMatchRunResult =
-  | { ok: true; data: ResumeMatchRunView }
-  | { ok: false; status: 404; error: string }
-  | { ok: false; status: 500; error: string; issues?: string[] };
 
 function exactKeys(
   value: Record<string, unknown>,
@@ -92,59 +87,131 @@ function parseFileInput(value: unknown, label: string): ResumeMatchFileInput | s
 
 export function parseResumeMatchInvocation(
   value: unknown,
-): ParseResumeMatchInvocationResult {
+): WriteResult<ResumeMatchInvocation> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { ok: false, error: "请求体必须是 JSON 对象" };
+    return writeFail(400, "请求体必须是 JSON 对象");
   }
   const body = value as Record<string, unknown>;
   if (!exactKeys(body, ["job", "resume"])) {
-    return { ok: false, error: "请求体必须且只能包含 job、resume" };
+    return writeFail(400, "请求体必须且只能包含 job、resume");
   }
   const job = parseFileInput(body.job, "job");
-  if (typeof job === "string") return { ok: false, error: job };
+  if (typeof job === "string") return writeFail(400, job);
   const resume = parseFileInput(body.resume, "resume");
-  if (typeof resume === "string") return { ok: false, error: resume };
-  return { ok: true, data: { job, resume } };
+  if (typeof resume === "string") return writeFail(400, resume);
+  return writeOk({ job, resume });
+}
+
+/** 对 JSON 对象键排序后比较，Schema 只改缩进或键顺序不应被误判为契约变化。 */
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sameResultSchema(schema: string | null): boolean {
+  if (!schema) return false;
+  try {
+    return stableJson(JSON.parse(schema)) === stableJson(JSON.parse(RESUME_MATCH_RESULT_SCHEMA_TEXT));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 内部 API 是付费入口，必须在 startRun 前验证它依赖的完整外部契约。
+ * 输入标签、输出标签、JSON Schema 与最终产物路径任一被网页编辑破坏，都直接拒绝。
+ */
+function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
+  const inputs = resolved.nodes.filter((node) => node.kind === "input");
+  const jobNode = inputs.find((node) => node.label === RESUME_MATCH_JOB_INPUT_LABEL);
+  const resumeNode = inputs.find((node) => node.label === RESUME_MATCH_RESUME_INPUT_LABEL);
+  if (
+    !jobNode ||
+    !resumeNode ||
+    inputs.length !== 2 ||
+    jobNode.outputs.length !== 1 ||
+    resumeNode.outputs.length !== 1 ||
+    jobNode.outputs[0].kind !== "file" ||
+    resumeNode.outputs[0].kind !== "file"
+  ) {
+    return "简历匹配工作流输入定义不是且仅有 file 类型的岗位JD、简历";
+  }
+
+  const outputs = resolved.nodes.filter((node) => node.kind === "output");
+  const outputNode = outputs.find((node) => node.label === RESUME_MATCH_OUTPUT_LABEL);
+  if (!outputNode || outputs.length !== 1 || outputNode.inputs.length !== 1) {
+    return `简历匹配工作流输出定义不是且仅有「${RESUME_MATCH_OUTPUT_LABEL}」`;
+  }
+  const outputPort = outputNode.inputs[0];
+  const outputType = db
+    .select()
+    .from(objectTypes)
+    .where(eq(objectTypes.id, outputPort.objectTypeId))
+    .get();
+  if (
+    outputPort.kind !== "json" ||
+    !outputType ||
+    outputType.kind !== "json" ||
+    !sameResultSchema(outputType.jsonSchema)
+  ) {
+    return `「${RESUME_MATCH_OUTPUT_LABEL}」必须使用简历匹配的严格 JSON Schema`;
+  }
+
+  const incoming = resolved.edges.filter((edge) => edge.targetNodeId === outputNode.id);
+  if (incoming.length !== 1 || incoming[0].targetPort !== "value") {
+    return `「${RESUME_MATCH_OUTPUT_LABEL}」必须且只能连接一个结果产物`;
+  }
+  const sourceNode = resolved.nodes.find((node) => node.id === incoming[0].sourceNodeId);
+  const sourcePort = sourceNode?.outputs.find((port) => port.name === incoming[0].sourcePort);
+  if (
+    sourceNode?.kind !== "action" ||
+    !sourcePort ||
+    sourcePort.kind !== "json" ||
+    sourcePort.objectTypeId !== outputPort.objectTypeId ||
+    sourcePort.artifactPath !== RESUME_MATCH_RESULT_ARTIFACT
+  ) {
+    return `「${RESUME_MATCH_OUTPUT_LABEL}」的上游 Action 必须产出 ${RESUME_MATCH_RESULT_ARTIFACT}`;
+  }
+  return null;
 }
 
 export async function startResumeMatch(
   invocation: ResumeMatchInvocation,
-): Promise<StartResumeMatchResult> {
+): Promise<WriteResult<{ runId: string }, ValidationIssue>> {
   const workflow = db
     .select()
     .from(workflows)
     .where(eq(workflows.name, RESUME_MATCH_WORKFLOW_NAME))
     .get();
   if (!workflow) {
-    return {
-      ok: false,
-      status: 500,
-      error: `工作流「${RESUME_MATCH_WORKFLOW_NAME}」尚未装入`,
-    };
+    return writeFail(500, `工作流「${RESUME_MATCH_WORKFLOW_NAME}」尚未装入`);
   }
-  const inputs = db
-    .select()
-    .from(workflowNodes)
-    .where(
-      and(
-        eq(workflowNodes.workflowId, workflow.id),
-        eq(workflowNodes.kind, "input"),
-      ),
-    )
-    .all();
+  const resolved = await resolveWorkflow(workflow.id);
+  if (!resolved) return writeFail(500, "简历匹配工作流无法解析");
+  const contractError = validateWorkflowContract(resolved);
+  if (contractError) return writeFail(500, contractError);
+  const inputs = resolved.nodes.filter((node) => node.kind === "input");
   const jobNode = inputs.find((node) => node.label === RESUME_MATCH_JOB_INPUT_LABEL);
   const resumeNode = inputs.find((node) => node.label === RESUME_MATCH_RESUME_INPUT_LABEL);
-  if (!jobNode || !resumeNode || inputs.length !== 2) {
-    return {
-      ok: false,
-      status: 500,
-      error: "简历匹配工作流输入定义不是且仅有岗位JD、简历",
-    };
-  }
-  return startRun(workflow.id, {
+  // validateWorkflowContract 已证明这两个节点存在；保留显式守卫让类型收窄不靠断言。
+  if (!jobNode || !resumeNode) return writeFail(500, "简历匹配工作流输入定义无效");
+  const started = await startRun(workflow.id, {
     [jobNode.id]: invocation.job,
     [resumeNode.id]: invocation.resume,
   });
+  if (!started.ok) {
+    return started.status === 422
+      ? writeFail(started.status, started.error, started.issues)
+      : writeFail(started.status, started.error);
+  }
+  return writeOk({ runId: started.runId });
 }
 
 function descendant(root: string, candidate: string): boolean {
@@ -191,10 +258,10 @@ function readResultArtifact(
   return { ok: true, content: fs.readFileSync(resultReal, "utf8") };
 }
 
-export function readResumeMatchRun(runId: string): ReadResumeMatchRunResult {
+export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunView, string> {
   const run = db.select().from(runs).where(eq(runs.id, runId)).get();
   if (!run || run.workflowName !== RESUME_MATCH_WORKFLOW_NAME) {
-    return { ok: false, status: 404, error: "简历匹配运行不存在" };
+    return writeFail(404, "简历匹配运行不存在");
   }
   const base: Omit<ResumeMatchRunView, "result"> = {
     runId: run.id,
@@ -204,7 +271,7 @@ export function readResumeMatchRun(runId: string): ReadResumeMatchRunResult {
     finishedAt: run.finishedAt,
     historyUrl: `/runs/${run.id}`,
   };
-  if (run.status !== "success") return { ok: true, data: { ...base, result: null } };
+  if (run.status !== "success") return writeOk({ ...base, result: null });
 
   const outputNode = db
     .select()
@@ -218,18 +285,13 @@ export function readResumeMatchRun(runId: string): ReadResumeMatchRunResult {
     .get();
   const output = outputFile(outputNode?.outputs?.value);
   if (!output) {
-    return { ok: false, status: 500, error: "成功运行没有可读取的 JSON 评分结果" };
+    return writeFail(500, "成功运行没有可读取的 JSON 评分结果");
   }
   const artifact = readResultArtifact(run.runDir, output);
-  if (!artifact.ok) return { ok: false, status: 500, error: artifact.error };
+  if (!artifact.ok) return writeFail(500, artifact.error);
   const parsed = parseResumeMatchResult(artifact.content);
   if (!parsed.ok) {
-    return {
-      ok: false,
-      status: 500,
-      error: "工作流产出的 JSON 未通过结果契约",
-      issues: parsed.errors,
-    };
+    return writeFail(500, "工作流产出的 JSON 未通过结果契约", parsed.errors);
   }
-  return { ok: true, data: { ...base, result: parsed.data } };
+  return writeOk({ ...base, result: parsed.data });
 }

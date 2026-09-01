@@ -6,22 +6,30 @@ import { jsonError } from "@/lib/http";
  * route 用 respond() 直接转成响应；回滚（/api/revisions/[revId]/restore）
  * 复用同一结果做错误映射，保证「PUT 与回滚同一条写入路径」。
  */
-export type WriteResult<T> =
+export type WriteResult<T, Issue = never> =
   | { ok: true; data: T }
-  | { ok: false; status: number; error: string };
+  | { ok: false; status: number; error: string; issues?: Issue[] };
 
 export function writeOk<T>(data: T): WriteResult<T> {
   return { ok: true, data };
 }
 
-export function writeFail(status: number, error: string): WriteResult<never> {
-  return { ok: false, status, error };
+export function writeFail<Issue = never>(
+  status: number,
+  error: string,
+  issues?: Issue[],
+): WriteResult<never, Issue> {
+  return { ok: false, status, error, ...(issues ? { issues } : {}) };
 }
 
-export function respond<T>(result: WriteResult<T>): NextResponse {
+export function respond<T, Issue>(result: WriteResult<T, Issue>): NextResponse {
   return result.ok
     ? NextResponse.json(result.data)
-    : jsonError(result.status, result.error);
+    : jsonError(
+        result.status,
+        result.error,
+        result.issues ? { issues: result.issues } : undefined,
+      );
 }
 
 /** 请求体必须是 JSON 对象（非数组、非 null） */

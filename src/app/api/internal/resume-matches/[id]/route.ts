@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { handle, jsonError } from "@/lib/http";
+import { handle } from "@/lib/http";
 import { readResumeMatchRun } from "@/server/resume-match";
+import { respond } from "@/server/writers/types";
 
 export const dynamic = "force-dynamic";
 
@@ -12,10 +13,7 @@ export async function GET(
   return handle(async () => {
     const { id } = await params;
     const result = readResumeMatchRun(id);
-    if (!result.ok) {
-      const issues = "issues" in result ? result.issues : undefined;
-      return jsonError(result.status, result.error, issues ? { issues } : undefined);
-    }
+    if (!result.ok) return respond(result);
     return NextResponse.json(result.data);
   });
 }
