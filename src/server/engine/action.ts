@@ -5,23 +5,17 @@
  * - 实质内容一律走工作区文件。连线不搬运内容，只在提示里生成「去读哪个文件」。
  * - 数据面 schema 由输出端口生成：每个输出端口一个字段，值是该端口产物的实际路径。
  * - 产物没写出来是唯一的机械兜底：文件不存在即节点失败，不管模型说了什么。
- * - 会话创建前把本次实际使用的完整配置冻结进 run_nodes.snapshot（运行快照），
- *   端口与 prompt/rule/model/思考强度一样在**执行时刻**重查，保证快照内部同源同刻。
+ * - Action、模型、端口与能力关系在运行受理时已经冻结；本节点只消费那份定义，
+ *   并把实际渲染的提示写进 run_nodes.snapshot，不在付费执行中回读共享库。
  */
 import fs from "node:fs";
 import path from "node:path";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
-  actionPorts,
-  actionSkills,
-  actions,
   db,
-  models,
   nodeUsage,
-  objectTypes,
   runEvents,
   runNodes,
-  skills,
 } from "@/db";
 import { exitsOf, hasNamedExits, type ResolvedNode, type ResolvedPort } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
@@ -29,6 +23,7 @@ import { DATA_DIR } from "@/server/fs-safety";
 import type { NodeToolFilter } from "@/server/harness/rpc/types";
 import type { RunProcess } from "@/server/harness/runtime";
 import type { RunWorkspace } from "@/server/harness/workspace";
+import type { ResolvedActionDefinition, ResolvedActionPort } from "@/server/resolve";
 import type { NodeExit } from "@/lib/graph";
 import {
   clearUnpersistedUsageForSession,
@@ -42,7 +37,8 @@ import { isRunCancelled } from "./runner";
 export interface ActionNodeContext {
   runId: string;
   node: ResolvedNode;
-  actionId: string;
+  /** resolveWorkflow 在运行受理前冻结的共享 Action 完整定义。 */
+  definition: ResolvedActionDefinition;
   /**
    * 入端口名 → 上游交来的值**列表**。一个端口可以接多条入线（汇总），
    * 因此这里恒是列表；只被回边喂的端口在第一轮直接缺席。
@@ -137,15 +133,7 @@ export async function runActionNode(
 ): Promise<ActionNodeResult> {
   assertNotCancelled(ctx.runId);
 
-  const action = db.select().from(actions).where(eq(actions.id, ctx.actionId)).get();
-  if (!action) throw new Error(`Action 已不存在：${ctx.actionId}`);
-  const model = db.select().from(models).where(eq(models.id, action.modelId)).get();
-  if (!model) throw new Error(`Action「${action.name}」引用的模型已不存在`);
-
-  const ports = readActionPorts(ctx.actionId);
-  assertPortsUnchanged(ctx.node, ports);
-
-  const skillRows = readActionSkills(ctx.actionId);
+  const { action, model, ports, skills: skillRows } = ctx.definition;
 
   const outputPorts = ports.outputs.map((port) => ({
     ...port,
@@ -316,77 +304,6 @@ function assertNotCancelled(runId: string): void {
   if (isRunCancelled(runId)) throw new Error("运行已取消");
 }
 
-function readActionPorts(actionId: string): {
-  inputs: ActionPortRow[];
-  outputs: ActionPortRow[];
-} {
-  const rows = db
-    .select({
-      name: actionPorts.name,
-      direction: actionPorts.direction,
-      objectTypeId: actionPorts.objectTypeId,
-      artifactPath: actionPorts.artifactPath,
-      exitName: actionPorts.exitName,
-      objectTypeName: objectTypes.name,
-      kind: objectTypes.kind,
-    })
-    .from(actionPorts)
-    .innerJoin(objectTypes, eq(actionPorts.objectTypeId, objectTypes.id))
-    .where(eq(actionPorts.actionId, actionId))
-    .orderBy(asc(actionPorts.position))
-    .all();
-  return {
-    inputs: rows.filter((r) => r.direction === "input"),
-    outputs: rows.filter((r) => r.direction === "output"),
-  };
-}
-
-interface ActionPortRow {
-  name: string;
-  direction: "input" | "output";
-  objectTypeId: string;
-  artifactPath: string | null;
-  exitName: string | null;
-  objectTypeName: string;
-  kind: "text" | "file" | "json";
-}
-
-function readActionSkills(actionId: string): Array<typeof skills.$inferSelect> {
-  const ids = db
-    .select({ skillId: actionSkills.skillId })
-    .from(actionSkills)
-    .where(eq(actionSkills.actionId, actionId))
-    .all()
-    .map((r) => r.skillId);
-  if (ids.length === 0) return [];
-  return db.select().from(skills).where(inArray(skills.id, ids)).all();
-}
-
-/**
- * 端口在执行时刻重查，与运行快照同源同刻。图解析之后端口被改过就中止：
- * 运行快照解释不了的输出不如不产出（ADR-0007 的运行自包含要求）。
- */
-function assertPortsUnchanged(
-  node: ResolvedNode,
-  ports: { inputs: ActionPortRow[]; outputs: ActionPortRow[] },
-): void {
-  const same = (a: ResolvedPort[], b: ActionPortRow[]): boolean =>
-    a.length === b.length &&
-    a.every(
-      (p, i) =>
-        p.name === b[i].name &&
-        p.objectTypeId === b[i].objectTypeId &&
-        (p.artifactPath ?? null) === b[i].artifactPath &&
-        (p.exitName ?? null) === b[i].exitName,
-    );
-  if (!same(node.inputs, ports.inputs) || !same(node.outputs, ports.outputs)) {
-    throw new Error(
-      `节点「${node.label}」的端口在运行开始后被改动，本次运行中止：` +
-        `运行快照无法解释改动之后产出的结果`,
-    );
-  }
-}
-
 function toSnapshotPort(port: {
   name: string;
   objectTypeName: string;
@@ -418,7 +335,7 @@ function buildPrompt(
   prompt: string,
   rule: string,
   inputs: Record<string, PortValue[]>,
-  ports: { inputs: ActionPortRow[]; outputs: ResolvedPort[] },
+  ports: { inputs: ResolvedActionPort[]; outputs: ResolvedPort[] },
   exits: NodeExit[],
   branching: boolean,
   round: number,

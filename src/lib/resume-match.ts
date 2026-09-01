@@ -8,6 +8,11 @@
 export const RESUME_MATCH_WORKFLOW_NAME = "简历匹配评分";
 export const RESUME_MATCH_JOB_INPUT_LABEL = "岗位JD";
 export const RESUME_MATCH_RESUME_INPUT_LABEL = "简历";
+export const RESUME_MATCH_JOB_OBJECT_TYPE_NAME = "岗位JD文件";
+export const RESUME_MATCH_RESUME_OBJECT_TYPE_NAME = "简历文件";
+export const RESUME_MATCH_PARSE_ACTION_NAME = "简历评分·解析";
+export const RESUME_MATCH_JOB_PARSE_PORT = "岗位文件";
+export const RESUME_MATCH_RESUME_PARSE_PORT = "简历文件";
 export const RESUME_MATCH_OUTPUT_LABEL = "评分结果";
 export const RESUME_MATCH_RESULT_ARTIFACT = "match-result.json";
 export const RESUME_MATCH_RESULT_SCHEMA_VERSION = "1.0";

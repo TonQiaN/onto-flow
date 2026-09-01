@@ -7,11 +7,16 @@ import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../db/schema";
 import {
+  RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
+  RESUME_MATCH_JOB_PARSE_PORT,
+  RESUME_MATCH_PARSE_ACTION_NAME,
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
+  RESUME_MATCH_RESUME_OBJECT_TYPE_NAME,
+  RESUME_MATCH_RESUME_PARSE_PORT,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
 } from "../lib/resume-match";
-import type { ResolvedWorkflow } from "./resolve";
+import type { ResolvedActionDefinition, ResolvedWorkflow } from "./resolve";
 
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
@@ -84,6 +89,9 @@ const { readResumeMatchRun, startResumeMatch } = await import("./resume-match");
 
 const workflowId = "resume-workflow";
 const resultTypeId = "resume-result-type";
+const jobTypeId = "job-type";
+const resumeTypeId = "resume-type";
+const parseActionId = "resume-parse-action";
 const reportActionId = "resume-report-action";
 const validatorToolId = "resume-validator-tool";
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-resume-match-"));
@@ -92,7 +100,61 @@ const invocation = {
   resume: { kind: "file" as const, file: { path: "uploads/resume.md", name: "resume.md", mime: "text/markdown" } },
 };
 
-function resolved(options: { outputLabel?: string; artifactPath?: string } = {}): ResolvedWorkflow {
+function resolved(
+  options: {
+    outputLabel?: string;
+    artifactPath?: string;
+    jobObjectTypeId?: string;
+    resumeObjectTypeId?: string;
+    jobTargetPort?: string;
+    resumeTargetPort?: string;
+  } = {},
+): ResolvedWorkflow {
+  const now = new Date(0);
+  const resultRow = sqlite
+    .prepare("select json_schema as jsonSchema from object_types where id = ?")
+    .get(resultTypeId) as { jsonSchema: string | null };
+  const objectTypeRows: ResolvedWorkflow["objectTypes"] = new Map([
+    [
+      jobTypeId,
+      {
+        id: jobTypeId,
+        name: RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
+        kind: "file",
+        description: "",
+        jsonSchema: null,
+        builtin: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    [
+      resumeTypeId,
+      {
+        id: resumeTypeId,
+        name: RESUME_MATCH_RESUME_OBJECT_TYPE_NAME,
+        kind: "file",
+        description: "",
+        jsonSchema: null,
+        builtin: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    [
+      resultTypeId,
+      {
+        id: resultTypeId,
+        name: "评分报告",
+        kind: "json",
+        description: "",
+        jsonSchema: resultRow.jsonSchema,
+        builtin: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+  ]);
   const port = (
     name: string,
     kind: "file" | "json",
@@ -102,10 +164,65 @@ function resolved(options: { outputLabel?: string; artifactPath?: string } = {})
     name,
     kind,
     objectTypeId,
-    objectTypeName: kind === "json" ? "评分报告" : "文件",
+    objectTypeName: objectTypeRows.get(objectTypeId)?.name ?? "未知类型",
     artifactPath,
     exitName: null,
   });
+  const parseInputs = [
+    port(RESUME_MATCH_JOB_PARSE_PORT, "file", jobTypeId),
+    port(RESUME_MATCH_RESUME_PARSE_PORT, "file", resumeTypeId),
+  ];
+  const reportOutputs = [
+    port(
+      "结果",
+      "json",
+      resultTypeId,
+      options.artifactPath ?? RESUME_MATCH_RESULT_ARTIFACT,
+    ),
+  ];
+  const definition = (
+    actionId: string,
+    name: string,
+    inputs: ReturnType<typeof port>[],
+    outputs: ReturnType<typeof port>[],
+  ): ResolvedActionDefinition => ({
+    action: {
+      id: actionId,
+      name,
+      description: "",
+      prompt: "测试",
+      rule: "",
+      modelId: "model-test",
+      reasoningEffort: "high",
+      maxReentries: 0,
+      onExhausted: "fail",
+      createdAt: now,
+      updatedAt: now,
+    },
+    model: {
+      id: "model-test",
+      providerId: "deepseek-official",
+      modelId: "test-model",
+      displayName: "测试模型",
+    },
+    ports: { inputs, outputs },
+    skills: [],
+  });
+  const validator = sqlite
+    .prepare("select id, name, description, code from tools where id = ?")
+    .get(validatorToolId) as
+    | { id: string; name: string; description: string; code: string }
+    | undefined;
+  const validatorReferenced = Boolean(
+    sqlite
+      .prepare("select 1 from action_tools where action_id = ? and tool_id = ?")
+      .get(reportActionId, validatorToolId),
+  );
+  const toolRows = validator && validatorReferenced
+    ? [{ ...validator, createdAt: now, updatedAt: now }]
+    : [];
+  const jobInputType = options.jobObjectTypeId ?? jobTypeId;
+  const resumeInputType = options.resumeObjectTypeId ?? resumeTypeId;
   return {
     workflow: {
       id: workflowId,
@@ -120,28 +237,28 @@ function resolved(options: { outputLabel?: string; artifactPath?: string } = {})
         kind: "input",
         label: "岗位JD",
         inputs: [],
-        outputs: [port("value", "file", "job-type")],
+        outputs: [port("value", "file", jobInputType)],
       },
       {
         id: "resume-input",
         kind: "input",
         label: "简历",
         inputs: [],
-        outputs: [port("value", "file", "resume-type")],
+        outputs: [port("value", "file", resumeInputType)],
+      },
+      {
+        id: "parse-action",
+        kind: "action",
+        label: RESUME_MATCH_PARSE_ACTION_NAME,
+        inputs: parseInputs,
+        outputs: [],
       },
       {
         id: "report-action",
         kind: "action",
-        label: "汇总",
+        label: "简历评分·汇总",
         inputs: [],
-        outputs: [
-          port(
-            "结果",
-            "json",
-            resultTypeId,
-            options.artifactPath ?? RESUME_MATCH_RESULT_ARTIFACT,
-          ),
-        ],
+        outputs: reportOutputs,
       },
       {
         id: "result-output",
@@ -153,6 +270,20 @@ function resolved(options: { outputLabel?: string; artifactPath?: string } = {})
     ],
     edges: [
       {
+        id: "job-edge",
+        sourceNodeId: "job-input",
+        sourcePort: "value",
+        targetNodeId: "parse-action",
+        targetPort: options.jobTargetPort ?? RESUME_MATCH_JOB_PARSE_PORT,
+      },
+      {
+        id: "resume-edge",
+        sourceNodeId: "resume-input",
+        sourcePort: "value",
+        targetNodeId: "parse-action",
+        targetPort: options.resumeTargetPort ?? RESUME_MATCH_RESUME_PARSE_PORT,
+      },
+      {
         id: "result-edge",
         sourceNodeId: "report-action",
         sourcePort: "结果",
@@ -161,6 +292,19 @@ function resolved(options: { outputLabel?: string; artifactPath?: string } = {})
       },
     ],
     nodeRows: new Map([
+      [
+        "parse-action",
+        {
+          id: "parse-action",
+          workflowId,
+          kind: "action" as const,
+          actionId: parseActionId,
+          objectTypeId: null,
+          label: "",
+          x: 0,
+          y: 0,
+        },
+      ],
       [
         "report-action",
         {
@@ -175,6 +319,22 @@ function resolved(options: { outputLabel?: string; artifactPath?: string } = {})
         },
       ],
     ]),
+    objectTypes: objectTypeRows,
+    actionDefinitions: new Map([
+      [parseActionId, definition(parseActionId, RESUME_MATCH_PARSE_ACTION_NAME, parseInputs, [])],
+      [reportActionId, definition(reportActionId, "简历评分·汇总", [], reportOutputs)],
+    ]),
+    capabilities: {
+      skills: [],
+      tools: toolRows,
+      toolNamesByActionId: new Map([
+        [parseActionId, []],
+        [
+          reportActionId,
+          validator && validatorReferenced ? [RESUME_MATCH_VALIDATOR_TOOL_NAME] : [],
+        ],
+      ]),
+    },
   };
 }
 
@@ -194,6 +354,16 @@ beforeEach(() => {
       "insert into object_types (id, name, kind, description, json_schema, created_at, updated_at) values (?, ?, 'json', '', ?, 0, 0)",
     )
     .run(resultTypeId, "评分报告", RESUME_MATCH_RESULT_SCHEMA_TEXT);
+  sqlite
+    .prepare(
+      "insert into object_types (id, name, kind, description, json_schema, created_at, updated_at) values (?, ?, 'file', '', NULL, 0, 0)",
+    )
+    .run(jobTypeId, RESUME_MATCH_JOB_OBJECT_TYPE_NAME);
+  sqlite
+    .prepare(
+      "insert into object_types (id, name, kind, description, json_schema, created_at, updated_at) values (?, ?, 'file', '', NULL, 0, 0)",
+    )
+    .run(resumeTypeId, RESUME_MATCH_RESUME_OBJECT_TYPE_NAME);
   sqlite
     .prepare(
       "insert into tools (id, name, description, code, created_at, updated_at) values (?, ?, '', 'trusted-validator-code', 0, 0)",
@@ -236,12 +406,41 @@ describe("简历匹配工作流预检", () => {
   });
 
   it.each([
-    ["输出标签", resolved({ outputLabel: "旧评分报告" })],
-    ["产物路径", resolved({ artifactPath: "report.json" })],
-  ])("%s 被编辑后在运行受理前失败", async (_name, graph) => {
+    ["输出标签", { outputLabel: "旧评分报告" }],
+    ["产物路径", { artifactPath: "report.json" }],
+  ])("%s 被编辑后在运行受理前失败", async (_name, options) => {
+    const graph = resolved(options);
     controls.resolveWorkflow.mockResolvedValue(graph);
     const result = await startResumeMatch(invocation);
     expect(result.ok).toBe(false);
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("岗位与简历对象类型对调时在运行受理前失败", async () => {
+    controls.resolveWorkflow.mockResolvedValue(
+      resolved({ jobObjectTypeId: resumeTypeId, resumeObjectTypeId: jobTypeId }),
+    );
+
+    await expect(startResumeMatch(invocation)).resolves.toMatchObject({
+      ok: false,
+      status: 500,
+    });
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("岗位与简历改接到解析 Action 的相反端口时在运行受理前失败", async () => {
+    controls.resolveWorkflow.mockResolvedValue(
+      resolved({
+        jobTargetPort: RESUME_MATCH_RESUME_PARSE_PORT,
+        resumeTargetPort: RESUME_MATCH_JOB_PARSE_PORT,
+      }),
+    );
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: `岗位JD、简历必须分别连接「${RESUME_MATCH_PARSE_ACTION_NAME}」的对应输入端口`,
+    });
     expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 
@@ -305,6 +504,27 @@ describe("简历匹配工作流预检", () => {
       error: `校验 Tool ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的实现与内置版本不一致`,
     });
     expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("resolve 后共享 Tool 被改写也仍把已预检源码快照交给运行", async () => {
+    const graph = resolved();
+    controls.resolveWorkflow.mockImplementation(async () => {
+      sqlite
+        .prepare("update tools set code = ? where id = ?")
+        .run("export const forged = true", validatorToolId);
+      return graph;
+    });
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: true,
+      data: { runId: "run-1" },
+    });
+    expect(graph.capabilities.tools[0]?.code).toBe("trusted-validator-code");
+    expect(controls.startResolvedRun).toHaveBeenCalledWith(
+      graph,
+      expect.any(Object),
+      expect.any(Object),
+    );
   });
 });
 

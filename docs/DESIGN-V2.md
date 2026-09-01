@@ -154,13 +154,14 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 
 ## 六、引擎改动（阶段一部分）
 
-1. **运行快照**：`runActionNode` 解析出 Action 配置后，把完整配置写进 `run_nodes.snapshot`：
+1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口与 Tool 定义；`runActionNode`
+   不再回读共享库，只把这份定义和本轮实际渲染提示写进 `run_nodes.snapshot`：
    ```ts
    { actionId, actionName, prompt, rule, model:{providerId,modelId,displayName},
      reasoningEffort, skills:[{name,content}], renderedPrompt,
      ports:{inputs:[{name,objectTypeName,kind}], outputs:[{...,artifactPath,exitName}]} }
    ```
-   写入时机：会话创建前（即使随后失败也留有快照）。
+   节点快照写入时机：会话创建前（即使随后失败也留有快照）。
 2. **用量捕获**：dsh 每个 step 发一条不累积的 usage chunk，按
    `(sessionId, turn:step)` 唯一化写入 `node_usage`；节点收束时把该会话各 step 求和写入
    `run_nodes` 的用量字段。

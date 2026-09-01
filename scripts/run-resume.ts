@@ -20,6 +20,7 @@ import {
 import { resolveWithinData } from "../src/server/fs-safety";
 import { totalUsageTokens } from "./token-total";
 import { isTextPreviewMime } from "./resume-artifact-inspection";
+import { inspectPdfPages, readPdfPageCount } from "./resume-pdf-inspection";
 
 const BASE_URL = (process.env.ONTOFLOW_BASE_URL ?? "http://127.0.0.1:3592").replace(
   /\/$/,
@@ -214,6 +215,20 @@ async function inspectArtifacts(
   return artifacts;
 }
 
+function inspectPdfConversions(detail: RunDetail) {
+  const workspaceDir = detail.run.runDir
+    ? path.join(process.cwd(), detail.run.runDir, "workspace")
+    : null;
+  return detail.nodes.flatMap((node) => {
+    if (node.label !== "岗位JD" && node.label !== "简历") return [];
+    const input = filePortValue(node.outputs?.value);
+    if (!input || input.file.mime.toLowerCase() !== "application/pdf") return [];
+    if (!workspaceDir) throw new Error("PDF 运行缺少可检查的工作区路径");
+    const expectedPages = readPdfPageCount(resolveWithinData(input.file.path));
+    return [{ label: node.label, ...inspectPdfPages(workspaceDir, node.nodeId, expectedPages) }];
+  });
+}
+
 async function inspectTrajectories(runId: string, nodes: RunNode[]) {
   const actionNodes = nodes.filter((node) => node.snapshot !== null);
   if (actionNodes.length !== 8) throw new Error(`Action 节点数应为 8，实际 ${actionNodes.length}`);
@@ -318,6 +333,15 @@ async function main(): Promise<void> {
   if (!artifacts.some((artifact) => artifact.path.endsWith(`/${RESUME_MATCH_RESULT_ARTIFACT}`))) {
     throw new Error(`工作区缺少 ${RESUME_MATCH_RESULT_ARTIFACT}`);
   }
+  const pdfPages = inspectPdfConversions(detail);
+  const incompletePdfs = pdfPages.filter((inspection) => !inspection.complete);
+  if (incompletePdfs.length > 0) {
+    throw new Error(
+      `PDF 全页验收未通过：${incompletePdfs
+        .map((inspection) => `${inspection.label} 缺第 ${inspection.missingPages.join("/")} 页`)
+        .join("；")}`,
+    );
+  }
   const trajectory = await inspectTrajectories(started.runId, detail.nodes);
 
   const totalTokens = detail.nodes.reduce(
@@ -348,6 +372,7 @@ async function main(): Promise<void> {
           total: artifacts.length,
           nonEmpty: artifacts.every((item) => item.bytes > 0),
         },
+        pdfPages,
         trajectory,
         totalTokens,
         totalCostCny: Math.round(totalCost * 1_000_000) / 1_000_000,

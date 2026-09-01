@@ -9,7 +9,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import type { PortValue } from "../../lib/values";
-import type { ResolvedWorkflow } from "../resolve";
+import type { ResolvedActionDefinition, ResolvedWorkflow } from "../resolve";
 
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
@@ -121,6 +121,45 @@ let deleteRun: typeof import("../monitor/cleanup").deleteRun;
 let UnsettledRunLaunchError: typeof import("../harness/launch").UnsettledRunLaunchError;
 const runnerTestRoot = "/tmp/ontoflow-runner-test";
 
+function executionSnapshot(
+  actionIds: string[],
+): Pick<ResolvedWorkflow, "objectTypes" | "actionDefinitions" | "capabilities"> {
+  const now = new Date(0);
+  const definitions = new Map<string, ResolvedActionDefinition>(
+    actionIds.map((actionId) => [
+      actionId,
+      {
+        action: {
+          id: actionId,
+          name: actionId,
+          description: "",
+          prompt: "测试",
+          rule: "",
+          modelId: "model-test",
+          reasoningEffort: "off",
+          maxReentries: 0,
+          onExhausted: "fail",
+          createdAt: now,
+          updatedAt: now,
+        },
+        model: {
+          id: "model-test",
+          providerId: "test-provider",
+          modelId: "test-model",
+          displayName: "测试模型",
+        },
+        ports: { inputs: [], outputs: [] },
+        skills: [],
+      },
+    ]),
+  );
+  return {
+    objectTypes: new Map(),
+    actionDefinitions: definitions,
+    capabilities: { skills: [], tools: [], toolNamesByActionId: new Map() },
+  };
+}
+
 function resolvedWorkflow(): ResolvedWorkflow {
   const workflow = {
     id: "workflow-1",
@@ -209,6 +248,7 @@ function resolvedWorkflow(): ResolvedWorkflow {
       },
     ],
     nodeRows: new Map([[actionNodeRow.id, actionNodeRow]]),
+    ...executionSnapshot(["action-1"]),
   };
 }
 
@@ -295,6 +335,7 @@ function materializationWorkflow(textInputLabel = "完整题目"): ResolvedWorkf
       },
     ],
     nodeRows: new Map([[actionNodeRow.id, actionNodeRow]]),
+    ...executionSnapshot(["action-materialize"]),
   };
 }
 
@@ -402,6 +443,7 @@ function loopWorkflow(): ResolvedWorkflow {
       [writerRow.id, writerRow],
       [testerRow.id, testerRow],
     ]),
+    ...executionSnapshot(["action-writer", "action-tester"]),
   };
 }
 

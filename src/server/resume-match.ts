@@ -3,23 +3,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { and, desc, eq, lte } from "drizzle-orm";
 import {
-  actionTools,
   db,
-  objectTypes,
   revisions,
   runNodes,
   runs,
-  tools,
   workflows,
 } from "@/db";
 import type { ValidationIssue } from "@/lib/graph";
 import {
   parseResumeMatchResult,
   RESUME_MATCH_JOB_INPUT_LABEL,
+  RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
+  RESUME_MATCH_JOB_PARSE_PORT,
   RESUME_MATCH_OUTPUT_LABEL,
+  RESUME_MATCH_PARSE_ACTION_NAME,
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
   RESUME_MATCH_RESUME_INPUT_LABEL,
+  RESUME_MATCH_RESUME_OBJECT_TYPE_NAME,
+  RESUME_MATCH_RESUME_PARSE_PORT,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
   RESUME_MATCH_WORKFLOW_NAME,
   type ResumeMatchResult,
@@ -156,17 +158,52 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
     return "简历匹配工作流输入定义不是且仅有 file 类型的岗位JD、简历";
   }
 
+  const jobPort = jobNode.outputs[0];
+  const resumePort = resumeNode.outputs[0];
+  const jobType = resolved.objectTypes.get(jobPort.objectTypeId);
+  const resumeType = resolved.objectTypes.get(resumePort.objectTypeId);
+  if (
+    jobType?.name !== RESUME_MATCH_JOB_OBJECT_TYPE_NAME ||
+    resumeType?.name !== RESUME_MATCH_RESUME_OBJECT_TYPE_NAME
+  ) {
+    return (
+      `岗位JD、简历必须分别使用「${RESUME_MATCH_JOB_OBJECT_TYPE_NAME}」与` +
+      `「${RESUME_MATCH_RESUME_OBJECT_TYPE_NAME}」对象类型`
+    );
+  }
+
+  const jobOutgoing = resolved.edges.filter((edge) => edge.sourceNodeId === jobNode.id);
+  const resumeOutgoing = resolved.edges.filter((edge) => edge.sourceNodeId === resumeNode.id);
+  const jobEdge = jobOutgoing[0];
+  const resumeEdge = resumeOutgoing[0];
+  const parseNode = jobEdge
+    ? resolved.nodes.find((node) => node.id === jobEdge.targetNodeId)
+    : undefined;
+  const jobTargetPort = parseNode?.inputs.find((port) => port.name === jobEdge?.targetPort);
+  const resumeTargetPort = parseNode?.inputs.find((port) => port.name === resumeEdge?.targetPort);
+  if (
+    jobOutgoing.length !== 1 ||
+    resumeOutgoing.length !== 1 ||
+    jobEdge?.sourcePort !== "value" ||
+    resumeEdge?.sourcePort !== "value" ||
+    parseNode?.kind !== "action" ||
+    parseNode.label !== RESUME_MATCH_PARSE_ACTION_NAME ||
+    resumeEdge?.targetNodeId !== parseNode.id ||
+    jobEdge?.targetPort !== RESUME_MATCH_JOB_PARSE_PORT ||
+    resumeEdge?.targetPort !== RESUME_MATCH_RESUME_PARSE_PORT ||
+    jobTargetPort?.objectTypeId !== jobPort.objectTypeId ||
+    resumeTargetPort?.objectTypeId !== resumePort.objectTypeId
+  ) {
+    return `岗位JD、简历必须分别连接「${RESUME_MATCH_PARSE_ACTION_NAME}」的对应输入端口`;
+  }
+
   const outputs = resolved.nodes.filter((node) => node.kind === "output");
   const outputNode = outputs.find((node) => node.label === RESUME_MATCH_OUTPUT_LABEL);
   if (!outputNode || outputs.length !== 1 || outputNode.inputs.length !== 1) {
     return `简历匹配工作流输出定义不是且仅有「${RESUME_MATCH_OUTPUT_LABEL}」`;
   }
   const outputPort = outputNode.inputs[0];
-  const outputType = db
-    .select()
-    .from(objectTypes)
-    .where(eq(objectTypes.id, outputPort.objectTypeId))
-    .get();
+  const outputType = resolved.objectTypes.get(outputPort.objectTypeId);
   if (
     outputPort.kind !== "json" ||
     !outputType ||
@@ -211,17 +248,14 @@ function validateValidatorCapability(
   if (!actionId) {
     return "简历匹配汇总 Action 无法解析校验工具归属";
   }
-  const validator = db
-    .select({ id: tools.id, code: tools.code })
-    .from(actionTools)
-    .innerJoin(tools, eq(actionTools.toolId, tools.id))
-    .where(
-      and(
-        eq(actionTools.actionId, actionId),
-        eq(tools.name, RESUME_MATCH_VALIDATOR_TOOL_NAME),
-      ),
-    )
-    .get();
+  const referencedTools = new Set(
+    resolved.capabilities.toolNamesByActionId.get(actionId) ?? [],
+  );
+  const validator = referencedTools.has(RESUME_MATCH_VALIDATOR_TOOL_NAME)
+    ? resolved.capabilities.tools.find(
+        (tool) => tool.name === RESUME_MATCH_VALIDATOR_TOOL_NAME,
+      )
+    : undefined;
   if (!validator) {
     return `简历匹配汇总 Action 必须引用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}`;
   }

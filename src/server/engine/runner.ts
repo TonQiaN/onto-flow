@@ -209,8 +209,8 @@ export async function startRun(
 }
 
 /**
- * 受理已经解析并由调用方检查过的精确图快照。专用入口可把业务预检与实际执行
- * 绑定在同一个 ResolvedWorkflow 上；设置也在受理时冻结，运行中修改只影响下一次。
+ * 受理已经解析并由调用方检查过的完整执行快照。专用入口可把图、Action/Tool 定义、
+ * 业务预检与实际执行绑定在同一个 ResolvedWorkflow 上；设置也在受理时冻结。
  */
 export async function startResolvedRun(
   resolved: ResolvedWorkflow,
@@ -223,6 +223,15 @@ export async function startResolvedRun(
       assertSafeId("节点 id", node.id);
     } catch {
       issues.push({ nodeId: node.id, message: `节点「${node.label}」的 id 不能安全用于运行目录` });
+    }
+    if (node.kind === "action") {
+      const actionId = resolved.nodeRows.get(node.id)?.actionId;
+      if (!actionId || !resolved.actionDefinitions.has(actionId)) {
+        issues.push({
+          nodeId: node.id,
+          message: `Action 节点「${node.label}」缺少可执行定义或模型`,
+        });
+      }
     }
   }
 
@@ -676,10 +685,12 @@ async function executeRun(
 
     const nodeRow = resolved.nodeRows.get(nodeId);
     if (!nodeRow?.actionId) throw new Error("Action 节点缺少 actionId");
+    const definition = resolved.actionDefinitions.get(nodeRow.actionId);
+    if (!definition) throw new Error(`Action 节点「${state.node.label}」缺少受理时定义快照`);
     const result = await runActionNode({
       runId,
       node: state.node,
-      actionId: nodeRow.actionId,
+      definition,
       inputs: nodeInputs,
       proc,
       workspace,
