@@ -11,19 +11,14 @@ interface BatchCleanupOptions {
 }
 
 /**
- * 批量准入必须全有或全撤：只要一项被 429/校验拒绝，就取消同批已受理运行并
- * 等执行器退出后再报错，避免付费脚本因 Promise.all 的部分成功留下无人照看的运行。
+ * 终止一批已经受理的付费运行，并等到执行器不再持有它们后才把失败交还调用方。
+ * 准入部分失败与脚本等待超时共用这一条收束路径，不能留下无人照看的模型请求。
  */
-export async function requireWholeBatch(
-  started: readonly StartRunResult[],
+export async function abortRunBatch(
+  runIds: readonly string[],
+  reason: string,
   options: BatchCleanupOptions,
-): Promise<string[]> {
-  const rejected = started.flatMap((result, index) =>
-    result.ok ? [] : [{ index, result }],
-  );
-  const runIds = started.flatMap((result) => (result.ok ? [result.runId] : []));
-  if (rejected.length === 0) return runIds;
-
+): Promise<never> {
   const cancellationFailures: string[] = [];
   await Promise.all(
     runIds.map(async (runId) => {
@@ -50,9 +45,6 @@ export async function requireWholeBatch(
     active = runIds.filter(options.isRunExecutionActive);
   }
 
-  const failures = rejected
-    .map(({ index, result }) => `第 ${index + 1} 个运行启动失败：${JSON.stringify(result)}`)
-    .join("；");
   const cleanup =
     runIds.length === 0
       ? "本批没有已受理运行"
@@ -63,5 +55,25 @@ export async function requireWholeBatch(
     cancellationFailures.length === 0
       ? ""
       : `；取消调用异常：${cancellationFailures.join("；")}`;
-  throw new Error(`${failures}；${cleanup}${cancellation}`);
+  throw new Error(`${reason}；${cleanup}${cancellation}`);
+}
+
+/**
+ * 批量准入必须全有或全撤：只要一项被 429/校验拒绝，就取消同批已受理运行并
+ * 等执行器退出后再报错，避免付费脚本因 Promise.all 的部分成功留下无人照看的运行。
+ */
+export async function requireWholeBatch(
+  started: readonly StartRunResult[],
+  options: BatchCleanupOptions,
+): Promise<string[]> {
+  const rejected = started.flatMap((result, index) =>
+    result.ok ? [] : [{ index, result }],
+  );
+  const runIds = started.flatMap((result) => (result.ok ? [result.runId] : []));
+  if (rejected.length === 0) return runIds;
+
+  const failures = rejected
+    .map(({ index, result }) => `第 ${index + 1} 个运行启动失败：${JSON.stringify(result)}`)
+    .join("；");
+  return abortRunBatch(runIds, failures, options);
 }

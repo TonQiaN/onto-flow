@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StartRunResult } from "../src/server/engine/runner";
-import { requireWholeBatch } from "./batch-runs";
+import { abortRunBatch, requireWholeBatch } from "./batch-runs";
 
 describe("付费批量运行准入", () => {
   it("全部受理时原样返回运行 id，不发取消", async () => {
@@ -54,5 +54,23 @@ describe("付费批量运行准入", () => {
         pollIntervalMs: 1,
       }),
     ).rejects.toThrow("1 个执行器在 0ms 内未退出：run-stuck");
+  });
+
+  it("批量脚本等待超时时取消并等齐所有已受理运行", async () => {
+    const active = new Set(["run-1", "run-2"]);
+    const cancelRun = vi.fn(async (runId: string) => {
+      active.delete(runId);
+      return { ok: true as const };
+    });
+
+    await expect(
+      abortRunBatch(["run-1", "run-2"], "等待运行收束超时", {
+        cancelRun,
+        isRunExecutionActive: (runId) => active.has(runId),
+        settleTimeoutMs: 20,
+        pollIntervalMs: 1,
+      }),
+    ).rejects.toThrow("等待运行收束超时；已取消并收束同批已受理的 2 个运行");
+    expect(cancelRun.mock.calls.map(([runId]) => runId)).toEqual(["run-1", "run-2"]);
   });
 });

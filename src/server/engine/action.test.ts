@@ -40,7 +40,7 @@ CREATE TABLE run_nodes (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, snapshot TEXT,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  cost REAL NOT NULL DEFAULT 0, session_id TEXT
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0, session_id TEXT
 );
 CREATE TABLE run_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT,
@@ -61,6 +61,11 @@ CREATE TABLE node_usage (
 });
 
 const { runActionNode } = await import("./action");
+const {
+  clearUnpersistedUsageForSession,
+  recordSessionEvent,
+  unpersistedUsageForSession,
+} = await import("./events");
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-action-test-"));
 
 function resolvedNode(exitName: string | null = null): ResolvedNode {
@@ -162,12 +167,13 @@ beforeEach(() => {
   sqlite.exec(`
     DELETE FROM run_nodes;
     DELETE FROM node_usage;
+    DELETE FROM run_events;
     DELETE FROM action_skills;
     DELETE FROM action_ports;
     DELETE FROM actions;
     DELETE FROM object_types;
     DELETE FROM models;
-    INSERT INTO models VALUES ('model-1', 'deepseek-official', 'test-model', '测试模型');
+    INSERT INTO models VALUES ('model-1', 'deepseek-official', 'deepseek-v4-flash', '测试模型');
     INSERT INTO object_types VALUES ('type-1', '测试报告', 'file');
     INSERT INTO object_types VALUES ('type-input', 'PDF 输入', 'file');
     INSERT INTO actions VALUES (
@@ -179,8 +185,10 @@ beforeEach(() => {
     INSERT INTO action_ports VALUES (
       'port-1', 'action-1', 'output', 'result', 'type-1', 0, 'result.md', NULL
     );
-    INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, NULL);
+    INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);
   `);
+  clearUnpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1" });
+  clearUnpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1#2" });
   fs.rmSync(path.join(workspaceRoot, "result.md"), { force: true });
   fs.rmSync(path.join(workspaceRoot, "rounds"), { recursive: true, force: true });
 });
@@ -302,6 +310,79 @@ describe("Action 执行时边界", () => {
         .prepare("select type, payload from run_events where type = 'usage'")
         .get(),
     ).toMatchObject({ type: "usage" });
+  });
+
+  it("用量明细写入失败时仍把全部 token 与费用汇总到节点", async () => {
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await runActionNode(
+        context({
+          runTurn: async () => {
+            sqlite.exec(`
+              CREATE TRIGGER fail_usage_insert
+              BEFORE INSERT ON node_usage
+              BEGIN SELECT RAISE(ABORT, 'forced usage failure'); END;
+            `);
+            try {
+              recordSessionEvent(
+                {
+                  runId: "run-1",
+                  nodeId: "node-1",
+                  sessionId: "node-1",
+                  providerId: "deepseek-official",
+                  modelId: "deepseek-v4-flash",
+                  reasoningEffort: "high",
+                },
+                {
+                  type: "assistant/chunk",
+                  time: Date.UTC(2026, 7, 31, 2),
+                  data: {
+                    turn: 1,
+                    step: 1,
+                    chunk: {
+                      type: "usage",
+                      usage: {
+                        inputTokens: 10,
+                        outputTokens: 20,
+                        reasoningTokens: 7,
+                        cacheReadTokens: 3,
+                        cacheWriteTokens: 4,
+                      },
+                    },
+                  },
+                },
+              );
+            } finally {
+              sqlite.exec("DROP TRIGGER fail_usage_insert;");
+            }
+          },
+        }),
+      );
+    } finally {
+      log.mockRestore();
+      sqlite.exec("DROP TRIGGER IF EXISTS fail_usage_insert;");
+    }
+
+    const row = sqlite
+      .prepare(
+        "select input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens, cache_write_tokens as cacheWriteTokens, cost from run_nodes",
+      )
+      .get() as Record<string, number>;
+    expect(row).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+      reasoningTokens: 7,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 4,
+    });
+    expect(row.cost).toBeGreaterThan(0);
+    expect(sqlite.prepare("select count(*) as count from node_usage").get()).toEqual({ count: 0 });
+    expect(
+      unpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1" })
+        .chunks,
+    ).toBe(0);
   });
 
   it("文件输入在真实会话提示中给出原件路径并指示自行转换", async () => {

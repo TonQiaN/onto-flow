@@ -168,6 +168,36 @@ describe("运行工作区清理", () => {
     expect(fs.existsSync(workspace)).toBe(false);
   });
 
+  it("单个运行的工作区删除失败时保留数据库记录以便按 runId 重试", () => {
+    const workspace = makeWorkspace("workflow-failed-delete", "run-failed-delete");
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, run_dir, started_at) values (?, ?, ?, ?, ?)",
+      )
+      .run(
+        "run-failed-delete",
+        "workflow-failed-delete",
+        "success",
+        storedRunDir(workspace),
+        old,
+      );
+    const remove = vi.spyOn(fs, "rmSync").mockImplementationOnce(() => {
+      throw new Error("EACCES");
+    });
+
+    try {
+      expect(() => deleteRun("run-failed-delete")).toThrow("EACCES");
+    } finally {
+      remove.mockRestore();
+    }
+
+    expect(sqlite.prepare("select id from runs where id = ?").get("run-failed-delete")).toEqual({
+      id: "run-failed-delete",
+    });
+    expect(fs.existsSync(workspace)).toBe(true);
+    expect(deleteRun("run-failed-delete")).toEqual({ ok: true });
+  });
+
   it("运行影响面一次汇总并由单条条件删除排除活动执行器", () => {
     for (const id of ["run-a", "run-b", "run-active"]) {
       sqlite

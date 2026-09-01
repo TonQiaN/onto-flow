@@ -30,7 +30,11 @@ import type { NodeToolFilter } from "@/server/harness/rpc/types";
 import type { RunProcess } from "@/server/harness/runtime";
 import type { RunWorkspace } from "@/server/harness/workspace";
 import type { NodeExit } from "@/lib/graph";
-import type { EventSinkContext } from "./events";
+import {
+  clearUnpersistedUsageForSession,
+  unpersistedUsageForSession,
+  type EventSinkContext,
+} from "./events";
 // 循环依赖（runner → action → runner）在 ESM 下安全：isRunCancelled 是函数声明，
 // 且只在 runActionNode 执行期调用，那时 runner 模块体早已求值完毕。
 import { isRunCancelled } from "./runner";
@@ -550,9 +554,9 @@ function guessMime(filePath: string): string {
 /**
  * 会话用量汇总写回 run_nodes，并落一条结算事件。逐条明细（含按每条 usage
  * 到达时刻计的峰谷费用）由 events.ts 在 chunk 到达当下写进 node_usage——
- * 跨过峰谷边界的会话不能整段按收束时刻计价。这里从 node_usage 按会话求和：
- * 原始流式事件不驻留内存（并行运行下会把 Next 堆推到 GB 级），且汇总与明细
- * 同源同表，成本页和运行列表不会再各算各的。
+ * 跨过峰谷边界的会话不能整段按收束时刻计价。这里从 node_usage 按会话求和，
+ * 再补入明细写入失败时 events.ts 留下的紧凑兜底；兜底只留失败的 usage chunk，
+ * 不驻留原始流式事件，也不会在并行运行下把 Next 堆推到 GB 级。
  */
 function recordUsage(
   ctx: ActionNodeContext,
@@ -565,6 +569,7 @@ function recordUsage(
       outputTokens: sql<number>`coalesce(sum(${nodeUsage.outputTokens}), 0)`,
       reasoningTokens: sql<number>`coalesce(sum(${nodeUsage.reasoningTokens}), 0)`,
       cacheReadTokens: sql<number>`coalesce(sum(${nodeUsage.cacheReadTokens}), 0)`,
+      cacheWriteTokens: sql<number>`coalesce(sum(${nodeUsage.cacheWriteTokens}), 0)`,
       cost: sql<number>`coalesce(sum(${nodeUsage.cost}), 0)`,
     })
     .from(nodeUsage)
@@ -576,11 +581,14 @@ function recordUsage(
       ),
     )
     .get();
-  const inputTokens = totals?.inputTokens ?? 0;
-  const outputTokens = totals?.outputTokens ?? 0;
-  const reasoningTokens = totals?.reasoningTokens ?? 0;
-  const cacheReadTokens = totals?.cacheReadTokens ?? 0;
-  const cost = totals?.cost ?? 0;
+  const usageKey = { runId: ctx.runId, nodeId: ctx.node.id, sessionId };
+  const fallback = unpersistedUsageForSession(usageKey);
+  const inputTokens = (totals?.inputTokens ?? 0) + fallback.inputTokens;
+  const outputTokens = (totals?.outputTokens ?? 0) + fallback.outputTokens;
+  const reasoningTokens = (totals?.reasoningTokens ?? 0) + fallback.reasoningTokens;
+  const cacheReadTokens = (totals?.cacheReadTokens ?? 0) + fallback.cacheReadTokens;
+  const cacheWriteTokens = (totals?.cacheWriteTokens ?? 0) + fallback.cacheWriteTokens;
+  const cost = (totals?.cost ?? 0) + fallback.cost;
   db.update(runNodes)
     // 每一轮是独立会话，但 run_nodes 是节点级汇总。原值必须保留，否则回边重入
     // 会把前几轮用量覆盖掉，运行总费用与监控统计都会少算（ADR-0009）。
@@ -589,11 +597,13 @@ function recordUsage(
       outputTokens: sql`${runNodes.outputTokens} + ${outputTokens}`,
       reasoningTokens: sql`${runNodes.reasoningTokens} + ${reasoningTokens}`,
       cacheReadTokens: sql`${runNodes.cacheReadTokens} + ${cacheReadTokens}`,
+      cacheWriteTokens: sql`${runNodes.cacheWriteTokens} + ${cacheWriteTokens}`,
       cost: sql`${runNodes.cost} + ${cost}`,
       sessionId,
     })
     .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
     .run();
+  clearUnpersistedUsageForSession(usageKey);
   // 结算事件：让事件日志里能直接看到这个 Action 本轮花了多少钱。写失败不拦运行，
   // 权威数字在 run_nodes / node_usage。
   try {
@@ -610,6 +620,8 @@ function recordUsage(
           outputTokens,
           reasoningTokens,
           cacheReadTokens,
+          cacheWriteTokens,
+          detailPersistenceFailures: fallback.chunks,
           costCny: Math.round(cost * 1e6) / 1e6,
         },
       })

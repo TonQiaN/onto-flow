@@ -232,6 +232,9 @@ function cleanRuns(
   );
 
   if (!dryRun && count > 0) {
+    // 先确认工作区全部删除成功，才删除数据库事实。若目录删除中途失败，运行记录仍在，
+    // 调用方可以按 runId 重试；已经删掉的目录由 force 模式幂等处理。
+    for (const target of targets.values()) removeDir(target);
     // 单条 DELETE 让外键级联留在 SQLite 内完成；activeFilter 与预览共用同一快照，
     // cancelled 但执行器尚在 finally 收尾的运行仍被排除。
     db.run(sql`
@@ -242,7 +245,6 @@ function cleanRuns(
           ${activeFilter}
       )
     `);
-    for (const target of targets.values()) removeDir(target);
   }
 
   const detail =
@@ -273,8 +275,9 @@ export function deleteRun(
   }
   // 越界的 run_dir 由 targetFromStoredRunDir 抛 CleanupError，路由层映射为 400。
   const target = targetFromStoredRunDir(row.runDir);
-  db.run(sql`delete from runs where id = ${runId} and status <> 'running'`);
+  // 工作区删不掉时保留运行记录，调用方才能继续按 runId 定位和重试清理。
   if (target) removeDir(target);
+  db.run(sql`delete from runs where id = ${runId} and status <> 'running'`);
   return { ok: true };
 }
 
@@ -364,11 +367,7 @@ function isDirectory(dir: string): boolean {
 
 /** target 在预览前已收敛；真删前再验证同一相对路径仍解析回同一绝对目标。 */
 function removeDir(target: WorkspaceTarget): void {
-  try {
-    const abs = resolveWithinData(target.relativePath);
-    if (abs !== target.absolutePath) throw new Error("运行目录在预览后发生变化");
-    fs.rmSync(abs, { recursive: true, force: true });
-  } catch (err) {
-    console.error("[monitor] 删除目录失败", target.relativePath, err);
-  }
+  const abs = resolveWithinData(target.relativePath);
+  if (abs !== target.absolutePath) throw new Error("运行目录在预览后发生变化，已拒绝删除");
+  fs.rmSync(abs, { recursive: true, force: true });
 }

@@ -16,7 +16,7 @@ import {
   isRunExecutionActive,
   startRun,
 } from "../src/server/engine/runner";
-import { requireWholeBatch } from "./batch-runs";
+import { abortRunBatch, requireWholeBatch } from "./batch-runs";
 import { seedLeetcodeWorkflow, LEETCODE_INPUT_NODE_ID } from "./seed-leetcode";
 import { runSandboxedPythonVerification } from "./leetcode-verifier";
 import type { PortValue } from "../src/lib/values";
@@ -79,7 +79,12 @@ async function main(): Promise<void> {
       `\r收束 ${done}/${RUN_COUNT}（${Math.round((Date.now() - t0) / 1000)}s）  `,
     );
     if (done === RUN_COUNT) break;
-    if (Date.now() - t0 > 1_800_000) throw new Error("等待运行收束超时");
+    if (Date.now() - t0 > 1_800_000) {
+      await abortRunBatch(runIds, "等待运行收束超时", {
+        cancelRun,
+        isRunExecutionActive,
+      });
+    }
     await new Promise((r) => setTimeout(r, 3000));
   }
   console.log("\n");

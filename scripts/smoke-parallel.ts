@@ -27,7 +27,7 @@ import {
   isRunExecutionActive,
   startRun,
 } from "../src/server/engine/runner";
-import { requireWholeBatch } from "./batch-runs";
+import { abortRunBatch, requireWholeBatch } from "./batch-runs";
 import {
   createAction,
   loadActionDto,
@@ -310,7 +310,12 @@ async function main(): Promise<void> {
     const done = rows.filter((r) => r.status !== "running");
     process.stdout.write(`\r收束 ${done.length}/${RUN_COUNT}（${Math.round((Date.now() - t0) / 1000)}s）  `);
     if (done.length === RUN_COUNT) break;
-    if (Date.now() - t0 > 900_000) throw new Error("等待运行收束超时");
+    if (Date.now() - t0 > 900_000) {
+      await abortRunBatch(runIds, "等待运行收束超时", {
+        cancelRun,
+        isRunExecutionActive,
+      });
+    }
     await new Promise((r) => setTimeout(r, 2000));
   }
   console.log();

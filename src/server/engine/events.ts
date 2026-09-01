@@ -35,6 +35,70 @@ export interface EventSinkContext {
   reasoningEffort: string;
 }
 
+export interface UsageSessionKey {
+  runId: string;
+  nodeId: string;
+  sessionId: string;
+}
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+  chunks: number;
+}
+
+interface UnpersistedUsage extends UsageSessionKey, UsageTotals {
+  messageId: string;
+}
+
+// 明细写入偶发失败时不能把已经发生的付费用量一起丢掉。这里只保留失败条目，
+// 成功落库仍以 node_usage 为事实源；挂在 globalThis 上避免 HMR 丢失待结算条目。
+const usageStore = globalThis as typeof globalThis & {
+  ontoflowUnpersistedUsage?: Map<string, UnpersistedUsage>;
+};
+const unpersistedUsage =
+  usageStore.ontoflowUnpersistedUsage ?? new Map<string, UnpersistedUsage>();
+usageStore.ontoflowUnpersistedUsage = unpersistedUsage;
+
+/** 返回本会话没有写进 node_usage 的紧凑汇总，供 Action 最终结算补入。 */
+export function unpersistedUsageForSession(key: UsageSessionKey): UsageTotals {
+  const total = emptyUsageTotals();
+  for (const usage of unpersistedUsage.values()) {
+    if (
+      usage.runId !== key.runId ||
+      usage.nodeId !== key.nodeId ||
+      usage.sessionId !== key.sessionId
+    ) {
+      continue;
+    }
+    total.inputTokens += usage.inputTokens;
+    total.outputTokens += usage.outputTokens;
+    total.reasoningTokens += usage.reasoningTokens;
+    total.cacheReadTokens += usage.cacheReadTokens;
+    total.cacheWriteTokens += usage.cacheWriteTokens;
+    total.cost += usage.cost;
+    total.chunks += 1;
+  }
+  return total;
+}
+
+/** run_nodes 已成功吸收兜底用量后释放内存；失败则保留，不能提前销账。 */
+export function clearUnpersistedUsageForSession(key: UsageSessionKey): void {
+  for (const [id, usage] of unpersistedUsage) {
+    if (
+      usage.runId === key.runId &&
+      usage.nodeId === key.nodeId &&
+      usage.sessionId === key.sessionId
+    ) {
+      unpersistedUsage.delete(id);
+    }
+  }
+}
+
 /** 把一条 dsh 会话事件落成 run_events（可能零行、可能多行）与 node_usage。 */
 export function recordSessionEvent(ctx: EventSinkContext, event: unknown): void {
   const raw = event as RawEvent;
@@ -162,6 +226,29 @@ function recordUsage(
   usage: Record<string, number>,
 ): void {
   const messageId = `turn${num(data.turn)}-step${num(data.step)}`;
+  const key = usageKey(ctx, messageId);
+  const sample: UnpersistedUsage = {
+    runId: ctx.runId,
+    nodeId: ctx.nodeId,
+    sessionId: ctx.sessionId,
+    messageId,
+    inputTokens: usage.inputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0,
+    reasoningTokens: usage.reasoningTokens ?? 0,
+    cacheReadTokens: usage.cacheReadTokens ?? 0,
+    cacheWriteTokens: usage.cacheWriteTokens ?? 0,
+    cost: usageCostCny(
+      ctx.providerId,
+      ctx.modelId,
+      {
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+        cacheReadTokens: usage.cacheReadTokens ?? 0,
+      },
+      ts,
+    ),
+    chunks: 1,
+  };
   try {
     db.insert(nodeUsage)
       .values({
@@ -172,29 +259,40 @@ function recordUsage(
         providerId: ctx.providerId,
         modelId: ctx.modelId,
         variant: ctx.reasoningEffort,
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
-        reasoningTokens: usage.reasoningTokens ?? 0,
-        cacheReadTokens: usage.cacheReadTokens ?? 0,
-        cost: usageCostCny(
-          ctx.providerId,
-          ctx.modelId,
-          {
-            inputTokens: usage.inputTokens ?? 0,
-            outputTokens: usage.outputTokens ?? 0,
-            cacheReadTokens: usage.cacheReadTokens ?? 0,
-          },
-          ts,
-        ),
+        inputTokens: sample.inputTokens,
+        outputTokens: sample.outputTokens,
+        reasoningTokens: sample.reasoningTokens,
+        cacheReadTokens: sample.cacheReadTokens,
+        cacheWriteTokens: sample.cacheWriteTokens,
+        cost: sample.cost,
         ts,
       })
       .onConflictDoNothing({
         target: [nodeUsage.runId, nodeUsage.sessionId, nodeUsage.messageId],
       })
       .run();
+    // 写入成功或同键已经存在都说明持久层拥有这条明细，清除先前失败的重放副本。
+    unpersistedUsage.delete(key);
   } catch (err) {
+    unpersistedUsage.set(key, sample);
     console.error("[engine] 用量落库失败", ctx.runId, ctx.nodeId, err);
   }
+}
+
+function usageKey(ctx: UsageSessionKey, messageId: string): string {
+  return `${ctx.runId}\u0000${ctx.nodeId}\u0000${ctx.sessionId}\u0000${messageId}`;
+}
+
+function emptyUsageTotals(): UsageTotals {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cost: 0,
+    chunks: 0,
+  };
 }
 
 function str(value: unknown): string {
