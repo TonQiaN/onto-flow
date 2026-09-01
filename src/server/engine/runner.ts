@@ -37,7 +37,11 @@ import {
 } from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
 import { readSettings, type SettingsDocument } from "@/server/settings";
-import { runActionNode } from "./action";
+import {
+  finalizeUnsettledActionUsage,
+  refreshUnsettledActionUsage,
+  runActionNode,
+} from "./action";
 import {
   collectCapabilities,
   materializeToolPlugins,
@@ -337,7 +341,11 @@ async function executeRun(
       },
       onSessionEvent: (sessionId, event) => {
         const sink = sinks.get(sessionId);
-        if (sink) recordSessionEvent(sink, event);
+        if (sink) {
+          recordSessionEvent(sink, event);
+          // 双重 teardown 失败后该会话仍可能发出付费用量；其节点汇总保持实时追增量。
+          refreshUnsettledActionUsage(runId, sessionId);
+        }
       },
     });
   } catch (error) {
@@ -624,6 +632,15 @@ async function executeRun(
     // 无论成败都把子进程收束到静止：一个运行的进程树不许活过它的运行。
     try {
       await proc.dispose();
+      try {
+        finalizeUnsettledActionUsage(runId);
+      } catch (usageError) {
+        firstError ??=
+          `运行子进程退出后的用量结算失败：${
+            usageError instanceof Error ? usageError.message : String(usageError)
+          }`;
+        console.error("[engine] 退出后的用量结算失败", runId, usageError);
+      }
       runProcesses.delete(runId);
       disposalFailures.delete(runId);
     } catch (err) {

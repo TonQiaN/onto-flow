@@ -60,7 +60,11 @@ CREATE TABLE node_usage (
   schema,
 });
 
-const { runActionNode } = await import("./action");
+const {
+  finalizeUnsettledActionUsage,
+  refreshUnsettledActionUsage,
+  runActionNode,
+} = await import("./action");
 const {
   clearUnpersistedUsageForSession,
   recordSessionEvent,
@@ -164,6 +168,7 @@ function context(options?: {
 }
 
 beforeEach(() => {
+  finalizeUnsettledActionUsage("run-1");
   sqlite.exec(`
     DELETE FROM run_nodes;
     DELETE FROM node_usage;
@@ -310,6 +315,100 @@ describe("Action 执行时边界", () => {
         .prepare("select type, payload from run_events where type = 'usage'")
         .get(),
     ).toMatchObject({ type: "usage" });
+  });
+
+  it("会话与进程均无法确认静止时持续把迟到用量刷新到节点和同一结算事件", async () => {
+    try {
+      await expect(
+        runActionNode(
+          context({
+            usage: {
+              inputTokens: 17,
+              outputTokens: 8,
+              reasoningTokens: 3,
+              cacheReadTokens: 2,
+              cost: 0.125,
+            },
+            runTurnError: new Error("等待会话 node-1 进入 idle 超时"),
+            closeSession: async () => {
+              throw new Error("会话关闭失败");
+            },
+            dispose: async () => {
+              throw new Error("SIGKILL 后仍未退出");
+            },
+          }),
+        ),
+      ).rejects.toThrow("会话 node-1 失败后无法收束运行子进程");
+
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({
+        inputTokens: 17,
+        outputTokens: 8,
+        reasoningTokens: 3,
+        cacheReadTokens: 2,
+      });
+
+      recordSessionEvent(
+        {
+          runId: "run-1",
+          nodeId: "node-1",
+          sessionId: "node-1",
+          providerId: "deepseek-official",
+          modelId: "deepseek-v4-flash",
+          reasoningEffort: "high",
+        },
+        {
+          type: "assistant/chunk",
+          time: Date.UTC(2026, 7, 31, 2),
+          data: {
+            turn: 1,
+            step: 2,
+            chunk: {
+              type: "usage",
+              usage: {
+                inputTokens: 5,
+                outputTokens: 2,
+                reasoningTokens: 1,
+                cacheReadTokens: 1,
+              },
+            },
+          },
+        },
+      );
+      refreshUnsettledActionUsage("run-1", "node-1");
+
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({
+        inputTokens: 22,
+        outputTokens: 10,
+        reasoningTokens: 4,
+        cacheReadTokens: 3,
+      });
+      const events = sqlite
+        .prepare("select payload from run_events where type = 'usage'")
+        .all() as Array<{ payload: string }>;
+      expect(events).toHaveLength(1);
+      expect(JSON.parse(events[0].payload)).toMatchObject({
+        sessionId: "node-1",
+        inputTokens: 22,
+        outputTokens: 10,
+        reasoningTokens: 4,
+        cacheReadTokens: 3,
+        unsettledProcess: true,
+      });
+    } finally {
+      finalizeUnsettledActionUsage("run-1");
+    }
   });
 
   it("用量明细写入失败时仍把全部 token 与费用汇总到节点", async () => {

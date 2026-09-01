@@ -66,7 +66,11 @@ vi.mock("./capabilities", () => ({
   toolFilterForAction: () => undefined,
 }));
 vi.mock("./events", () => ({ recordSessionEvent: vi.fn() }));
-vi.mock("./action", () => ({ runActionNode: controls.runActionNode }));
+vi.mock("./action", () => ({
+  runActionNode: controls.runActionNode,
+  refreshUnsettledActionUsage: vi.fn(),
+  finalizeUnsettledActionUsage: vi.fn(),
+}));
 
 const sqlite = new Database(":memory:");
 sqlite.exec(`

@@ -100,6 +100,36 @@ const NODE_TURN_TIMEOUT_MS = 900_000;
  */
 const NODE_MAX_STEPS = 40;
 
+interface UsageAmounts {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+}
+
+interface UnsettledUsageRollup {
+  runId: string;
+  nodeId: string;
+  sessionId: string;
+  modelId: string;
+  /** 本会话开始前节点已经结算的历史轮次；后续刷新都从这个固定基线重算。 */
+  base: UsageAmounts;
+  lastSession?: UsageAmounts & { chunks: number };
+  detailPersistenceFailures: number;
+  eventId?: number;
+  eventDirty: boolean;
+}
+
+const actionUsageStore = globalThis as typeof globalThis & {
+  ontoflowUnsettledUsageRollups?: Map<string, UnsettledUsageRollup>;
+};
+const unsettledUsageRollups =
+  actionUsageStore.ontoflowUnsettledUsageRollups ??
+  new Map<string, UnsettledUsageRollup>();
+actionUsageStore.ontoflowUnsettledUsageRollups = unsettledUsageRollups;
+
 export async function runActionNode(
   ctx: ActionNodeContext,
 ): Promise<ActionNodeResult> {
@@ -184,6 +214,8 @@ export async function runActionNode(
     .run();
   assertNotCancelled(ctx.runId);
 
+  let usageMayContinue = false;
+
   try {
     await ctx.proc.runTurn(
       sessionId,
@@ -211,6 +243,7 @@ export async function runActionNode(
       try {
         await ctx.proc.dispose();
       } catch (disposeError) {
+        usageMayContinue = true;
         throw new AggregateError(
           [turnError, closeError, disposeError],
           `会话 ${sessionId} 失败后无法收束运行子进程`,
@@ -223,8 +256,13 @@ export async function runActionNode(
     }
     throw turnError;
   } finally {
-    // 失败分支已先把会话或进程收束到静止；此处求和之后不会再有迟到 usage。
-    recordUsage(ctx, sessionId, model);
+    if (usageMayContinue) {
+      // 子进程仍可能继续发 usage：用固定基线重算并保持实时刷新，不能在这里假装最终结算。
+      beginUnsettledUsageRollup(ctx, sessionId, model);
+    } else {
+      // 失败分支已先把会话或进程收束到静止；此处求和之后不会再有迟到 usage。
+      recordUsage(ctx, sessionId, model);
+    }
   }
 
   assertNotCancelled(ctx.runId);
@@ -549,6 +587,210 @@ function guessMime(filePath: string): string {
   if (ext === ".json") return "application/json";
   if (ext === ".txt") return "text/plain";
   return "application/octet-stream";
+}
+
+function usageRollupKey(runId: string, sessionId: string): string {
+  return `${runId}\u0000${sessionId}`;
+}
+
+function zeroUsage(): UsageAmounts {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cost: 0,
+  };
+}
+
+function readNodeUsage(runId: string, nodeId: string): UsageAmounts {
+  return (
+    db
+      .select({
+        inputTokens: runNodes.inputTokens,
+        outputTokens: runNodes.outputTokens,
+        reasoningTokens: runNodes.reasoningTokens,
+        cacheReadTokens: runNodes.cacheReadTokens,
+        cacheWriteTokens: runNodes.cacheWriteTokens,
+        cost: runNodes.cost,
+      })
+      .from(runNodes)
+      .where(and(eq(runNodes.runId, runId), eq(runNodes.nodeId, nodeId)))
+      .get() ?? zeroUsage()
+  );
+}
+
+function readSessionUsage(key: {
+  runId: string;
+  nodeId: string;
+  sessionId: string;
+}): { total: UsageAmounts & { chunks: number }; fallbackChunks: number } {
+  const persisted = db
+    .select({
+      inputTokens: sql<number>`coalesce(sum(${nodeUsage.inputTokens}), 0)`,
+      outputTokens: sql<number>`coalesce(sum(${nodeUsage.outputTokens}), 0)`,
+      reasoningTokens: sql<number>`coalesce(sum(${nodeUsage.reasoningTokens}), 0)`,
+      cacheReadTokens: sql<number>`coalesce(sum(${nodeUsage.cacheReadTokens}), 0)`,
+      cacheWriteTokens: sql<number>`coalesce(sum(${nodeUsage.cacheWriteTokens}), 0)`,
+      cost: sql<number>`coalesce(sum(${nodeUsage.cost}), 0)`,
+      chunks: sql<number>`count(*)`,
+    })
+    .from(nodeUsage)
+    .where(
+      and(
+        eq(nodeUsage.runId, key.runId),
+        eq(nodeUsage.nodeId, key.nodeId),
+        eq(nodeUsage.sessionId, key.sessionId),
+      ),
+    )
+    .get();
+  const fallback = unpersistedUsageForSession(key);
+  return {
+    total: {
+      inputTokens: (persisted?.inputTokens ?? 0) + fallback.inputTokens,
+      outputTokens: (persisted?.outputTokens ?? 0) + fallback.outputTokens,
+      reasoningTokens: (persisted?.reasoningTokens ?? 0) + fallback.reasoningTokens,
+      cacheReadTokens: (persisted?.cacheReadTokens ?? 0) + fallback.cacheReadTokens,
+      cacheWriteTokens: (persisted?.cacheWriteTokens ?? 0) + fallback.cacheWriteTokens,
+      cost: (persisted?.cost ?? 0) + fallback.cost,
+      chunks: (persisted?.chunks ?? 0) + fallback.chunks,
+    },
+    fallbackChunks: fallback.chunks,
+  };
+}
+
+function sameUsage(
+  left: UsageAmounts & { chunks: number },
+  right: UsageAmounts & { chunks: number },
+): boolean {
+  return (
+    left.inputTokens === right.inputTokens &&
+    left.outputTokens === right.outputTokens &&
+    left.reasoningTokens === right.reasoningTokens &&
+    left.cacheReadTokens === right.cacheReadTokens &&
+    left.cacheWriteTokens === right.cacheWriteTokens &&
+    left.cost === right.cost &&
+    left.chunks === right.chunks
+  );
+}
+
+function usageEventPayload(
+  state: UnsettledUsageRollup,
+  usage: UsageAmounts,
+): Record<string, unknown> {
+  return {
+    sessionId: state.sessionId,
+    model: state.modelId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    reasoningTokens: usage.reasoningTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+    detailPersistenceFailures: state.detailPersistenceFailures,
+    unsettledProcess: true,
+    costCny: Math.round(usage.cost * 1e6) / 1e6,
+  };
+}
+
+function refreshUnsettledUsageRollup(state: UnsettledUsageRollup): void {
+  const observed = readSessionUsage(state);
+  state.detailPersistenceFailures = Math.max(
+    state.detailPersistenceFailures,
+    observed.fallbackChunks,
+  );
+  const unchanged = state.lastSession && sameUsage(state.lastSession, observed.total);
+  if (!unchanged) {
+    db.update(runNodes)
+      // 本会话尚未静止，不能用增量叠加：失败明细稍后成功重放时会从内存兜底
+      // 移到 node_usage。固定历史基线 + 当前两处事实的并集才能保持幂等。
+      .set({
+        inputTokens: state.base.inputTokens + observed.total.inputTokens,
+        outputTokens: state.base.outputTokens + observed.total.outputTokens,
+        reasoningTokens: state.base.reasoningTokens + observed.total.reasoningTokens,
+        cacheReadTokens: state.base.cacheReadTokens + observed.total.cacheReadTokens,
+        cacheWriteTokens: state.base.cacheWriteTokens + observed.total.cacheWriteTokens,
+        cost: state.base.cost + observed.total.cost,
+        sessionId: state.sessionId,
+      })
+      .where(and(eq(runNodes.runId, state.runId), eq(runNodes.nodeId, state.nodeId)))
+      .run();
+    state.lastSession = observed.total;
+    state.eventDirty = true;
+  }
+  if (!state.eventDirty && state.eventId !== undefined) return;
+  try {
+    const payload = usageEventPayload(state, observed.total);
+    if (state.eventId === undefined) {
+      const inserted = db
+        .insert(runEvents)
+        .values({
+          runId: state.runId,
+          nodeId: state.nodeId,
+          ts: new Date(),
+          type: "usage",
+          payload,
+        })
+        .returning({ id: runEvents.id })
+        .get();
+      state.eventId = inserted.id;
+    } else {
+      db.update(runEvents)
+        .set({ payload })
+        .where(eq(runEvents.id, state.eventId))
+        .run();
+    }
+    state.eventDirty = false;
+  } catch (err) {
+    state.eventDirty = true;
+    console.error("[engine] 未静止会话用量事件落库失败", state.runId, state.nodeId, err);
+  }
+}
+
+function beginUnsettledUsageRollup(
+  ctx: ActionNodeContext,
+  sessionId: string,
+  model: { modelId: string },
+): void {
+  const key = usageRollupKey(ctx.runId, sessionId);
+  const state =
+    unsettledUsageRollups.get(key) ??
+    ({
+      runId: ctx.runId,
+      nodeId: ctx.node.id,
+      sessionId,
+      modelId: model.modelId,
+      base: readNodeUsage(ctx.runId, ctx.node.id),
+      detailPersistenceFailures: 0,
+      eventDirty: true,
+    } satisfies UnsettledUsageRollup);
+  unsettledUsageRollups.set(key, state);
+  refreshUnsettledUsageRollup(state);
+}
+
+/** 子进程隔离期间每次事件落库后刷新；非隔离会话只做一次 Map 查询。 */
+export function refreshUnsettledActionUsage(runId: string, sessionId: string): void {
+  const state = unsettledUsageRollups.get(usageRollupKey(runId, sessionId));
+  if (state) refreshUnsettledUsageRollup(state);
+}
+
+/** 子进程已确认退出后做最后一次刷新并释放兜底；此后不可能再有迟到 usage。 */
+export function finalizeUnsettledActionUsage(runId: string): void {
+  const failures: unknown[] = [];
+  for (const [key, state] of unsettledUsageRollups) {
+    if (state.runId !== runId) continue;
+    try {
+      refreshUnsettledUsageRollup(state);
+      clearUnpersistedUsageForSession(state);
+      unsettledUsageRollups.delete(key);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, `运行 ${runId} 的未静止会话用量结算失败`);
+  }
 }
 
 /**
