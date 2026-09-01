@@ -64,6 +64,8 @@ import {
   RESUME_MATCH_PARSED_RESUME_ARTIFACT,
   RESUME_MATCH_PARSED_RESUME_PORT,
   RESUME_MATCH_PARSE_ACTION_NAME,
+  RESUME_MATCH_PARSE_MODEL_ID,
+  RESUME_MATCH_PARSE_PROVIDER_ID,
   RESUME_MATCH_REPORT_ACTION_NAME,
   RESUME_MATCH_REPORT_CRITICS_PORT,
   RESUME_MATCH_REPORT_RESULT_PORT,
@@ -354,7 +356,7 @@ const textModel = db
   .from(models)
   .where(
     and(
-      eq(models.providerId, "deepseek-official"),
+      eq(models.providerId, RESUME_MATCH_PARSE_PROVIDER_ID),
       eq(models.modelId, "deepseek-v4-flash"),
     ),
   )
@@ -364,8 +366,8 @@ const visionModel = db
   .from(models)
   .where(
     and(
-      eq(models.providerId, "deepseek-official"),
-      eq(models.modelId, "deepseek-v4-flash-vision-exp"),
+      eq(models.providerId, RESUME_MATCH_PARSE_PROVIDER_ID),
+      eq(models.modelId, RESUME_MATCH_PARSE_MODEL_ID),
     ),
   )
   .get();

@@ -27,6 +27,8 @@ import {
   RESUME_MATCH_JOB_PARSE_PORT,
   RESUME_MATCH_OUTPUT_LABEL,
   RESUME_MATCH_PARSE_ACTION_NAME,
+  RESUME_MATCH_PARSE_MODEL_ID,
+  RESUME_MATCH_PARSE_PROVIDER_ID,
   RESUME_MATCH_PARSED_JOB_ARTIFACT,
   RESUME_MATCH_PARSED_JOB_PORT,
   RESUME_MATCH_PARSED_RESUME_ARTIFACT,
@@ -247,6 +249,20 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
     actionNodes.length !== RESUME_MATCH_CRITIC_ACTION_NAMES.length + 2
   ) {
     return "简历匹配工作流必须且只能包含解析、六位指定评审与汇总 Action";
+  }
+
+  const parseActionId = resolved.nodeRows.get(parseActionNode.id)?.actionId;
+  const parseActionDefinition = parseActionId
+    ? resolved.actionDefinitions.get(parseActionId)
+    : undefined;
+  if (
+    parseActionDefinition?.model.providerId !== RESUME_MATCH_PARSE_PROVIDER_ID ||
+    parseActionDefinition.model.modelId !== RESUME_MATCH_PARSE_MODEL_ID
+  ) {
+    return (
+      `「${RESUME_MATCH_PARSE_ACTION_NAME}」必须使用 ` +
+      `${RESUME_MATCH_PARSE_PROVIDER_ID}/${RESUME_MATCH_PARSE_MODEL_ID} 视觉模型`
+    );
   }
 
   const jobOutgoing = resolved.edges.filter((edge) => edge.sourceNodeId === jobNode.id);

@@ -19,6 +19,8 @@ import {
   RESUME_MATCH_PARSED_RESUME_ARTIFACT,
   RESUME_MATCH_PARSED_RESUME_PORT,
   RESUME_MATCH_PARSE_ACTION_NAME,
+  RESUME_MATCH_PARSE_MODEL_ID,
+  RESUME_MATCH_PARSE_PROVIDER_ID,
   RESUME_MATCH_REPORT_ACTION_NAME,
   RESUME_MATCH_REPORT_CRITICS_PORT,
   RESUME_MATCH_REPORT_RESULT_PORT,
@@ -359,29 +361,33 @@ function resolved(
     name: string,
     inputs: ReturnType<typeof port>[],
     outputs: ReturnType<typeof port>[],
-  ): ResolvedActionDefinition => ({
-    action: {
-      id: actionId,
-      name,
-      description: "",
-      prompt: "测试",
-      rule: "",
-      modelId: "model-test",
-      reasoningEffort: "high",
-      maxReentries: 0,
-      onExhausted: "fail",
-      createdAt: now,
-      updatedAt: now,
-    },
-    model: {
-      id: "model-test",
-      providerId: "deepseek-official",
-      modelId: "test-model",
-      displayName: "测试模型",
-    },
-    ports: { inputs, outputs },
-    skills: [],
-  });
+  ): ResolvedActionDefinition => {
+    const isParseAction = name === RESUME_MATCH_PARSE_ACTION_NAME;
+    const modelRowId = isParseAction ? "model-vision-test" : "model-test";
+    return {
+      action: {
+        id: actionId,
+        name,
+        description: "",
+        prompt: "测试",
+        rule: "",
+        modelId: modelRowId,
+        reasoningEffort: "high",
+        maxReentries: 0,
+        onExhausted: "fail",
+        createdAt: now,
+        updatedAt: now,
+      },
+      model: {
+        id: modelRowId,
+        providerId: RESUME_MATCH_PARSE_PROVIDER_ID,
+        modelId: isParseAction ? RESUME_MATCH_PARSE_MODEL_ID : "test-model",
+        displayName: isParseAction ? "测试视觉模型" : "测试模型",
+      },
+      ports: { inputs, outputs },
+      skills: [],
+    };
+  };
   const validator = sqlite
     .prepare("select id, name, description, code from tools where id = ?")
     .get(validatorToolId) as
@@ -653,6 +659,31 @@ describe("简历匹配工作流预检", () => {
     controls.resolveWorkflow.mockResolvedValue(graph);
     const result = await startResumeMatch(invocation);
     expect(result.ok).toBe(false);
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("解析 Action 改为非视觉模型时在运行受理前失败", async () => {
+    const graph = resolved();
+    const parseDefinition = graph.actionDefinitions.get(parseActionId);
+    if (!parseDefinition) throw new Error("测试图缺少解析 Action 定义");
+    const actionDefinitions = new Map(graph.actionDefinitions);
+    actionDefinitions.set(parseActionId, {
+      ...parseDefinition,
+      model: {
+        ...parseDefinition.model,
+        modelId: "deepseek-v4-flash",
+      },
+    });
+    graph.actionDefinitions = actionDefinitions;
+    controls.resolveWorkflow.mockResolvedValue(graph);
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error:
+        `「${RESUME_MATCH_PARSE_ACTION_NAME}」必须使用 ` +
+        `${RESUME_MATCH_PARSE_PROVIDER_ID}/${RESUME_MATCH_PARSE_MODEL_ID} 视觉模型`,
+    });
     expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 
