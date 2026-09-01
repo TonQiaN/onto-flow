@@ -216,6 +216,13 @@ test.describe("并行运行", () => {
     );
     expect(binaryRes.status(), "二进制文件不进入文本预览").toBe(415);
 
+    const invalidUtf8 = path.join(firstRunRoot, "workspace", "invalid-utf8.bin");
+    fs.writeFileSync(invalidUtf8, Buffer.from([0xff, 0xfe, 0xfd]));
+    const invalidUtf8Res = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, invalidUtf8))}`,
+    );
+    expect(invalidUtf8Res.status(), "没有 NUL 的非法 UTF-8 也不能冒充文本").toBe(415);
+
     const fifo = path.join(firstRunRoot, "workspace", "blocking.fifo");
     const mkfifo = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
     expect(mkfifo.status, `mkfifo 失败：${mkfifo.stderr}`).toBe(0);

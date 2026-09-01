@@ -38,7 +38,7 @@ src/
 | /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；校验不通过 422 `{ issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
 | /api/runs?workflowId=&status= | GET | 运行列表；每行带 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用） |
 | /api/runs/[id] | GET, DELETE | GET：run + run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage 外键级联，连同运行目录），running 时 409 |
-| /api/runs/[id]/files?path= | GET | 只读预览该运行目录内的文本文件（路径收敛在该 run 的 run_dir 内；256KB 截断，二进制 415）；运行详情看输入与产物正文的唯一通道（ADR-0012） |
+| /api/runs/[id]/files?path= | GET | 只读预览已结束运行目录内的 UTF-8 文本文件（执行中 409；路径收敛在该 run 的 run_dir 内；256KB 按完整字符截断，二进制或非法 UTF-8 为 415）；运行详情看输入与产物正文的唯一通道（ADR-0012） |
 | /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
 | /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
 | /api/uploads | POST | multipart 单文件 → 存 `data/uploads/<uuid>/<原名>`，返回 PortValue(file) |

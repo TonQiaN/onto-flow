@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, runs } from "@/db";
 import { handle, jsonError } from "@/lib/http";
+import { isRunExecutionActive } from "@/server/engine/runner";
 import { resolveWithinData } from "@/server/fs-safety";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,12 @@ export async function GET(
       .get();
     if (!run) return jsonError(404, "运行不存在");
     if (!run.runDir) return jsonError(404, "该运行没有工作区目录");
+    // Action 执行时可以改名并替换工作区里的任一祖先目录；Node 没有 openat 这类
+    // 能把整条路径锁定到已验证目录描述符的接口，因此活动运行必须停止预览。
+    // activeRuns 覆盖 subprocess 完整生命周期，终态写入前工作区已不再被模型修改。
+    if (isRunExecutionActive(id)) {
+      return jsonError(409, "运行执行期间暂不支持文件预览，请等待运行结束");
+    }
 
     const rel = new URL(request.url).searchParams.get("path") ?? "";
     if (!rel) return jsonError(400, "缺少 path（data/ 相对路径）");
@@ -106,11 +113,16 @@ export async function GET(
       return jsonError(404, "文件不存在（工作区可能已被清理）");
     }
     if (content.includes(0)) return jsonError(415, "二进制文件不支持预览");
-    // 截断点可能落在中文等多字节字符中间。stream=true 会保留末尾未完成序列而
-    // 不输出 U+FFFD；decoder 随请求丢弃，返回值因此始终是完整 UTF-8 字符前缀。
-    const preview = new TextDecoder("utf-8").decode(content, {
-      stream: size > content.byteLength,
-    });
+    // fatal 拒绝正文里的非法 UTF-8；只有确因预览上限而被切断的末尾序列允许
+    // stream 暂存，decoder 随请求丢弃它，从而返回完整字符前缀且不产生 U+FFFD。
+    let preview: string;
+    try {
+      preview = new TextDecoder("utf-8", { fatal: true }).decode(content, {
+        stream: size > content.byteLength,
+      });
+    } catch {
+      return jsonError(415, "二进制文件不支持预览");
+    }
 
     return NextResponse.json({
       name: path.basename(real),
