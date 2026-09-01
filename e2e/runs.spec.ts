@@ -468,6 +468,9 @@ test.describe("运行历史", () => {
     await runRow.click();
     await page.waitForURL(`/runs/${current.runId}`);
     await expect(page.getByRole("heading", { name: "运行详情", exact: true })).toBeVisible();
+    await expect(page.getByTestId("run-workspace-path")).toHaveText(
+      path.relative(process.cwd(), path.join(current.runDir, "workspace")),
+    );
     await expect(page.getByRole("link", { name: "回画布看动画" })).toBeVisible();
 
     const cardA = page.locator(`[data-node-id="${current.nodeA}"]`);

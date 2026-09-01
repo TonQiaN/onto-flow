@@ -18,9 +18,12 @@ import { SnapshotView } from "./snapshot-view";
 function PortSection({
   title,
   entries,
+  runId,
 }: {
   title: string;
   entries: [string, unknown][];
+  /** 文件值的正文预览要经 /api/runs/[id]/files，按运行收敛路径 */
+  runId: string;
 }) {
   return (
     <div className="mt-3">
@@ -29,7 +32,7 @@ function PortSection({
         {entries.map(([name, value]) => (
           <div key={name}>
             <div className="mb-1 font-mono text-xs text-zinc-500">{name}</div>
-            <PortValueView value={value} />
+            <PortValueView value={value} runId={runId} />
           </div>
         ))}
       </div>
@@ -93,8 +96,12 @@ export function NodeCard({
           </span>
         </div>
         <UsageLine node={node} />
-        {inputs.length > 0 && <PortSection title="输入" entries={inputs} />}
-        {outputs.length > 0 && <PortSection title="输出" entries={outputs} />}
+        {inputs.length > 0 && (
+          <PortSection title="输入" entries={inputs} runId={node.runId} />
+        )}
+        {outputs.length > 0 && (
+          <PortSection title="输出" entries={outputs} runId={node.runId} />
+        )}
         {node.error && (
           <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm break-words whitespace-pre-wrap text-red-700">
             {node.error}

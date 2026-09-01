@@ -123,8 +123,9 @@ async function main(): Promise<void> {
 
   const actionName = `${PREFIX}·誊写`;
   const prompt =
-    "先用 write 工具把需求原文一字不差写进 out.md（不增不减、不加标题），" +
-    "确认写入成功后再调用 structured_output 报告路径。不写文件就报告，本节点即失败。";
+    "先读「你要读的东西」指出的需求文件，再用 write 工具把需求原文一字不差写进 " +
+    "out.md（不增不减、不加标题），确认写入成功后再调用 structured_output 报告路径。" +
+    "不写文件就报告，本节点即失败。";
   const rule = "只写需求原文，不解释、不加前后缀。";
   const desiredAction: ActionPayload = {
     name: actionName,

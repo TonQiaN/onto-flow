@@ -2,9 +2,11 @@
  * 编排器取消竞态测试：用内存 SQLite 和可控 Action 返回验证 cancelRun 的终态
  * 不会被会话收束窗口里晚到的成功结果覆盖，不启动真实 harness。
  */
+import fs from "node:fs";
+import path from "node:path";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import type { PortValue } from "../../lib/values";
 import type { ResolvedWorkflow } from "../resolve";
@@ -117,6 +119,7 @@ let cancelRun: typeof import("./runner").cancelRun;
 let isRunExecutionActive: typeof import("./runner").isRunExecutionActive;
 let deleteRun: typeof import("../monitor/cleanup").deleteRun;
 let UnsettledRunLaunchError: typeof import("../harness/launch").UnsettledRunLaunchError;
+const runnerTestRoot = "/tmp/ontoflow-runner-test";
 
 function resolvedWorkflow(): ResolvedWorkflow {
   const workflow = {
@@ -202,6 +205,92 @@ function resolvedWorkflow(): ResolvedWorkflow {
         sourceNodeId: "action-node",
         sourcePort: "result",
         targetNodeId: "output-node",
+        targetPort: "value",
+      },
+    ],
+    nodeRows: new Map([[actionNodeRow.id, actionNodeRow]]),
+  };
+}
+
+function materializationWorkflow(): ResolvedWorkflow {
+  const workflow = {
+    id: "workflow-materialization",
+    name: "输入物化测试",
+    description: "",
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+  const port = (
+    name: string,
+    objectTypeId: string,
+    objectTypeName: string,
+    kind: "text" | "json",
+  ) => ({ name, objectTypeId, objectTypeName, kind });
+  const actionNodeRow = {
+    id: "materialize-action",
+    workflowId: workflow.id,
+    kind: "action" as const,
+    actionId: "action-materialize",
+    objectTypeId: null,
+    label: "读取输入",
+    x: 0,
+    y: 0,
+  };
+  return {
+    workflow,
+    nodes: [
+      {
+        id: "text-input",
+        kind: "input",
+        label: "完整题目",
+        inputs: [],
+        outputs: [port("value", "type-text", "文本", "text")],
+      },
+      {
+        id: "json-input",
+        kind: "input",
+        label: "运行参数",
+        inputs: [],
+        outputs: [port("value", "type-json", "JSON", "json")],
+      },
+      {
+        id: "materialize-action",
+        kind: "action",
+        label: "读取输入",
+        inputs: [
+          port("题目", "type-text", "文本", "text"),
+          port("参数", "type-json", "JSON", "json"),
+        ],
+        outputs: [port("结果", "type-text", "文本", "text")],
+      },
+      {
+        id: "materialize-output",
+        kind: "output",
+        label: "输出",
+        inputs: [port("value", "type-text", "文本", "text")],
+        outputs: [],
+      },
+    ],
+    edges: [
+      {
+        id: "e-text",
+        sourceNodeId: "text-input",
+        sourcePort: "value",
+        targetNodeId: "materialize-action",
+        targetPort: "题目",
+      },
+      {
+        id: "e-json",
+        sourceNodeId: "json-input",
+        sourcePort: "value",
+        targetNodeId: "materialize-action",
+        targetPort: "参数",
+      },
+      {
+        id: "e-output",
+        sourceNodeId: "materialize-action",
+        sourcePort: "结果",
+        targetNodeId: "materialize-output",
         targetPort: "value",
       },
     ],
@@ -340,6 +429,62 @@ beforeEach(() => {
   runProcesses.clear();
 });
 
+afterAll(() => {
+  fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+});
+
+describe("运行输入物化", () => {
+  it("文字与 JSON 在 Action 启动前完整落盘并改写成文件引用", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+    controls.resolveWorkflow.mockResolvedValue(materializationWorkflow());
+
+    let capturedInputs: Record<string, PortValue[]> | undefined;
+    controls.runActionNode.mockImplementation(
+      async (ctx: { inputs: Record<string, PortValue[]> }) => {
+        capturedInputs = ctx.inputs;
+        return {
+          outputs: { 结果: { kind: "text", text: "完成" } },
+          selectedExit: null,
+        };
+      },
+    );
+
+    const fullText = `${"题目正文".repeat(80)}\nclass Solution:\n    def convert(self, s: str, numRows: int) -> str:`;
+    const json = { language: "python3", numRows: 3 };
+    const startedRun = await startRun("workflow-materialization", {
+      "text-input": { kind: "text", text: fullText },
+      "json-input": { kind: "json", json },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("success");
+      expect(run.error).toBeNull();
+    });
+
+    const textValue = capturedInputs?.题目?.[0];
+    const jsonValue = capturedInputs?.参数?.[0];
+    expect(textValue?.kind).toBe("file");
+    expect(jsonValue?.kind).toBe("file");
+    if (textValue?.kind !== "file" || jsonValue?.kind !== "file") return;
+    expect(textValue.file.name).toBe("完整题目.md");
+    expect(textValue.file.mime).toBe("text/markdown");
+    expect(jsonValue.file.name).toBe("运行参数.json");
+    expect(jsonValue.file.mime).toBe("application/json");
+
+    const dataRoot = path.join(process.cwd(), "data");
+    expect(fs.readFileSync(path.resolve(dataRoot, textValue.file.path), "utf8")).toBe(fullText);
+    expect(fs.readFileSync(path.resolve(dataRoot, jsonValue.file.path), "utf8")).toBe(
+      `${JSON.stringify(json, null, 2)}\n`,
+    );
+  });
+});
+
 describe("回边重入", () => {
   it("环外输入喂环内多个节点时，回流后下一轮仍能等齐并收束成功", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
@@ -419,6 +564,8 @@ describe("运行取消终态", () => {
 
   it("Action 在取消后才返回成功时仍保持 cancelled", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.dispose.mockClear();
+    controls.cancel.mockClear();
     controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
 
     let releaseAction: (() => void) | undefined;

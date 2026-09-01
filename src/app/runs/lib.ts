@@ -51,6 +51,8 @@ export interface RunRow {
   workflowName: string;
   status: RunStatus;
   error: string | null;
+  /** 相对项目根目录的运行目录；工作区位于其 workspace/ 子目录。 */
+  runDir: string | null;
   startedAt: string | number;
   finishedAt: string | number | null;
 }

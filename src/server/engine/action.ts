@@ -479,9 +479,9 @@ function buildPrompt(
 }
 
 /**
- * 一个入端口的取用说明：文件说路径，字面值直接给。
- * 文件一律是原件——平台不做任何格式预处理，转换（抽文本、栅格化、OCR 等）
- * 是模型在会话里用 bash 自己的工作（ADR-0011）。
+ * 一个入端口的取用说明：文件只给路径；内联值说明输入物化层失守，直接失败。
+ * 文件类运行输入一律是原件——平台不做任何格式预处理，转换（抽文本、栅格化、
+ * OCR 等）是模型在会话里用 bash 自己的工作（ADR-0011 / ADR-0012）。
  */
 function describeInput(value: PortValue | undefined): string {
   if (!value) return "（上游未提供）";
@@ -492,9 +492,10 @@ function describeInput(value: PortValue | undefined): string {
         `直接读不动的格式就用 bash 自行转换成能读的形态）`
       );
     case "text":
-      return value.text.length > 200 ? `${value.text.slice(0, 200)}…` : value.text;
     case "json":
-      return JSON.stringify(value.json);
+      // ADR-0012 后运行输入一律在启动时物化为文件，引擎内不该再出现内联值；
+      // 走到这里即物化层缺陷，宁可响亮失败也不能再把可能被截断的内容喂给模型。
+      throw new Error("运行输入未物化为文件（ADR-0012），拒绝内联进提示");
   }
 }
 
