@@ -158,7 +158,8 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口与 Tool 定义；`runActionNode`
    不再回读这些共享库行，只把这份定义和本轮实际渲染提示写进 `run_nodes.snapshot`。Skill 只冻结
    引用关系，正文在会话启动前从工作区活链接读取，并把当时的完整 `SKILL.md` 一并写入；链接目录
-   只由 Skill 实体 id 派生，网页改名不会让已经受理的运行断链：
+   只由 Skill 实体 id 派生，网页改名不会让已经受理的运行断链。运行受理时验证并持有所需投影，
+   Skill 从库中删除后，目录也要等最后一个已受理运行完全收束才移除：
    ```ts
    { actionId, actionName, prompt, rule, model:{providerId,modelId,displayName},
      reasoningEffort, skills:[{name,content}], renderedPrompt,

@@ -37,6 +37,10 @@ import {
   type RunWorkspace,
 } from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import {
+  releaseSkillProjections,
+  retainSkillProjections,
+} from "@/server/skill-library";
 import { readSettings, type SettingsDocument } from "@/server/settings";
 import {
   finalizeUnsettledActionUsage,
@@ -344,19 +348,41 @@ export async function startResolvedRun(
 
   const runId = crypto.randomUUID();
   try {
-    db.insert(runs)
-      .values({
-        id: runId,
-        workflowId: resolved.workflow.id,
-        // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
-        workflowName: resolved.workflow.name,
-        status: "running",
-        // 入口来源与 run 同一次同步 insert 落库；专用 GET 不凭工作流名称猜来源。
-        imports: { invocation },
-        startedAt: new Date(),
-      })
-      .run();
+    retainSkillProjections(runId, resolved.capabilities.skills);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 422,
+      error: "工作流校验未通过",
+      issues: [
+        {
+          message: error instanceof Error ? error.message : "技能磁盘投影不可读",
+        },
+      ],
+    };
+  }
+  try {
+    db.transaction((tx) => {
+      tx.insert(runs)
+        .values({
+          id: runId,
+          workflowId: resolved.workflow.id,
+          // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
+          workflowName: resolved.workflow.name,
+          status: "running",
+          // 入口来源与 run 同一次同步 insert 落库；专用 GET 不凭工作流名称猜来源。
+          imports: { invocation },
+          startedAt: new Date(),
+        })
+        .run();
+      for (const node of resolved.nodes) {
+        tx.insert(runNodes)
+          .values({ runId, nodeId: node.id, label: node.label, status: "pending" })
+          .run();
+      }
+    });
   } catch (err) {
+    releaseSkillProjections(runId, resolved.capabilities.skills);
     // resolveWorkflow 的 await 与这次 insert 之间，工作流可能被并发 DELETE 掉
     //（删除守卫只挡有 running 运行的工作流）。外键失败在这里就是「工作流已不存在」，
     // 不能让对外 API 以 500 的面目报出来。
@@ -364,11 +390,6 @@ export async function startResolvedRun(
       return { ok: false, status: 404, error: "工作流不存在（可能刚被删除）" };
     }
     throw err;
-  }
-  for (const node of resolved.nodes) {
-    db.insert(runNodes)
-      .values({ runId, nodeId: node.id, label: node.label, status: "pending" })
-      .run();
   }
 
   // 异步执行，立即返回 runId。activeRuns 覆盖 executeRun 启动前到异常兜底后的
@@ -382,14 +403,16 @@ export async function startResolvedRun(
       const settlement = pendingUsageSettlements.get(runId);
       if (settlement) {
         // executeRun 已写终态，但用量尚未完整落库；保留进程句柄和 activeRuns，
-        // 让预览、清理、删除与新准入继续 fail-closed，直到后台重试成功。
+        // 让预览、清理、删除、新准入与 Skill 投影继续 fail-closed，直到后台重试成功。
         void settlement.then(() => {
           if (pendingUsageSettlements.get(runId) !== settlement) return;
           pendingUsageSettlements.delete(runId);
           runProcesses.delete(runId);
+          releaseSkillProjections(runId, resolved.capabilities.skills);
           activeRuns.delete(runId);
         });
       } else if (!disposalFailures.has(runId)) {
+        releaseSkillProjections(runId, resolved.capabilities.skills);
         activeRuns.delete(runId);
       }
     });

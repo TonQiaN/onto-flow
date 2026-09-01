@@ -19,6 +19,8 @@ const controls = vi.hoisted(() => ({
   dispose: vi.fn(async () => {}),
   cancel: vi.fn(async () => {}),
   finalizeUnsettledActionUsage: vi.fn(),
+  retainSkillProjections: vi.fn(),
+  releaseSkillProjections: vi.fn(),
 }));
 
 vi.mock("@/server/resolve", () => ({
@@ -74,6 +76,10 @@ vi.mock("./action", () => ({
   runActionNode: controls.runActionNode,
   refreshUnsettledActionUsage: vi.fn(),
   finalizeUnsettledActionUsage: controls.finalizeUnsettledActionUsage,
+}));
+vi.mock("@/server/skill-library", () => ({
+  retainSkillProjections: controls.retainSkillProjections,
+  releaseSkillProjections: controls.releaseSkillProjections,
 }));
 
 const sqlite = new Database(":memory:");
@@ -472,6 +478,8 @@ beforeEach(() => {
   controls.runActionNode.mockReset();
   controls.finalizeUnsettledActionUsage.mockReset();
   controls.finalizeUnsettledActionUsage.mockImplementation(() => undefined);
+  controls.retainSkillProjections.mockReset();
+  controls.releaseSkillProjections.mockReset();
   activeRuns.clear();
   disposalFailures.clear();
   pendingUsageSettlements.clear();
@@ -483,6 +491,36 @@ afterAll(() => {
 });
 
 describe("运行输入物化", () => {
+  it("Skill 投影缺失时在受理前返回 422，不创建运行或付费节点", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const graph = resolvedWorkflow();
+    controls.retainSkillProjections.mockImplementationOnce(() => {
+      throw new Error("技能「已删除技能」的磁盘投影不存在或不可读");
+    });
+
+    const startedRun = await startResolvedRun(
+      graph,
+      { "input-node": { kind: "text", text: "测试" } },
+      {
+        modelApiKeyEnv: "DEEPSEEK_API_KEY",
+        modelBaseUrl: "",
+        credentialRefs: [],
+        mcpServers: [],
+        disabledTools: [],
+      },
+      { source: "workflow" },
+    );
+
+    expect(startedRun).toEqual({
+      ok: false,
+      status: 422,
+      error: "工作流校验未通过",
+      issues: [{ message: "技能「已删除技能」的磁盘投影不存在或不可读" }],
+    });
+    expect(sqlite.prepare("SELECT count(*) AS count FROM runs").get()).toEqual({ count: 0 });
+    expect(controls.launchRun).not.toHaveBeenCalled();
+  });
+
   it("专用入口完成校验通过后把证据固化到运行元数据", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     fs.rmSync(runnerTestRoot, { recursive: true, force: true });
@@ -536,6 +574,10 @@ describe("运行输入物化", () => {
         )
         .get(startedRun.runId),
     ).toEqual({ kind: "test-result", content: resultContent, sha256: resultSha256 });
+    expect(controls.releaseSkillProjections).toHaveBeenCalledWith(
+      startedRun.runId,
+      graph.capabilities.skills,
+    );
   });
 
   it("专用入口完成证据缺失时收束为 failed 而不是留下不可读 success", async () => {

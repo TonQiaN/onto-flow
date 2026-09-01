@@ -72,7 +72,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - **受理时执行快照**：`resolveWorkflow` 在同一个事件循环片段内一次读取图所引用的 Object Type、
   Action、模型、端口、Skill 身份关系、Tool 源码与 Action→Tool 归属。运行受理、Tool 物化和稍后
   启动的每个 Action 都消费同一对象；共享库的并发保存只影响下一次运行。Skill 正文仍按下条的活链接
-  契约读取，并在各 Action 会话启动前把当时可读的工作区投影全文写进节点快照。
+  契约读取，并在各 Action 会话启动前把当时可读的工作区投影全文写进节点快照；受理边界先验证并
+  持有全部 Skill 投影，库内删除不会在运行与子进程完全收束前拆掉链接目标。
 - **能力与隔离**：工作流级指令写 `workspace/AGENTS.md`；Skill 以 ASCII slug 链进
   `workspace/.agents/skills/`，由 `skill-filesystem` 按描述发现，不强制拼进提示。Tool 以 ASCII id
   物化为 `<run>/plugins/tool-<id>.ts` cordis 插件；工作流并集进入全局工具面后，每个 Action

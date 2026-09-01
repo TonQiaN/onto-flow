@@ -39,7 +39,7 @@ export async function DELETE(_request: Request, { params }: Params) {
       return jsonError(409, "该技能正被 Action 引用，无法删除", { usedBy });
 
     db.delete(skills).where(eq(skills.id, id)).run();
-    // 库里没了，磁盘投影也要没：否则 skill-filesystem 还会发现它。
+    // 数据库立即删除；已受理运行若仍持有活链接，投影延迟到最后一个运行收束后再删。
     removeSkill(row);
     return NextResponse.json({ ok: true });
   });
