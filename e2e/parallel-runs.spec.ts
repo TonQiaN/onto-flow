@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { cleanupByPrefix } from "./helpers";
 
@@ -21,8 +22,6 @@ interface RunDetail {
     status: string;
     error: string | null;
     runDir: string | null;
-    startedAt: string | number;
-    finishedAt: string | number | null;
   };
   nodes: Array<{
     nodeId: string;
@@ -32,9 +31,18 @@ interface RunDetail {
   }>;
 }
 
-function toMs(value: string | number | null): number {
-  if (value === null) throw new Error("时间戳为空");
-  return typeof value === "number" ? value : new Date(value).getTime();
+/** 直接读 OS 进程表；run.startedAt 只代表受理，不能证明实际 harness 执行重叠。 */
+function harnessProcessesFor(workflowId: string): number {
+  const commands = execFileSync("/bin/ps", ["-axo", "command="], {
+    encoding: "utf8",
+  });
+  return commands
+    .split("\n")
+    .filter(
+      (command) =>
+        command.includes("src/server/harness/runner.ts") &&
+        command.includes(`${path.sep}data${path.sep}runs${path.sep}${workflowId}${path.sep}`),
+    ).length;
 }
 
 /** 上次进程被中断时可能遗留的本 spec 运行与实体；先运行后实体，级联才不会留孤儿目录。 */
@@ -100,34 +108,52 @@ test.describe("并行运行", () => {
     });
     expect(putRes.ok()).toBeTruthy();
 
-    // 同时发起 10 次运行——这是对外 API 的真实调用形态。
-    const startResponses = await Promise.all(
-      Array.from({ length: RUN_COUNT }, (_, i) =>
-        request.post(`/api/workflows/${workflowId}/run`, {
-          data: { inputs: { [inputNodeId]: { kind: "text", text: `并行验收 #${i + 1}` } } },
-        }),
-      ),
-    );
-    const runIds: string[] = [];
-    for (const res of startResponses) {
-      expect(res.status()).toBe(200);
-      runIds.push(((await res.json()) as { runId: string }).runId);
-    }
-    expect(new Set(runIds).size).toBe(RUN_COUNT);
-
-    // 轮询到全部终态。10 个子进程同时冷启动（tsx 编译），给足预算。
-    const details = new Map<string, RunDetail>();
-    const deadline = Date.now() + 150_000;
-    while (details.size < RUN_COUNT) {
-      expect(Date.now(), "等待全部运行收束超时").toBeLessThan(deadline);
-      for (const runId of runIds) {
-        if (details.has(runId)) continue;
-        const res = await request.get(`/api/runs/${runId}`);
-        expect(res.ok()).toBeTruthy();
-        const detail = (await res.json()) as RunDetail;
-        if (detail.run.status !== "running") details.set(runId, detail);
+    // 从发请求前就高频观察实际 argv；只有 10 个 runner.ts 子进程同时存在才算并行。
+    let stopObserving = false;
+    let maxConcurrentHarnesses = 0;
+    const observer = (async () => {
+      while (!stopObserving) {
+        maxConcurrentHarnesses = Math.max(
+          maxConcurrentHarnesses,
+          harnessProcessesFor(workflowId),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 20));
       }
-      if (details.size < RUN_COUNT) await new Promise((r) => setTimeout(r, 1000));
+    })();
+
+    const runIds: string[] = [];
+    const details = new Map<string, RunDetail>();
+    try {
+      // 同时发起 10 次运行——这是对外 API 的真实调用形态。
+      const startResponses = await Promise.all(
+        Array.from({ length: RUN_COUNT }, (_, i) =>
+          request.post(`/api/workflows/${workflowId}/run`, {
+            data: { inputs: { [inputNodeId]: { kind: "text", text: `并行验收 #${i + 1}` } } },
+          }),
+        ),
+      );
+      for (const res of startResponses) {
+        expect(res.status()).toBe(200);
+        runIds.push(((await res.json()) as { runId: string }).runId);
+      }
+      expect(new Set(runIds).size).toBe(RUN_COUNT);
+
+      // 轮询到全部终态。10 个子进程同时冷启动（tsx 编译），给足预算。
+      const deadline = Date.now() + 150_000;
+      while (details.size < RUN_COUNT) {
+        expect(Date.now(), "等待全部运行收束超时").toBeLessThan(deadline);
+        for (const runId of runIds) {
+          if (details.has(runId)) continue;
+          const res = await request.get(`/api/runs/${runId}`);
+          expect(res.ok()).toBeTruthy();
+          const detail = (await res.json()) as RunDetail;
+          if (detail.run.status !== "running") details.set(runId, detail);
+        }
+        if (details.size < RUN_COUNT) await new Promise((r) => setTimeout(r, 100));
+      }
+    } finally {
+      stopObserving = true;
+      await observer;
     }
 
     // 全部成功，逐个核对：状态、无错误、输入原样直通到输出节点。
@@ -146,10 +172,7 @@ test.describe("并行运行", () => {
       }
     }
 
-    // 并行证据：最早收束的那一刻，10 个运行全都已经开始——同时在飞的确是 10 个。
-    const startTimes = [...details.values()].map((d) => toMs(d.run.startedAt));
-    const finishTimes = [...details.values()].map((d) => toMs(d.run.finishedAt));
-    expect(Math.max(...startTimes)).toBeLessThanOrEqual(Math.min(...finishTimes));
+    expect(maxConcurrentHarnesses, "实际同时存活的 harness 子进程数").toBe(RUN_COUNT);
 
     // 逐运行查日志：运行目录独立存在，harness 子进程的 stderr 日志已落盘。
     const runDirs = new Set<string>();

@@ -46,6 +46,7 @@ import {
   type EdgePayload,
   type NodePayload,
 } from "../src/server/writers/workflow";
+import { checkParallelMarker } from "./parallel-marker";
 
 const PREFIX = "并行冒烟";
 const RUN_COUNT = Number(process.argv[2] ?? 10);
@@ -344,11 +345,9 @@ async function main(): Promise<void> {
       // 串号检查：每个运行的产物必须只含自己的专属标记。
       const artifact = path.resolve(process.cwd(), row.runDir, "workspace", "out.md");
       const content = fs.existsSync(artifact) ? fs.readFileSync(artifact, "utf8") : "";
-      const own = content.includes(markers[i]);
-      const others = markers.some((m, j) => j !== i && content.includes(m));
-      if (!own) crossTalk = "（注意：产物未含本运行标记，人工核对）";
-      if (others) {
-        crossTalk = "（产物混入了其他运行的标记——工作区串号！）";
+      const markerCheck = checkParallelMarker(content, markers[i], markers);
+      if (!markerCheck.ok) {
+        crossTalk = `（${markerCheck.error}）`;
         failed += 1;
       }
     }
