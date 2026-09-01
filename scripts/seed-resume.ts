@@ -54,6 +54,7 @@ import {
 } from "../src/server/writers/workflow";
 import type { WriteResult } from "../src/server/writers/types";
 import {
+  RESUME_MATCH_ACTION_BEHAVIOR_SHA256,
   RESUME_MATCH_CRITIC_ACTION_NAMES,
   RESUME_MATCH_CRITIC_ARTIFACTS,
   RESUME_MATCH_CRITIC_RESULT_PORT,
@@ -74,7 +75,11 @@ import {
   RESUME_MATCH_RESUME_INPUT_LABEL,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
   RESUME_MATCH_VALIDATOR_TOOL_SHA256,
+  RESUME_MATCH_WORKFLOW_DESCRIPTION,
+  RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256,
   RESUME_MATCH_WORKFLOW_NAME,
+  resumeMatchActionBehaviorSha256,
+  resumeMatchWorkflowDescriptionSha256,
   validateResumeMatchResult,
 } from "../src/lib/resume-match";
 import { writeResumeSamples } from "./resume-samples";
@@ -167,6 +172,33 @@ function upsertAction(input: {
   outputs: PortSpec[];
   toolIds?: string[];
 }): string {
+  const model = db.select().from(models).where(eq(models.id, input.modelId)).get();
+  if (!model) throw new Error(`Action「${input.name}」引用的模型不存在`);
+  const toolNames = (input.toolIds ?? []).map((toolId) => {
+    const tool = db.select({ name: tools.name }).from(tools).where(eq(tools.id, toolId)).get();
+    if (!tool) throw new Error(`Action「${input.name}」引用的 Tool ${toolId} 不存在`);
+    return tool.name;
+  });
+  const behaviorDigest = resumeMatchActionBehaviorSha256({
+    name: input.name,
+    prompt: input.prompt,
+    rule: input.rule,
+    providerId: model.providerId,
+    modelId: model.modelId,
+    reasoningEffort: input.effort,
+    maxReentries: 0,
+    onExhausted: "fail",
+    skillNames: [],
+    toolNames,
+  });
+  const expectedDigest = RESUME_MATCH_ACTION_BEHAVIOR_SHA256[input.name];
+  if (behaviorDigest !== expectedDigest) {
+    throw new Error(
+      `Action「${input.name}」行为摘要变化：期望 ${String(expectedDigest)}，实际 ${behaviorDigest}；` +
+        "请先审查 prompt、rule、模型、Skill 与 Tool 集合，再显式更新摘要 pin",
+    );
+  }
+
   const ports: ActionPayload["ports"] = [
     ...input.inputs.map((port, position) => ({
       direction: "input" as const,
@@ -342,6 +374,16 @@ if (validatorToolDigest !== RESUME_MATCH_VALIDATOR_TOOL_SHA256) {
   throw new Error(
     `简历校验 Tool 源码摘要变化：期望 ${RESUME_MATCH_VALIDATOR_TOOL_SHA256}，实际 ${validatorToolDigest}；` +
       "请先审查实现，再显式更新摘要 pin",
+  );
+}
+
+const workflowDescriptionDigest = resumeMatchWorkflowDescriptionSha256(
+  RESUME_MATCH_WORKFLOW_DESCRIPTION,
+);
+if (workflowDescriptionDigest !== RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256) {
+  throw new Error(
+    `简历工作流共同指令摘要变化：期望 ${RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256}，实际 ${workflowDescriptionDigest}；` +
+      "请先审查工作流级指令，再显式更新摘要 pin",
   );
 }
 
@@ -607,8 +649,7 @@ const report = upsertAction({
 // ---------------------------------------------------------------------------
 
 const WF_NAME = RESUME_MATCH_WORKFLOW_NAME;
-const WF_DESCRIPTION =
-  "一个岗位对一份简历：解析成 Markdown，六个角色分维度判断，最终汇总回看原文、自动裁决并输出严格 JSON 评分结果。";
+const WF_DESCRIPTION = RESUME_MATCH_WORKFLOW_DESCRIPTION;
 let wf = db.select().from(workflows).where(eq(workflows.name, WF_NAME)).get();
 if (!wf) {
   wf = unwrap(createWorkflow({ name: WF_NAME, description: WF_DESCRIPTION }));

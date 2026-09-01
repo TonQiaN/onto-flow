@@ -42,12 +42,15 @@ import {
   RESUME_MATCH_RESUME_OBJECT_TYPE_NAME,
   RESUME_MATCH_RESUME_PARSE_PORT,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
+  RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256,
   RESUME_MATCH_WORKFLOW_NAME,
+  resumeMatchWorkflowDescriptionSha256,
   type ResumeMatchResult,
 } from "@/lib/resume-match";
 import { isWithinData, resolveWithinData } from "@/server/fs-safety";
 import { startResolvedRun } from "@/server/engine/runner";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import { isAuthoritativeResumeMatchActionBehavior } from "@/server/resume-match-action-integrity";
 import { isAuthoritativeResumeMatchValidatorTool } from "@/server/resume-match-validator-integrity";
 import { readSettings, type SettingsDocument } from "@/server/settings";
 import {
@@ -537,6 +540,43 @@ function validateValidatorCapability(
   return null;
 }
 
+/** 八个 Action 的可执行行为也是专用付费入口契约，不能只凭同名与同端口放行。 */
+function validateActionBehaviors(resolved: ResolvedWorkflow): string | null {
+  if (
+    resumeMatchWorkflowDescriptionSha256(resolved.workflow.description) !==
+    RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256
+  ) {
+    return "简历匹配工作流的共同指令必须与内置行为契约一致";
+  }
+  const expectedNames = [
+    RESUME_MATCH_PARSE_ACTION_NAME,
+    ...RESUME_MATCH_CRITIC_ACTION_NAMES,
+    RESUME_MATCH_REPORT_ACTION_NAME,
+  ];
+  for (const name of expectedNames) {
+    const node = resolved.nodes.find(
+      (candidate) => candidate.kind === "action" && candidate.label === name,
+    );
+    const actionId = node ? resolved.nodeRows.get(node.id)?.actionId : null;
+    const definition = actionId
+      ? resolved.actionDefinitions.get(actionId)
+      : undefined;
+    const toolNames = actionId
+      ? resolved.capabilities.toolNamesByActionId.get(actionId) ?? []
+      : [];
+    if (
+      !definition ||
+      !isAuthoritativeResumeMatchActionBehavior(name, definition, toolNames)
+    ) {
+      return (
+        `「${name}」的任务、规则、模型、推理档位、重入策略及 Skill/Tool 集合` +
+        "必须与内置简历评分行为契约一致"
+      );
+    }
+  }
+  return null;
+}
+
 export async function startResumeMatch(
   invocation: ResumeMatchInvocation,
 ): Promise<WriteResult<{ runId: string }, ValidationIssue>> {
@@ -559,6 +599,8 @@ export async function startResumeMatch(
   const settings = readSettings();
   const capabilityError = validateValidatorCapability(resolved, settings);
   if (capabilityError) return writeFail(500, capabilityError);
+  const behaviorError = validateActionBehaviors(resolved);
+  if (behaviorError) return writeFail(500, behaviorError);
   const inputs = resolved.nodes.filter((node) => node.kind === "input");
   const jobNode = inputs.find((node) => node.label === RESUME_MATCH_JOB_INPUT_LABEL);
   const resumeNode = inputs.find((node) => node.label === RESUME_MATCH_RESUME_INPUT_LABEL);

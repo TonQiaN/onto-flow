@@ -4,8 +4,13 @@
  * 工作流的提示、汇总节点校验 Tool 与内部调用入口必须共用这一个事实源：
  * JSON Schema 负责告诉 Agent 精确形状，手写校验器负责核对字段与跨字段算法。
  */
+import { createHash } from "node:crypto";
 
 export const RESUME_MATCH_WORKFLOW_NAME = "简历匹配评分";
+export const RESUME_MATCH_WORKFLOW_DESCRIPTION =
+  "一个岗位对一份简历：解析成 Markdown，六个角色分维度判断，最终汇总回看原文、自动裁决并输出严格 JSON 评分结果。";
+export const RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256 =
+  "b2291a4e8901a66b36a477e32b95d37bb3265030421de381d309edb2e2412db4";
 export const RESUME_MATCH_JOB_INPUT_LABEL = "岗位JD";
 export const RESUME_MATCH_RESUME_INPUT_LABEL = "简历";
 export const RESUME_MATCH_JOB_OBJECT_TYPE_NAME = "岗位JD文件";
@@ -46,6 +51,65 @@ export const RESUME_MATCH_VALIDATOR_TOOL_NAME = "validate_resume_match_result";
 /** seed 生成的权威 Tool 源码摘要；实现变化必须经过代码审查后显式更新此 pin。 */
 export const RESUME_MATCH_VALIDATOR_TOOL_SHA256 =
   "080d8fea2c8ebedeeadda585da547cb8d762d0460c796c626162cfaf4b014a64";
+
+export interface ResumeMatchActionBehavior {
+  name: string;
+  prompt: string;
+  rule: string;
+  providerId: string;
+  modelId: string;
+  reasoningEffort: "off" | "low" | "high" | "max";
+  maxReentries: number;
+  onExhausted: "fail" | "accept";
+  skillNames: readonly string[];
+  toolNames: readonly string[];
+}
+
+/**
+ * 专用付费入口的行为定义摘要。数组排序后纳入摘要，使关系表顺序不影响契约；
+ * prompt、rule、模型、推理档位、重入策略及完整 Skill/Tool 集合任一变化都会改摘要。
+ */
+export function resumeMatchActionBehaviorSha256(
+  behavior: ResumeMatchActionBehavior,
+): string {
+  const canonical = JSON.stringify({
+    name: behavior.name,
+    prompt: behavior.prompt,
+    rule: behavior.rule,
+    providerId: behavior.providerId,
+    modelId: behavior.modelId,
+    reasoningEffort: behavior.reasoningEffort,
+    maxReentries: behavior.maxReentries,
+    onExhausted: behavior.onExhausted,
+    skillNames: [...behavior.skillNames].sort(),
+    toolNames: [...behavior.toolNames].sort(),
+  });
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
+}
+
+export function resumeMatchWorkflowDescriptionSha256(description: string): string {
+  return createHash("sha256").update(description, "utf8").digest("hex");
+}
+
+/** seed 生成的八个 Action 行为摘要；定义变化必须经过代码审查后显式更新这些 pin。 */
+export const RESUME_MATCH_ACTION_BEHAVIOR_SHA256: Readonly<Record<string, string>> = {
+  [RESUME_MATCH_PARSE_ACTION_NAME]:
+    "c65b493316b24def3c983f205e43248a5583f6f3dfb9578f7a3fdf0fed52c966",
+  [RESUME_MATCH_CRITIC_ACTION_NAMES[0]]:
+    "62904c3ea8183ee0283ed94ee99f1ec62cf62837bc33cedeb952f43c32031c4d",
+  [RESUME_MATCH_CRITIC_ACTION_NAMES[1]]:
+    "d3a36a010f2d383e4b03c6380eb7c42da023f396eb617d24ec0ef56b11fb2321",
+  [RESUME_MATCH_CRITIC_ACTION_NAMES[2]]:
+    "b718284b2c4d699bb35e62dda5b9606eda26e90112d56561c2f1ded27c918c2d",
+  [RESUME_MATCH_CRITIC_ACTION_NAMES[3]]:
+    "bf13a16a1eb58ef6c6f4b35ed543045a419b9f4a531ec72566f4caa0d66ed54a",
+  [RESUME_MATCH_CRITIC_ACTION_NAMES[4]]:
+    "7fbac93f3a0bdd784a555d8245ecf3896023bc553b5c5375345583defaaf0cc9",
+  [RESUME_MATCH_CRITIC_ACTION_NAMES[5]]:
+    "c17e3507db60dd6aa4419d2307ee5739d87202fa3bce06f32ccde42b09736a0c",
+  [RESUME_MATCH_REPORT_ACTION_NAME]:
+    "9b0eca3e8795bfe12a82add1ed8a7e6ebaa31a3a2e60d957ce22b0c378ff84d7",
+};
 
 export const RESUME_MATCH_DIMENSIONS = [
   "mustHave",
