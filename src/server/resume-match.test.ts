@@ -7,6 +7,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../db/schema";
+import { validateGraph } from "../lib/graph";
 import {
   RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
   RESUME_MATCH_JOB_PARSE_PORT,
@@ -511,6 +512,26 @@ describe("简历匹配工作流预检", () => {
 
   it("汇总 Action 会随回边重入时在运行受理前失败", async () => {
     const graph = resolved();
+    const parseNode = graph.nodes.find((node) => node.id === "parse-action");
+    const reportNode = graph.nodes.find((node) => node.id === "report-action");
+    if (!parseNode || !reportNode) throw new Error("测试图缺少 Action 节点");
+    const loopPort = (name: string, artifactPath: string | null) => ({
+      name,
+      kind: "json" as const,
+      objectTypeId: resultTypeId,
+      objectTypeName: "评分报告",
+      artifactPath,
+      exitName: null,
+    });
+    parseNode.maxReentries = 1;
+    parseNode.inputs.push(loopPort("返工意见", null));
+    parseNode.outputs.push(loopPort("解析结果", "parsed-result.json"));
+    reportNode.inputs.push(loopPort("评分输入", null));
+    reportNode.outputs[0].exitName = "accept";
+    reportNode.outputs.push({
+      ...loopPort("重试", "retry.json"),
+      exitName: "retry",
+    });
     graph.edges.push(
       {
         id: "parse-to-report",
@@ -527,6 +548,7 @@ describe("简历匹配工作流预检", () => {
         targetPort: "返工意见",
       },
     );
+    expect(validateGraph(graph.nodes, graph.edges)).toEqual([]);
     controls.resolveWorkflow.mockResolvedValue(graph);
 
     await expect(startResumeMatch(invocation)).resolves.toEqual({
