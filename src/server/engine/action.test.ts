@@ -95,6 +95,8 @@ function context(options?: {
     ...args: Parameters<ActionNodeContext["proc"]["runTurn"]>
   ) => Promise<void>;
   runTurnError?: Error;
+  closeSession?: (sessionId: string) => Promise<void>;
+  dispose?: () => Promise<void>;
   usage?: Record<string, number>;
   inputs?: ActionNodeContext["inputs"];
 }): ActionNodeContext {
@@ -125,7 +127,13 @@ function context(options?: {
       return sessionId;
     },
     sessionOutput: async () => ({ captured: true, value: { result: "result.md" } }),
-    closeSession: async () => {},
+    closeSession: async (targetSessionId: string) => {
+      await options?.closeSession?.(targetSessionId);
+    },
+    dispose: async () => {
+      await options?.dispose?.();
+      return { code: 0, signal: null, expected: true };
+    },
   };
   return {
     runId: "run-1",
@@ -250,7 +258,8 @@ describe("Action 执行时边界", () => {
     });
   });
 
-  it("模型轮次失败后仍把已经落库的用量与费用汇总到节点", async () => {
+  it("模型轮次超时后先关闭会话，再汇总关闭期间到达的最后用量", async () => {
+    let closed = false;
     await expect(
       runActionNode(
         context({
@@ -261,11 +270,20 @@ describe("Action 执行时边界", () => {
             cacheReadTokens: 2,
             cost: 0.125,
           },
-          runTurnError: new Error("provider 中途失败"),
+          runTurnError: new Error("等待会话 node-1 进入 idle 超时"),
+          closeSession: async (sessionId) => {
+            closed = true;
+            sqlite
+              .prepare(
+                "insert into node_usage (id, run_id, node_id, session_id, message_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cost, ts) values ('usage-late', 'run-1', 'node-1', ?, 'turn1-step2', 5, 2, 1, 1, 0.025, ?)",
+              )
+              .run(sessionId, Date.now());
+          },
         }),
       ),
-    ).rejects.toThrow("provider 中途失败");
+    ).rejects.toThrow("等待会话 node-1 进入 idle 超时");
 
+    expect(closed).toBe(true);
     expect(
       sqlite
         .prepare(
@@ -273,11 +291,11 @@ describe("Action 执行时边界", () => {
         )
         .get(),
     ).toEqual({
-      inputTokens: 17,
-      outputTokens: 8,
-      reasoningTokens: 3,
-      cacheReadTokens: 2,
-      cost: 0.125,
+      inputTokens: 22,
+      outputTokens: 10,
+      reasoningTokens: 4,
+      cacheReadTokens: 3,
+      cost: 0.15,
     });
     expect(
       sqlite

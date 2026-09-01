@@ -195,8 +195,31 @@ export async function runActionNode(
         timeoutMs: NODE_TURN_TIMEOUT_MS,
       },
     );
+  } catch (turnError) {
+    // runTurn 的墙钟超时只会停止 Next 侧等待，不会自动停止 agent。先关闭并等待
+    // 该会话真正静止，之后 finally 才能做最终用量汇总；否则并行兄弟节点仍在跑时，
+    // 这个超时会话还能继续产生费用，却再也没有第二次汇总机会。
+    try {
+      await ctx.proc.closeSession(sessionId);
+    } catch (closeError) {
+      // 单会话无法收束时只能收走本运行独占的整个子进程；这会让并行兄弟失败，
+      // 但能保证用量结算后不再有后台会话继续计费。
+      try {
+        await ctx.proc.dispose();
+      } catch (disposeError) {
+        throw new AggregateError(
+          [turnError, closeError, disposeError],
+          `会话 ${sessionId} 失败后无法收束运行子进程`,
+        );
+      }
+      throw new AggregateError(
+        [turnError, closeError],
+        `会话 ${sessionId} 失败后只能关闭运行子进程`,
+      );
+    }
+    throw turnError;
   } finally {
-    // usage chunk 到达时已产生费用；provider 报错、超时或取消不能跳过节点汇总。
+    // 失败分支已先把会话或进程收束到静止；此处求和之后不会再有迟到 usage。
     recordUsage(ctx, sessionId, model);
   }
 
