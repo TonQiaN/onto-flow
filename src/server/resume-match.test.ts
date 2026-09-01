@@ -509,6 +509,34 @@ describe("简历匹配工作流预检", () => {
     expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 
+  it("汇总 Action 会随回边重入时在运行受理前失败", async () => {
+    const graph = resolved();
+    graph.edges.push(
+      {
+        id: "parse-to-report",
+        sourceNodeId: "parse-action",
+        sourcePort: "解析结果",
+        targetNodeId: "report-action",
+        targetPort: "评分输入",
+      },
+      {
+        id: "report-back-to-parse",
+        sourceNodeId: "report-action",
+        sourcePort: "重试",
+        targetNodeId: "parse-action",
+        targetPort: "返工意见",
+      },
+    );
+    controls.resolveWorkflow.mockResolvedValue(graph);
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: "「评分结果」的上游 Action 不能位于回边重入范围内",
+    });
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
   it("岗位与简历对象类型对调时在运行受理前失败", async () => {
     controls.resolveWorkflow.mockResolvedValue(
       resolved({ jobObjectTypeId: resumeTypeId, resumeObjectTypeId: jobTypeId }),

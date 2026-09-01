@@ -11,7 +11,7 @@ import {
   runs,
   workflows,
 } from "@/db";
-import type { ValidationIssue } from "@/lib/graph";
+import { classifyEdges, downstreamOf, type ValidationIssue } from "@/lib/graph";
 import {
   parseResumeMatchResult,
   RESUME_MATCH_JOB_INPUT_LABEL,
@@ -234,6 +234,16 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
     sourcePort.artifactPath !== RESUME_MATCH_RESULT_ARTIFACT
   ) {
     return `「${RESUME_MATCH_OUTPUT_LABEL}」的上游 Action 必须产出 ${RESUME_MATCH_RESULT_ARTIFACT}`;
+  }
+  const { backEdgeIds } = classifyEdges(resolved.nodes, resolved.edges);
+  const resultActionCanReenter = resolved.edges.some(
+    (edge) =>
+      backEdgeIds.has(edge.id) &&
+      (edge.targetNodeId === sourceNode.id ||
+        downstreamOf(edge.targetNodeId, resolved.edges, backEdgeIds).has(sourceNode.id)),
+  );
+  if (resultActionCanReenter) {
+    return `「${RESUME_MATCH_OUTPUT_LABEL}」的上游 Action 不能位于回边重入范围内`;
   }
   return null;
 }

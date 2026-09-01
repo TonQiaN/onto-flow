@@ -94,7 +94,8 @@ DeepSeek V4 Flash Vision，自己用 bash 调 Poppler 抽取文本层、逐页�
 `{ job, resume }` POST 到 `/api/internal/resume-matches`；接口返回 `runId`，随后 GET
 `/api/internal/resume-matches/<runId>` 查询状态与最终 JSON，不需要知道工作流或节点 id。POST 会在
 付费运行前核对完整图、岗位/简历各自的对象类型与解析连线、JSON 契约、汇总 Action 对校验 Tool
-的引用和内置源码摘要，以及该 Tool 未被全局停用；任一条件被网页编辑破坏都会直接拒绝，不启动模型。
+的引用和内置源码摘要、该 Tool 未被全局停用，以及汇总 Action 不会被回边重入；任一条件被网页编辑
+破坏都会直接拒绝，不启动模型。
 通过后执行的就是这份图、Action、模型、端口、Tool 与设置快照，并发保存不会把已预检定义替换成另一版。
 校验 Tool 同时返回它实际读取内容的 SHA-256；引擎在写 `success` 前把 `valid=true`、错误为空且与
 最终产物字节一致的回执固化为运行完成证据，并把精确 JSON 存成随 run 生命周期管理的持久业务结果；
