@@ -765,18 +765,29 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   useEffect(() => {
     if (!routeRunId) return;
     let disposed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const retry = () => {
+      if (disposed) return;
+      retryTimer = setTimeout(() => void followDeepLink(), 2000);
+    };
     const followDeepLink = async () => {
       try {
         const detailRes = await fetch(`/api/runs/${encodeURIComponent(routeRunId)}`, {
           cache: "no-store",
         });
-        let belongsToWorkflow = false;
-        if (detailRes.ok) {
-          const detail = (await detailRes.json()) as { run?: { workflowId?: string } };
-          belongsToWorkflow = detail.run?.workflowId === workflowId;
+        if (!detailRes.ok && detailRes.status !== 404) {
+          if (disposed) return;
+          setBanner("运行详情暂时无法读取，已保留链接并正在重试");
+          retry();
+          return;
         }
+        const detail = detailRes.ok
+          ? ((await detailRes.json()) as { run?: { workflowId?: string } })
+          : null;
+        const belongsToWorkflow = detail?.run?.workflowId === workflowId;
         if (disposed) return;
         if (belongsToWorkflow) {
+          setBanner(null);
           subscribeRun(routeRunId);
           return;
         }
@@ -786,12 +797,16 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         window.history.replaceState(null, "", url);
         setBanner("链接中的运行不存在或不属于当前工作流，已停止跟随");
       } catch {
-        // 短暂网络错误不改 URL；导航或下一次参数变化仍可重新校验。
+        if (disposed) return;
+        // 短暂网络错误保留深链并自动重试；只有 404 或确认属于别的工作流才清 URL。
+        setBanner("运行详情暂时无法读取，已保留链接并正在重试");
+        retry();
       }
     };
     void followDeepLink();
     return () => {
       disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [workflowId, routeRunId, subscribeRun, resetRun]);
 

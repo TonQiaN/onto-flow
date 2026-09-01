@@ -33,7 +33,11 @@ import {
 } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import { materializeSkill, skillSlug, SKILL_LIBRARY_DIR } from "../src/server/skill-library";
-import { readSettings, writeSettings } from "../src/server/settings";
+import {
+  readSettings,
+  replaceSettingsIfCurrent,
+  type SettingsDocument,
+} from "../src/server/settings";
 
 const PREFIX = "能力冒烟";
 
@@ -81,8 +85,9 @@ function upsertObjectType(name: string, kind: "text" | "file" | "json"): string 
   return id;
 }
 
-/** 冒烟前的完整设置文档；结束时原样写回。 */
-let priorSettings: ReturnType<typeof readSettings> | undefined;
+/** 只有脚本实际安装过临时设置时才登记这一对 CAS 文档。 */
+let priorSettings: SettingsDocument | undefined;
+let temporarySettings: SettingsDocument | undefined;
 
 async function main(): Promise<void> {
   if (!process.env.DEEPSEEK_API_KEY) throw new Error("缺少 DEEPSEEK_API_KEY");
@@ -96,9 +101,17 @@ async function main(): Promise<void> {
   // 全局设置：临时把 bash 加进停用清单，验证真实注册的工具会被摘掉（ADR-0011 之后
   // bash 是每个会话的基础工具）。整份文档先存后还——settings 是单文档，残留的
   // disabledTools 会让之后每一次真实运行都失去 bash，实测踩过。
-  priorSettings = readSettings();
-  if (!priorSettings.disabledTools.includes("bash")) {
-    writeSettings({ ...priorSettings, disabledTools: [...priorSettings.disabledTools, "bash"] });
+  const currentSettings = readSettings();
+  if (!currentSettings.disabledTools.includes("bash")) {
+    const nextSettings = {
+      ...currentSettings,
+      disabledTools: [...currentSettings.disabledTools, "bash"],
+    };
+    if (!replaceSettingsIfCurrent(currentSettings, nextSettings)) {
+      throw new Error("全局设置在能力冒烟准备期间被修改，请重试");
+    }
+    priorSettings = currentSettings;
+    temporarySettings = nextSettings;
   }
 
   // Skill：写库并物化磁盘投影
@@ -266,6 +279,9 @@ async function main(): Promise<void> {
 try {
   await main();
 } finally {
-  // 无论冒烟成败都把设置文档原样写回，不给后续运行留下停用残留。
-  if (priorSettings !== undefined) writeSettings(priorSettings);
+  // 只撤销脚本自己安装且仍未被用户改动的临时文档；运行期间的新保存永远胜出。
+  if (priorSettings !== undefined && temporarySettings !== undefined) {
+    const restored = replaceSettingsIfCurrent(temporarySettings, priorSettings);
+    if (!restored) console.warn("全局设置已由其他操作更新，能力冒烟未覆盖该新版本");
+  }
 }

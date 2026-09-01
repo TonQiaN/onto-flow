@@ -87,6 +87,44 @@ export function writeSettings(raw: unknown): WriteResult<SettingsDocument> {
   return writeOk(parsed.data);
 }
 
+function sameSettings(left: SettingsDocument, right: SettingsDocument): boolean {
+  // 两边都经过 parseSettings，键顺序稳定；数组顺序变化也算用户改动，不能被恢复覆盖。
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/**
+ * 只在当前设置仍等于 expected 时原子替换。付费冒烟脚本用它临时安装/恢复设置，
+ * 用户在运行期间保存的新文档必须胜出，不能被脚本手里的旧快照覆盖。
+ */
+export function replaceSettingsIfCurrent(
+  expected: SettingsDocument,
+  replacement: SettingsDocument,
+): boolean {
+  const parsedExpected = parseSettings(expected);
+  const parsedReplacement = parseSettings(replacement);
+  if (!parsedExpected.ok || !parsedReplacement.ok) {
+    throw new Error("设置比较替换收到未通过校验的文档");
+  }
+  return db.transaction(
+    (tx) => {
+      const row = tx.select().from(settings).where(eq(settings.id, 1)).get();
+      const current = row ? parseSettings(row.document) : writeOk({ ...DEFAULT_SETTINGS });
+      if (!current.ok || !sameSettings(current.data, parsedExpected.data)) return false;
+      const document = parsedReplacement.data as unknown as Record<string, unknown>;
+      tx.insert(settings)
+        .values({ id: 1, document, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: settings.id,
+          set: { document, updatedAt: new Date() },
+        })
+        .run();
+      return true;
+    },
+    // 读当前值与写替换值属于一个 CAS；IMMEDIATE 阻止另一连接插进二者之间。
+    { behavior: "immediate" },
+  );
+}
+
 export function parseSettings(raw: unknown): WriteResult<SettingsDocument> {
   if (!raw || typeof raw !== "object") return writeFail(400, "设置必须是 JSON 对象");
   const body = raw as Record<string, unknown>;

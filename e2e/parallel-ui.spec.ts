@@ -227,4 +227,46 @@ test.describe("多路并行界面", () => {
       expect(del.ok(), `删除运行 ${foreignRunId}`).toBeTruthy();
     }
   });
+
+  test("深链详情临时失败时保留 runId 并自动重试", async ({ page, request }) => {
+    const workflowRes = await request.post("/api/workflows", {
+      data: { name: `${PREFIX}深链重试`, description: "临时错误不能清除深链" },
+    });
+    expect(workflowRes.ok()).toBeTruthy();
+    const workflow = (await workflowRes.json()) as { id: string; name: string };
+    const runId = insertSyntheticRun(workflow.id, workflow.name);
+    let detailAttempts = 0;
+    let allowDetailSuccess = false;
+    await page.route(`**/api/runs/${runId}`, async (route) => {
+      detailAttempts += 1;
+      if (!allowDetailSuccess) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "临时读取失败" }),
+        });
+        return;
+      }
+      await route.continue();
+    });
+
+    try {
+      await page.goto(`/workflows/${workflow.id}?runId=${runId}`);
+      await expect(
+        page.getByText("运行详情暂时无法读取，已保留链接并正在重试"),
+      ).toBeVisible({ timeout: 10_000 });
+      await expect(page).toHaveURL(`/workflows/${workflow.id}?runId=${runId}`);
+      allowDetailSuccess = true;
+      await expect(page.getByRole("button", { name: "取消运行" })).toBeVisible({
+        timeout: 10_000,
+      });
+      expect(detailAttempts).toBeGreaterThanOrEqual(2);
+      await expect(page).toHaveURL(`/workflows/${workflow.id}?runId=${runId}`);
+    } finally {
+      allowDetailSuccess = true;
+      finishSyntheticRuns([runId]);
+      const del = await request.delete(`/api/runs/${runId}`);
+      expect(del.ok(), `删除运行 ${runId}`).toBeTruthy();
+    }
+  });
 });
