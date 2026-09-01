@@ -82,6 +82,7 @@ export async function GET(
 
     let size: number;
     let content: Buffer;
+    let inspected: Buffer;
     try {
       // O_NOFOLLOW 拒绝最终分量在校验后被换成软链；O_NONBLOCK 保证被换成
       // FIFO 时不会把同步 Next 进程挂死。真正决定可读性的必须是已打开的 fd，
@@ -99,11 +100,25 @@ export async function GET(
           return jsonError(404, "文件在读取前发生变化，请重试");
         }
         size = opened.size;
-        const length = Math.min(size, PREVIEW_MAX_BYTES);
+        // UTF-8 最长四字节。多读三字节才能判定恰好从预览边界前开始的序列
+        // 是合法跨界字符，还是在边界后的第一个字节就出现非法 continuation。
+        const length = Math.min(size, PREVIEW_MAX_BYTES + 3);
         const buffer = Buffer.alloc(length);
-        // readSync 返回实读字节；短读时只取有效前缀，尾部零字节不当二进制误判。
-        const bytesRead = fs.readSync(fd, buffer, 0, length, 0);
-        content = buffer.subarray(0, bytesRead);
+        // 常规文件也允许短读；循环填满所需前缀，尾部未写区域不参与二进制判断。
+        let bytesRead = 0;
+        while (bytesRead < length) {
+          const count = fs.readSync(
+            fd,
+            buffer,
+            bytesRead,
+            length - bytesRead,
+            bytesRead,
+          );
+          if (count === 0) break;
+          bytesRead += count;
+        }
+        inspected = buffer.subarray(0, bytesRead);
+        content = inspected.subarray(0, Math.min(bytesRead, PREVIEW_MAX_BYTES));
       } finally {
         fs.closeSync(fd);
       }
@@ -112,11 +127,15 @@ export async function GET(
       // 错误经 handle() 以 500 把服务器绝对路径泄漏给调用方。
       return jsonError(404, "文件不存在（工作区可能已被清理）");
     }
-    if (content.includes(0)) return jsonError(415, "二进制文件不支持预览");
-    // fatal 拒绝正文里的非法 UTF-8；只有确因预览上限而被切断的末尾序列允许
-    // stream 暂存，decoder 随请求丢弃它，从而返回完整字符前缀且不产生 U+FFFD。
+    if (inspected.includes(0)) return jsonError(415, "二进制文件不支持预览");
+    // 先用最多三字节 lookahead 验证跨预览边界的序列；文件在 lookahead 后仍有
+    // 内容时允许最后一个不相关序列暂存。再单独解码固定上限内的完整字符前缀，
+    // 被合法多字节字符切断时不产生 U+FFFD。
     let preview: string;
     try {
+      new TextDecoder("utf-8", { fatal: true }).decode(inspected, {
+        stream: size > inspected.byteLength,
+      });
       preview = new TextDecoder("utf-8", { fatal: true }).decode(content, {
         stream: size > content.byteLength,
       });

@@ -223,6 +223,23 @@ test.describe("并行运行", () => {
     );
     expect(invalidUtf8Res.status(), "没有 NUL 的非法 UTF-8 也不能冒充文本").toBe(415);
 
+    const invalidAcrossCutoff = path.join(
+      firstRunRoot,
+      "workspace",
+      "invalid-utf8-across-cutoff.bin",
+    );
+    const invalidAcrossCutoffBytes = Buffer.alloc(262_145, 0x61);
+    invalidAcrossCutoffBytes[262_143] = 0xe4;
+    invalidAcrossCutoffBytes[262_144] = 0x41;
+    fs.writeFileSync(invalidAcrossCutoff, invalidAcrossCutoffBytes);
+    const invalidAcrossCutoffRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, invalidAcrossCutoff))}`,
+    );
+    expect(
+      invalidAcrossCutoffRes.status(),
+      "预览边界前的多字节起始符必须连同边界后首字节校验",
+    ).toBe(415);
+
     const fifo = path.join(firstRunRoot, "workspace", "blocking.fifo");
     const mkfifo = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
     expect(mkfifo.status, `mkfifo 失败：${mkfifo.stderr}`).toBe(0);
