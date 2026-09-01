@@ -18,6 +18,7 @@ import {
 } from "../src/lib/resume-match";
 import { resolveWithinData } from "../src/server/fs-safety";
 import { totalUsageTokens } from "./token-total";
+import { isTextPreviewMime } from "./resume-artifact-inspection";
 
 const BASE_URL = (process.env.ONTOFLOW_BASE_URL ?? "http://127.0.0.1:3592").replace(
   /\/$/,
@@ -188,13 +189,26 @@ async function inspectArtifacts(
   );
   const artifacts: Array<{ path: string; bytes: number }> = [];
   for (const value of workspaceFiles) {
-    const preview = await requestJson<{ size: number; content: string }>(
-      `/api/runs/${runId}/files?path=${encodeURIComponent(value.file.path)}`,
-    );
-    if (preview.size <= 0 || preview.content.length === 0) {
-      throw new Error(`产物为空：${value.file.name}`);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(resolveWithinData(value.file.path));
+    } catch {
+      throw new Error(`产物不存在：${value.file.name}`);
     }
-    artifacts.push({ path: value.file.path, bytes: preview.size });
+    if (!stat.isFile() || stat.size <= 0) {
+      throw new Error(`产物不是非空普通文件：${value.file.name}`);
+    }
+    // files API 是文本预览通道。PDF 等二进制输入只核对本机运行工作区里的
+    // 普通文件与非零大小，不能在八个付费会话成功后因 415 被误报成验收失败。
+    if (isTextPreviewMime(value.file.mime)) {
+      const preview = await requestJson<{ size: number; content: string }>(
+        `/api/runs/${runId}/files?path=${encodeURIComponent(value.file.path)}`,
+      );
+      if (preview.size <= 0 || preview.content.length === 0) {
+        throw new Error(`文本产物为空：${value.file.name}`);
+      }
+    }
+    artifacts.push({ path: value.file.path, bytes: stat.size });
   }
   return artifacts;
 }

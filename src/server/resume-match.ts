@@ -1,13 +1,13 @@
 /** 「简历匹配评分」工作流调用入口的服务层。 */
 import fs from "node:fs";
 import path from "node:path";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, lte } from "drizzle-orm";
 import {
   db,
   objectTypes,
+  revisions,
   runNodes,
   runs,
-  workflowNodes,
   workflows,
 } from "@/db";
 import type { ValidationIssue } from "@/lib/graph";
@@ -231,6 +231,54 @@ function outputFile(value: unknown): ResumeMatchFileInput | null {
   return typeof parsed === "string" ? null : parsed;
 }
 
+function revisionOutputNodeId(payload: Record<string, unknown>): string | null {
+  if (!Array.isArray(payload.nodes)) return null;
+  const outputIds = payload.nodes.flatMap((value) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+    const node = value as Record<string, unknown>;
+    return node.kind === "output" &&
+      node.label === RESUME_MATCH_OUTPUT_LABEL &&
+      typeof node.id === "string" &&
+      node.id !== ""
+      ? [node.id]
+      : [];
+  });
+  return outputIds.length === 1 ? outputIds[0] : null;
+}
+
+/**
+ * 工作流网页保存会整体替换节点，当前图不能解释旧运行。修订是每次保存的完整图
+ * 快照：从 run.startedAt 之前倒序找，且节点 id 必须真实存在于该次 run_nodes，
+ * 因而并发保存产生的新修订也不能把另一张图的 output 错配给这次运行。
+ */
+function historicalOutputNodeId(run: typeof runs.$inferSelect): string | null {
+  const runNodeIds = new Set(
+    db
+      .select({ nodeId: runNodes.nodeId })
+      .from(runNodes)
+      .where(eq(runNodes.runId, run.id))
+      .all()
+      .map((row) => row.nodeId),
+  );
+  const history = db
+    .select({ payload: revisions.payload })
+    .from(revisions)
+    .where(
+      and(
+        eq(revisions.entityKind, "workflow"),
+        eq(revisions.entityId, run.workflowId),
+        lte(revisions.createdAt, run.startedAt),
+      ),
+    )
+    .orderBy(desc(revisions.createdAt), desc(revisions.versionNo))
+    .all();
+  for (const revision of history) {
+    const nodeId = revisionOutputNodeId(revision.payload);
+    if (nodeId && runNodeIds.has(nodeId)) return nodeId;
+  }
+  return null;
+}
+
 function readResultArtifact(
   runDir: string | null,
   output: ResumeMatchFileInput,
@@ -280,29 +328,18 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
   };
   if (run.status !== "success") return writeOk({ ...base, result: null });
 
-  const outputDefinitions = db
-    .select({ id: workflowNodes.id })
-    .from(workflowNodes)
-    .where(
-      and(
-        eq(workflowNodes.workflowId, run.workflowId),
-        eq(workflowNodes.kind, "output"),
-      ),
-    )
-    .all();
-  if (outputDefinitions.length !== 1) {
-    return writeFail(500, "成功运行对应的评分输出节点定义已失效");
-  }
+  const outputNodeId = historicalOutputNodeId(run);
+  if (!outputNodeId) return writeFail(500, "成功运行缺少可追溯的评分输出节点定义");
 
-  // 展示名不是节点身份：Action 也可以叫「评分结果」。先由工作流定义取得唯一
-  // output 节点 id，再读这次运行的对应行，避免同名 Action 的 outputs 被误认。
+  // 展示名不是节点身份：Action 也可以叫「评分结果」。修订只用来恢复节点 id，
+  // 权威结果仍以 (runId, nodeId) 精确读取，不能退回按 label 猜测。
   const outputNode = db
     .select()
     .from(runNodes)
     .where(
       and(
         eq(runNodes.runId, run.id),
-        eq(runNodes.nodeId, outputDefinitions[0].id),
+        eq(runNodes.nodeId, outputNodeId),
       ),
     )
     .get();

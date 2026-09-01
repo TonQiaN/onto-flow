@@ -40,6 +40,11 @@ CREATE TABLE workflow_nodes (
   action_id TEXT, object_type_id TEXT, label TEXT NOT NULL DEFAULT '',
   x REAL NOT NULL DEFAULT 0, y REAL NOT NULL DEFAULT 0
 );
+CREATE TABLE revisions (
+  id TEXT PRIMARY KEY, entity_kind TEXT NOT NULL, entity_id TEXT NOT NULL,
+  version_no INTEGER NOT NULL, payload TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+  pinned INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+);
 CREATE TABLE runs (
   id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
   workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
@@ -141,7 +146,7 @@ function resolved(options: { outputLabel?: string; artifactPath?: string } = {})
 
 beforeEach(() => {
   sqlite.exec(
-    "DELETE FROM run_nodes; DELETE FROM runs; DELETE FROM workflow_nodes; DELETE FROM object_types; DELETE FROM workflows;",
+    "DELETE FROM run_nodes; DELETE FROM runs; DELETE FROM revisions; DELETE FROM workflow_nodes; DELETE FROM object_types; DELETE FROM workflows;",
   );
   fs.rmSync(tempRoot, { recursive: true, force: true });
   fs.mkdirSync(tempRoot, { recursive: true });
@@ -201,15 +206,39 @@ describe("简历匹配工作流预检", () => {
 });
 
 describe("简历匹配运行结果", () => {
-  it("按 output 节点 id 读取结果，不会误取同名 Action", () => {
+  it("按运行时修订的 output 节点 id 读取，不受同名 Action 与当前图改写影响", () => {
     sqlite
       .prepare(
-        "insert into workflow_nodes (id, workflow_id, kind, object_type_id, label) values (?, ?, 'output', ?, ?)",
+        "insert into revisions (id, entity_kind, entity_id, version_no, payload, created_at) values (?, 'workflow', ?, ?, ?, ?)",
       )
-      .run("result-output", workflowId, resultTypeId, "评分结果");
+      .run(
+        "revision-at-run",
+        workflowId,
+        1,
+        JSON.stringify({
+          nodes: [
+            { id: "same-label-action", kind: "action", label: "评分结果" },
+            { id: "result-output", kind: "output", label: "评分结果" },
+          ],
+        }),
+        50,
+      );
     sqlite
       .prepare(
-        "insert into runs (id, workflow_id, status, workflow_name, run_dir, started_at, finished_at) values (?, ?, 'success', ?, ?, 0, 1)",
+        "insert into revisions (id, entity_kind, entity_id, version_no, payload, created_at) values (?, 'workflow', ?, ?, ?, ?)",
+      )
+      .run(
+        "revision-after-run",
+        workflowId,
+        2,
+        JSON.stringify({
+          nodes: [{ id: "replacement-output", kind: "output", label: "评分结果" }],
+        }),
+        150,
+      );
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, workflow_name, run_dir, started_at, finished_at) values (?, ?, 'success', ?, ?, 100, 101)",
       )
       .run("run-1", workflowId, "简历匹配评分", tempRoot);
     sqlite
