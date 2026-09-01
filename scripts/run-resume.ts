@@ -104,7 +104,11 @@ async function main(): Promise<void> {
   const pageImages = ws && fs.existsSync(path.join(ws, "inputs"))
     ? fs
         .readdirSync(path.join(ws, "inputs"), { recursive: true })
-        .filter((entry) => typeof entry === "string" && /pages\/page-\d+\.png$/.test(entry))
+        .filter(
+          (entry) =>
+            typeof entry === "string" &&
+            /(?:^|\/)page-\d+\.png$/.test(entry.replaceAll("\\", "/")),
+        )
         .length
     : 0;
   console.log(
@@ -129,11 +133,18 @@ async function main(): Promise<void> {
   );
 
   const invalidArtifacts = artifacts.filter((artifact) => !artifact.present || artifact.bytes === 0);
-  if (row!.status !== "success" || invalidArtifacts.length > 0) {
+  const requiresPageImages = [jdPath, resumePath].some(
+    (inputPath) => path.extname(inputPath).toLowerCase() === ".pdf",
+  );
+  if (
+    row!.status !== "success" ||
+    invalidArtifacts.length > 0 ||
+    (requiresPageImages && pageImages === 0)
+  ) {
     throw new Error(
       `验收未通过：status=${row!.status} invalidArtifacts=${invalidArtifacts
         .map((artifact) => artifact.path)
-        .join(",") || "none"}`,
+        .join(",") || "none"} pdfPageImages=${pageImages}`,
     );
   }
 }
