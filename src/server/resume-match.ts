@@ -27,6 +27,7 @@ import {
 import { isWithinData, resolveWithinData } from "@/server/fs-safety";
 import { startResolvedRun } from "@/server/engine/runner";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import { isAuthoritativeResumeMatchValidatorTool } from "@/server/resume-match-validator-integrity";
 import { readSettings, type SettingsDocument } from "@/server/settings";
 import {
   type WriteResult,
@@ -211,7 +212,7 @@ function validateValidatorCapability(
     return "简历匹配汇总 Action 无法解析校验工具归属";
   }
   const validator = db
-    .select({ id: tools.id })
+    .select({ id: tools.id, code: tools.code })
     .from(actionTools)
     .innerJoin(tools, eq(actionTools.toolId, tools.id))
     .where(
@@ -223,6 +224,9 @@ function validateValidatorCapability(
     .get();
   if (!validator) {
     return `简历匹配汇总 Action 必须引用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}`;
+  }
+  if (!isAuthoritativeResumeMatchValidatorTool(validator.code)) {
+    return `校验 Tool ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的实现与内置版本不一致`;
   }
   if (settings.disabledTools.includes(RESUME_MATCH_VALIDATOR_TOOL_NAME)) {
     return `全局设置已停用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}，不能启动简历匹配运行`;

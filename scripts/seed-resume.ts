@@ -17,6 +17,7 @@
  * 幂等：按名字查找，只在完整定义变化或尚无修订时走 writer。运行：npx tsx scripts/seed-resume.ts
  */
 import { and, eq } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import {
   actions,
   db,
@@ -59,6 +60,7 @@ import {
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
   RESUME_MATCH_RESUME_INPUT_LABEL,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
+  RESUME_MATCH_VALIDATOR_TOOL_SHA256,
   RESUME_MATCH_WORKFLOW_NAME,
   validateResumeMatchResult,
 } from "../src/lib/resume-match";
@@ -310,6 +312,16 @@ export function apply(ctx: Context): void {
   });
 }
 `;
+
+const validatorToolDigest = createHash("sha256")
+  .update(VALIDATE_RESUME_MATCH_TOOL_CODE, "utf8")
+  .digest("hex");
+if (validatorToolDigest !== RESUME_MATCH_VALIDATOR_TOOL_SHA256) {
+  throw new Error(
+    `简历校验 Tool 源码摘要变化：期望 ${RESUME_MATCH_VALIDATOR_TOOL_SHA256}，实际 ${validatorToolDigest}；` +
+      "请先审查实现，再显式更新摘要 pin",
+  );
+}
 
 const validateResultTool = upsertTool({
   name: RESUME_MATCH_VALIDATOR_TOOL_NAME,

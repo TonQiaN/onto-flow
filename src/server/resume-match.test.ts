@@ -16,11 +16,15 @@ import type { ResolvedWorkflow } from "./resolve";
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
   startResolvedRun: vi.fn(),
+  validatorToolCodeIsTrusted: vi.fn(),
 }));
 
 vi.mock("@/server/resolve", () => ({ resolveWorkflow: controls.resolveWorkflow }));
 vi.mock("@/server/engine/runner", () => ({
   startResolvedRun: controls.startResolvedRun,
+}));
+vi.mock("@/server/resume-match-validator-integrity", () => ({
+  isAuthoritativeResumeMatchValidatorTool: controls.validatorToolCodeIsTrusted,
 }));
 vi.mock("@/server/fs-safety", () => ({
   isWithinData: () => true,
@@ -192,7 +196,7 @@ beforeEach(() => {
     .run(resultTypeId, "评分报告", RESUME_MATCH_RESULT_SCHEMA_TEXT);
   sqlite
     .prepare(
-      "insert into tools (id, name, description, code, created_at, updated_at) values (?, ?, '', '', 0, 0)",
+      "insert into tools (id, name, description, code, created_at, updated_at) values (?, ?, '', 'trusted-validator-code', 0, 0)",
     )
     .run(validatorToolId, RESUME_MATCH_VALIDATOR_TOOL_NAME);
   sqlite
@@ -201,6 +205,10 @@ beforeEach(() => {
   controls.resolveWorkflow.mockReset();
   controls.startResolvedRun.mockReset();
   controls.startResolvedRun.mockResolvedValue({ ok: true, runId: "run-1" });
+  controls.validatorToolCodeIsTrusted.mockReset();
+  controls.validatorToolCodeIsTrusted.mockImplementation(
+    (code: string) => code === "trusted-validator-code",
+  );
 });
 
 afterAll(() => {
@@ -281,6 +289,20 @@ describe("简历匹配工作流预检", () => {
       ok: false,
       status: 500,
       error: `全局设置已停用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}，不能启动简历匹配运行`,
+    });
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("校验 Tool 保留名称但实现被改写时在运行受理前失败", async () => {
+    sqlite
+      .prepare("update tools set code = ? where id = ?")
+      .run("export const valid = true", validatorToolId);
+    controls.resolveWorkflow.mockResolvedValue(resolved());
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: `校验 Tool ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的实现与内置版本不一致`,
     });
     expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
