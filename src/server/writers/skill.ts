@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, skills } from "@/db";
 import { recordRevision } from "@/server/revisions";
-import { materializeSkill, removeSkill } from "@/server/skill-library";
+import { materializeSkill } from "@/server/skill-library";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
 
 export interface SkillPayload {
@@ -65,8 +65,7 @@ export function writeSkill(id: string, raw: unknown): WriteResult<SkillRow> {
     recordRevision("skill", id, revisionPayload(p), "", tx);
     return updated;
   });
-  // 改名会换 slug，旧目录要一并移除，否则磁盘上留下一个没人引用却仍被发现的技能。
-  removeSkill(existing);
+  // slug 只由 id 派生；直接原子替换同目录正文，运行中的活链接在改名时也保持有效。
   materializeSkill(row);
   return writeOk(row);
 }

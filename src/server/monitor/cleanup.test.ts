@@ -31,10 +31,15 @@ CREATE TABLE runs (
   workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
   started_at INTEGER NOT NULL, finished_at INTEGER
 );
+CREATE TABLE run_results (
+  run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, content TEXT NOT NULL, sha256 TEXT NOT NULL, created_at INTEGER NOT NULL
+);
 CREATE TABLE run_nodes (run_id TEXT NOT NULL);
 CREATE TABLE run_events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, ts INTEGER NOT NULL, payload TEXT);
 CREATE TABLE node_usage (run_id TEXT NOT NULL);
 `);
+sqlite.pragma("foreign_keys = ON");
 const activeRuns = new Set<string>();
 (globalThis as unknown as { ontoflowDb?: unknown; ontoflowActiveRuns?: Set<string> }).ontoflowDb = drizzle(sqlite, {
   schema,
@@ -58,7 +63,7 @@ function storedRunDir(absolutePath: string): string {
 
 beforeEach(() => {
   activeRuns.clear();
-  sqlite.exec("DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM runs");
+  sqlite.exec("DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM run_results; DELETE FROM runs");
   fs.rmSync(testPaths.dataDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(testPaths.dataDir, "runs"), { recursive: true });
 });
@@ -215,16 +220,23 @@ describe("运行工作区清理", () => {
       INSERT INTO node_usage (run_id) VALUES
         ('run-a'), ('run-b'), ('run-b'), ('run-b'),
         ('run-active'), ('run-active'), ('run-active'), ('run-active');
+      INSERT INTO run_results (run_id, kind, content, sha256, created_at) VALUES
+        ('run-a', 'resume-match', '{}', '${"a".repeat(64)}', ${old}),
+        ('run-b', 'resume-match', '{}', '${"b".repeat(64)}', ${old}),
+        ('run-active', 'resume-match', '{}', '${"c".repeat(64)}', ${old});
     `);
 
     const preview = runCleanup({ target: "runs", beforeDays: 1, dryRun: true });
     expect(preview.affected.count).toBe(2);
-    expect(preview.detail).toContain("级联 3 个节点、2 条事件、4 条用量明细");
+    expect(preview.detail).toContain("级联 3 个节点、2 条事件、4 条用量明细、2 份持久结果");
 
     const deleted = runCleanup({ target: "runs", beforeDays: 1, dryRun: false });
     expect(deleted.affected).toEqual(preview.affected);
     expect(sqlite.prepare("select id from runs order by id").all()).toEqual([
       { id: "run-active" },
+    ]);
+    expect(sqlite.prepare("select run_id as runId from run_results").all()).toEqual([
+      { runId: "run-active" },
     ]);
   });
 });

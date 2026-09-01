@@ -4,12 +4,13 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import type { PortValue } from "../../lib/values";
-import type { ResolvedWorkflow } from "../resolve";
+import type { ResolvedActionDefinition, ResolvedWorkflow } from "../resolve";
 
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
@@ -18,6 +19,8 @@ const controls = vi.hoisted(() => ({
   dispose: vi.fn(async () => {}),
   cancel: vi.fn(async () => {}),
   finalizeUnsettledActionUsage: vi.fn(),
+  retainSkillProjections: vi.fn(),
+  releaseSkillProjections: vi.fn(),
 }));
 
 vi.mock("@/server/resolve", () => ({
@@ -74,6 +77,10 @@ vi.mock("./action", () => ({
   refreshUnsettledActionUsage: vi.fn(),
   finalizeUnsettledActionUsage: controls.finalizeUnsettledActionUsage,
 }));
+vi.mock("@/server/skill-library", () => ({
+  retainSkillProjections: controls.retainSkillProjections,
+  releaseSkillProjections: controls.releaseSkillProjections,
+}));
 
 const sqlite = new Database(":memory:");
 sqlite.exec(`
@@ -81,6 +88,10 @@ CREATE TABLE runs (
   id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
   workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
   started_at INTEGER NOT NULL, finished_at INTEGER
+);
+CREATE TABLE run_results (
+  run_id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
+  sha256 TEXT NOT NULL, created_at INTEGER NOT NULL
 );
 CREATE TABLE run_nodes (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, label TEXT NOT NULL,
@@ -115,11 +126,51 @@ const pendingUsageSettlements = new Map<string, Promise<void>>();
 }).ontoflowPendingUsageSettlements = pendingUsageSettlements;
 
 let startRun: typeof import("./runner").startRun;
+let startResolvedRun: typeof import("./runner").startResolvedRun;
 let cancelRun: typeof import("./runner").cancelRun;
 let isRunExecutionActive: typeof import("./runner").isRunExecutionActive;
 let deleteRun: typeof import("../monitor/cleanup").deleteRun;
 let UnsettledRunLaunchError: typeof import("../harness/launch").UnsettledRunLaunchError;
 const runnerTestRoot = "/tmp/ontoflow-runner-test";
+
+function executionSnapshot(
+  actionIds: string[],
+): Pick<ResolvedWorkflow, "objectTypes" | "actionDefinitions" | "capabilities"> {
+  const now = new Date(0);
+  const definitions = new Map<string, ResolvedActionDefinition>(
+    actionIds.map((actionId) => [
+      actionId,
+      {
+        action: {
+          id: actionId,
+          name: actionId,
+          description: "",
+          prompt: "测试",
+          rule: "",
+          modelId: "model-test",
+          reasoningEffort: "off",
+          maxReentries: 0,
+          onExhausted: "fail",
+          createdAt: now,
+          updatedAt: now,
+        },
+        model: {
+          id: "model-test",
+          providerId: "test-provider",
+          modelId: "test-model",
+          displayName: "测试模型",
+        },
+        ports: { inputs: [], outputs: [] },
+        skills: [],
+      },
+    ]),
+  );
+  return {
+    objectTypes: new Map(),
+    actionDefinitions: definitions,
+    capabilities: { skills: [], tools: [], toolNamesByActionId: new Map() },
+  };
+}
 
 function resolvedWorkflow(): ResolvedWorkflow {
   const workflow = {
@@ -209,6 +260,7 @@ function resolvedWorkflow(): ResolvedWorkflow {
       },
     ],
     nodeRows: new Map([[actionNodeRow.id, actionNodeRow]]),
+    ...executionSnapshot(["action-1"]),
   };
 }
 
@@ -295,6 +347,7 @@ function materializationWorkflow(textInputLabel = "完整题目"): ResolvedWorkf
       },
     ],
     nodeRows: new Map([[actionNodeRow.id, actionNodeRow]]),
+    ...executionSnapshot(["action-materialize"]),
   };
 }
 
@@ -402,16 +455,18 @@ function loopWorkflow(): ResolvedWorkflow {
       [writerRow.id, writerRow],
       [testerRow.id, testerRow],
     ]),
+    ...executionSnapshot(["action-writer", "action-tester"]),
   };
 }
 
 beforeAll(async () => {
-  ({ startRun, cancelRun, isRunExecutionActive } = await import("./runner"));
+  ({ startRun, startResolvedRun, cancelRun, isRunExecutionActive } = await import("./runner"));
   ({ deleteRun } = await import("../monitor/cleanup"));
   ({ UnsettledRunLaunchError } = await import("../harness/launch"));
 });
 
 beforeEach(() => {
+  sqlite.exec("DELETE FROM run_results;");
   controls.launchRun.mockReset();
   controls.launchRun.mockResolvedValue({
     dispose: controls.dispose,
@@ -423,6 +478,8 @@ beforeEach(() => {
   controls.runActionNode.mockReset();
   controls.finalizeUnsettledActionUsage.mockReset();
   controls.finalizeUnsettledActionUsage.mockImplementation(() => undefined);
+  controls.retainSkillProjections.mockReset();
+  controls.releaseSkillProjections.mockReset();
   activeRuns.clear();
   disposalFailures.clear();
   pendingUsageSettlements.clear();
@@ -434,6 +491,132 @@ afterAll(() => {
 });
 
 describe("运行输入物化", () => {
+  it("Skill 投影缺失时在受理前返回 422，不创建运行或付费节点", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const graph = resolvedWorkflow();
+    controls.retainSkillProjections.mockImplementationOnce(() => {
+      throw new Error("技能「已删除技能」的磁盘投影不存在或不可读");
+    });
+
+    const startedRun = await startResolvedRun(
+      graph,
+      { "input-node": { kind: "text", text: "测试" } },
+      {
+        modelApiKeyEnv: "DEEPSEEK_API_KEY",
+        modelBaseUrl: "",
+        credentialRefs: [],
+        mcpServers: [],
+        disabledTools: [],
+      },
+      { source: "workflow" },
+    );
+
+    expect(startedRun).toEqual({
+      ok: false,
+      status: 422,
+      error: "工作流校验未通过",
+      issues: [{ message: "技能「已删除技能」的磁盘投影不存在或不可读" }],
+    });
+    expect(sqlite.prepare("SELECT count(*) AS count FROM runs").get()).toEqual({ count: 0 });
+    expect(controls.launchRun).not.toHaveBeenCalled();
+  });
+
+  it("专用入口完成校验通过后把证据固化到运行元数据", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+    const graph = materializationWorkflow();
+    controls.runActionNode.mockResolvedValue({
+      outputs: { 结果: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    const resultContent = '{"ok":true}';
+    const resultSha256 = createHash("sha256").update(resultContent).digest("hex");
+    const completionGate = vi.fn(() => ({
+      ok: true as const,
+      evidence: { kind: "test-contract", digest: "abc123" },
+      result: { kind: "test-result", content: resultContent, sha256: resultSha256 },
+    }));
+
+    const startedRun = await startResolvedRun(
+      graph,
+      {
+        "text-input": { kind: "text", text: "正文" },
+        "json-input": { kind: "json", json: { ok: true } },
+      },
+      {
+        modelApiKeyEnv: "DEEPSEEK_API_KEY",
+        modelBaseUrl: "",
+        credentialRefs: [],
+        mcpServers: [],
+        disabledTools: [],
+      },
+      { source: "workflow" },
+      completionGate,
+    );
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("select status, imports from runs where id = ?")
+        .get(startedRun.runId) as { status: string; imports: string };
+      expect(run.status).toBe("success");
+      expect(JSON.parse(run.imports)).toMatchObject({
+        invocation: { source: "workflow" },
+        completion: { kind: "test-contract", digest: "abc123" },
+      });
+    });
+    expect(completionGate).toHaveBeenCalledWith(startedRun.runId);
+    expect(
+      sqlite
+        .prepare(
+          "select kind, content, sha256 from run_results where run_id = ?",
+        )
+        .get(startedRun.runId),
+    ).toEqual({ kind: "test-result", content: resultContent, sha256: resultSha256 });
+    expect(controls.releaseSkillProjections).toHaveBeenCalledWith(
+      startedRun.runId,
+      graph.capabilities.skills,
+    );
+  });
+
+  it("专用入口完成证据缺失时收束为 failed 而不是留下不可读 success", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+    const graph = materializationWorkflow();
+    controls.runActionNode.mockResolvedValue({
+      outputs: { 结果: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+
+    const startedRun = await startResolvedRun(
+      graph,
+      {
+        "text-input": { kind: "text", text: "正文" },
+        "json-input": { kind: "json", json: { ok: true } },
+      },
+      {
+        modelApiKeyEnv: "DEEPSEEK_API_KEY",
+        modelBaseUrl: "",
+        credentialRefs: [],
+        mcpServers: [],
+        disabledTools: [],
+      },
+      { source: "workflow" },
+      () => ({ ok: false, error: "权威回执未落库" }),
+    );
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("select status, error from runs where id = ?")
+        .get(startedRun.runId) as { status: string; error: string };
+      expect(run.status).toBe("failed");
+      expect(run.error).toBe("运行完成校验失败：权威回执未落库");
+    });
+  });
+
   it("文字与 JSON 在 Action 启动前完整落盘并改写成文件引用", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     fs.rmSync(runnerTestRoot, { recursive: true, force: true });
@@ -461,10 +644,14 @@ describe("运行输入物化", () => {
 
     await vi.waitFor(() => {
       const run = sqlite
-        .prepare("SELECT status, error FROM runs WHERE id = ?")
-        .get(startedRun.runId) as { status: string; error: string | null };
+        .prepare("SELECT status, error, imports FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null; imports: string };
       expect(run.status).toBe("success");
       expect(run.error).toBeNull();
+      expect(JSON.parse(run.imports)).toMatchObject({
+        invocation: { source: "workflow" },
+        instructionsDigest: "test",
+      });
     });
 
     const textValue = capturedInputs?.题目?.[0];
@@ -750,6 +937,7 @@ describe("运行取消终态", () => {
         expect(run.error).toContain("运行子进程退出后的用量结算失败");
         expect(isRunExecutionActive(startedRun.runId)).toBe(true);
         expect(runProcesses.has(startedRun.runId)).toBe(true);
+        expect(controls.releaseSkillProjections).not.toHaveBeenCalled();
       });
 
       canSettle = true;
@@ -759,6 +947,7 @@ describe("运行取消终态", () => {
           expect(isRunExecutionActive(startedRun.runId)).toBe(false);
           expect(runProcesses.has(startedRun.runId)).toBe(false);
           expect(pendingUsageSettlements.has(startedRun.runId)).toBe(false);
+          expect(controls.releaseSkillProjections).toHaveBeenCalledOnce();
         },
         { timeout: 2_000 },
       );

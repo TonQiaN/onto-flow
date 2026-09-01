@@ -16,6 +16,7 @@ v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 监控页。本
 - `run_nodes` 新增：`snapshot`（运行快照 JSON）、六个用量字段（inputTokens / outputTokens /
   reasoningTokens / cacheReadTokens / cacheWriteTokens / cost）、状态多一个 `cancelled`。
 - `runs` 新增：`workflowName`（冗余快照）、状态多一个 `cancelled`。
+- `run_results`：专用调用入口经完成门禁核验后的精确业务结果；以 runId 为主键并随 runs 级联删除，工作区/事件清理不动。
 - `node_usage`：逐 step 的用量明细，`messageId` 取 `turn:step`，`(sessionId, messageId)` 唯一。
 
 ## 一、通用列表查询契约（五个库的 GET 列表统一支持）
@@ -154,13 +155,17 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 
 ## 六、引擎改动（阶段一部分）
 
-1. **运行快照**：`runActionNode` 解析出 Action 配置后，把完整配置写进 `run_nodes.snapshot`：
+1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口与 Tool 定义；`runActionNode`
+   不再回读这些共享库行，只把这份定义和本轮实际渲染提示写进 `run_nodes.snapshot`。Skill 只冻结
+   引用关系，正文在会话启动前从工作区活链接读取，并把当时的完整 `SKILL.md` 一并写入；链接目录
+   只由 Skill 实体 id 派生，网页改名不会让已经受理的运行断链。运行受理时验证并持有所需投影，
+   Skill 从库中删除后，目录也要等最后一个已受理运行完全收束才移除：
    ```ts
    { actionId, actionName, prompt, rule, model:{providerId,modelId,displayName},
      reasoningEffort, skills:[{name,content}], renderedPrompt,
      ports:{inputs:[{name,objectTypeName,kind}], outputs:[{...,artifactPath,exitName}]} }
    ```
-   写入时机：会话创建前（即使随后失败也留有快照）。
+   节点快照写入时机：会话创建前（即使随后失败也留有快照）。
 2. **用量捕获**：dsh 每个 step 发一条不累积的 usage chunk，按
    `(sessionId, turn:step)` 唯一化写入 `node_usage`；节点收束时把该会话各 step 求和写入
    `run_nodes` 的用量字段。

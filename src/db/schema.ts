@@ -305,13 +305,30 @@ export const runs = sqliteTable("runs", {
   /** 本次运行的运行目录（相对仓库根）；工作区、日志、会话记录都在它下面 */
   runDir: text("run_dir"),
   /**
-   * 导入摘要：工作流级共同指令与各项技能/工具在启动时刻的内容摘要。
+   * 运行元数据：受理入口来源，以及工作流级共同指令与各项技能/工具在启动时刻的内容摘要。
    * 工作区里是指向全局库活目录的链接，所以摘要只能证明「是不是同一份」，
    * 证明不了能把旧内容取回来（ADR-0007）。
    */
   imports: text("imports", { mode: "json" }).$type<Record<string, unknown> | null>(),
   startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
   finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+});
+
+/**
+ * 专用工作流调用入口的持久业务结果。它已经通过入口的完成门禁，因此独立于可清理的
+ * 运行工作区；删除 runs 行时级联删除，结果保留期与运行历史一致。
+ */
+export const runResults = sqliteTable("run_results", {
+  runId: text("run_id")
+    .primaryKey()
+    .references(() => runs.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  /** 保留完成门禁核对过的精确 UTF-8 文本，不重新序列化 JSON 改变摘要。 */
+  content: text("content").notNull(),
+  sha256: text("sha256").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .$defaultFn(() => new Date()),
 });
 
 export const runNodes = sqliteTable(

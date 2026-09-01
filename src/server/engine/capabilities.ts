@@ -10,8 +10,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { inArray } from "drizzle-orm";
-import { actionSkills, actionTools, db, skills, tools } from "@/db";
+import type { tools } from "@/db";
 import { assertSafeId } from "@/server/harness/ids";
 import type { NodeToolFilter } from "@/server/harness/rpc/types";
 import type { RunWorkspace, ImportSpec } from "@/server/harness/workspace";
@@ -27,57 +26,16 @@ export interface RunCapabilities {
   toolNamesByActionId: ReadonlyMap<string, readonly string[]>;
 }
 
-/** 取这张图上全部 Action 声明的技能与工具的并集。 */
+/** 从 resolve 时冻结的定义取整张图的技能与工具并集，不在运行启动后回读共享库。 */
 export function collectCapabilities(resolved: ResolvedWorkflow): RunCapabilities {
-  const actionIds = [...resolved.nodeRows.values()]
-    .filter((n) => n.kind === "action" && n.actionId)
-    .map((n) => n.actionId!);
-  if (actionIds.length === 0) {
-    return { skills: [], tools: [], toolNamesByActionId: new Map() };
-  }
-
-  const skillIds = [
-    ...new Set(
-      db
-        .select({ skillId: actionSkills.skillId })
-        .from(actionSkills)
-        .where(inArray(actionSkills.actionId, actionIds))
-        .all()
-        .map((r) => r.skillId),
-    ),
-  ];
-  const actionToolRows = db
-    .select({ actionId: actionTools.actionId, toolId: actionTools.toolId })
-    .from(actionTools)
-    .where(inArray(actionTools.actionId, actionIds))
-    .all();
-  const toolIds = [...new Set(actionToolRows.map((r) => r.toolId))];
-
-  const skillRows = skillIds.length
-    ? db.select().from(skills).where(inArray(skills.id, skillIds)).all()
-    : [];
-  const toolRows = toolIds.length
-    ? db.select().from(tools).where(inArray(tools.id, toolIds)).all()
-    : [];
-
-  const toolById = new Map(toolRows.map((tool) => [tool.id, tool]));
   return {
     // 导入名必须是上游认得的 slug，工作区里的链接名同理——中文名会被静默忽略。
-    skills: skillRows.map((s) => ({
+    skills: resolved.capabilities.skills.map((s) => ({
       name: skillSlug(s),
       sourceDir: path.join(SKILL_LIBRARY_DIR, skillSlug(s)),
     })),
-    tools: toolRows,
-    toolNamesByActionId: new Map(
-      actionIds.map((actionId) => [
-        actionId,
-        actionToolRows.flatMap((relation) => {
-          if (relation.actionId !== actionId) return [];
-          const tool = toolById.get(relation.toolId);
-          return tool ? [tool.name] : [];
-        }),
-      ]),
-    ),
+    tools: resolved.capabilities.tools,
+    toolNamesByActionId: resolved.capabilities.toolNamesByActionId,
   };
 }
 

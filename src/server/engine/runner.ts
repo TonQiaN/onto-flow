@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
-import { db, runNodes, runs } from "@/db";
+import { db, runNodes, runResults, runs } from "@/db";
 import {
   classifyEdges,
   downstreamOf,
@@ -37,6 +37,10 @@ import {
   type RunWorkspace,
 } from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import {
+  releaseSkillProjections,
+  retainSkillProjections,
+} from "@/server/skill-library";
 import { readSettings, type SettingsDocument } from "@/server/settings";
 import {
   finalizeUnsettledActionUsage,
@@ -58,6 +62,25 @@ export type StartRunResult =
 export type CancelRunResult =
   | { ok: true }
   | { ok: false; status: 404 | 409; error: string };
+
+/** 运行由哪个受理边界发起；专用入口只读取自己留下的持久来源证明。 */
+export type RunInvocationProvenance =
+  | { source: "workflow" }
+  | {
+      source: "resume-match-api";
+      contractVersion: 1;
+      resultNodes: { outputNodeId: string; validatorNodeId: string };
+    };
+
+export type RunCompletionGate = (
+  runId: string,
+) =>
+  | {
+      ok: true;
+      evidence: Record<string, unknown>;
+      result?: { kind: string; content: string; sha256: string };
+    }
+  | { ok: false; error: string };
 
 /**
  * 进程级取消标记。executeRun 在每个节点开始前查它，已取消则停止调度剩余节点
@@ -205,17 +228,19 @@ export async function startRun(
 ): Promise<StartRunResult> {
   const resolved = await resolveWorkflow(workflowId);
   if (!resolved) return { ok: false, status: 404, error: "工作流不存在" };
-  return startResolvedRun(resolved, inputs, readSettings());
+  return startResolvedRun(resolved, inputs, readSettings(), { source: "workflow" });
 }
 
 /**
- * 受理已经解析并由调用方检查过的精确图快照。专用入口可把业务预检与实际执行
- * 绑定在同一个 ResolvedWorkflow 上；设置也在受理时冻结，运行中修改只影响下一次。
+ * 受理已经解析并由调用方检查过的完整执行快照。专用入口可把图、Action/Tool 定义、
+ * 业务预检与实际执行绑定在同一个 ResolvedWorkflow 上；设置也在受理时冻结。
  */
 export async function startResolvedRun(
   resolved: ResolvedWorkflow,
   inputs: Record<string, unknown>,
-  settings: SettingsDocument = readSettings(),
+  settings: SettingsDocument,
+  invocation: RunInvocationProvenance,
+  completionGate?: RunCompletionGate,
 ): Promise<StartRunResult> {
   const issues = validateGraph(resolved.nodes, resolved.edges);
   for (const node of resolved.nodes) {
@@ -223,6 +248,15 @@ export async function startResolvedRun(
       assertSafeId("节点 id", node.id);
     } catch {
       issues.push({ nodeId: node.id, message: `节点「${node.label}」的 id 不能安全用于运行目录` });
+    }
+    if (node.kind === "action") {
+      const actionId = resolved.nodeRows.get(node.id)?.actionId;
+      if (!actionId || !resolved.actionDefinitions.has(actionId)) {
+        issues.push({
+          nodeId: node.id,
+          message: `Action 节点「${node.label}」缺少可执行定义或模型`,
+        });
+      }
     }
   }
 
@@ -314,17 +348,41 @@ export async function startResolvedRun(
 
   const runId = crypto.randomUUID();
   try {
-    db.insert(runs)
-      .values({
-        id: runId,
-        workflowId: resolved.workflow.id,
-        // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
-        workflowName: resolved.workflow.name,
-        status: "running",
-        startedAt: new Date(),
-      })
-      .run();
+    retainSkillProjections(runId, resolved.capabilities.skills);
+  } catch (error) {
+    return {
+      ok: false,
+      status: 422,
+      error: "工作流校验未通过",
+      issues: [
+        {
+          message: error instanceof Error ? error.message : "技能磁盘投影不可读",
+        },
+      ],
+    };
+  }
+  try {
+    db.transaction((tx) => {
+      tx.insert(runs)
+        .values({
+          id: runId,
+          workflowId: resolved.workflow.id,
+          // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
+          workflowName: resolved.workflow.name,
+          status: "running",
+          // 入口来源与 run 同一次同步 insert 落库；专用 GET 不凭工作流名称猜来源。
+          imports: { invocation },
+          startedAt: new Date(),
+        })
+        .run();
+      for (const node of resolved.nodes) {
+        tx.insert(runNodes)
+          .values({ runId, nodeId: node.id, label: node.label, status: "pending" })
+          .run();
+      }
+    });
   } catch (err) {
+    releaseSkillProjections(runId, resolved.capabilities.skills);
     // resolveWorkflow 的 await 与这次 insert 之间，工作流可能被并发 DELETE 掉
     //（删除守卫只挡有 running 运行的工作流）。外键失败在这里就是「工作流已不存在」，
     // 不能让对外 API 以 500 的面目报出来。
@@ -333,16 +391,11 @@ export async function startResolvedRun(
     }
     throw err;
   }
-  for (const node of resolved.nodes) {
-    db.insert(runNodes)
-      .values({ runId, nodeId: node.id, label: node.label, status: "pending" })
-      .run();
-  }
 
   // 异步执行，立即返回 runId。activeRuns 覆盖 executeRun 启动前到异常兜底后的
   // 全部生命期；cancelRun 提前写下 cancelled 也不能让清理路径误判为已经静止。
   activeRuns.add(runId);
-  void executeRun(runId, resolved, runInputs, settings)
+  void executeRun(runId, resolved, runInputs, settings, invocation, completionGate)
     .catch((err) => {
       failWholeRun(runId, err instanceof Error ? err.message : String(err));
     })
@@ -350,14 +403,16 @@ export async function startResolvedRun(
       const settlement = pendingUsageSettlements.get(runId);
       if (settlement) {
         // executeRun 已写终态，但用量尚未完整落库；保留进程句柄和 activeRuns，
-        // 让预览、清理、删除与新准入继续 fail-closed，直到后台重试成功。
+        // 让预览、清理、删除、新准入与 Skill 投影继续 fail-closed，直到后台重试成功。
         void settlement.then(() => {
           if (pendingUsageSettlements.get(runId) !== settlement) return;
           pendingUsageSettlements.delete(runId);
           runProcesses.delete(runId);
+          releaseSkillProjections(runId, resolved.capabilities.skills);
           activeRuns.delete(runId);
         });
       } else if (!disposalFailures.has(runId)) {
+        releaseSkillProjections(runId, resolved.capabilities.skills);
         activeRuns.delete(runId);
       }
     });
@@ -401,6 +456,8 @@ async function executeRun(
   resolved: ResolvedWorkflow,
   rawInputs: Record<string, PortValue>,
   globalSettings: SettingsDocument,
+  invocation: RunInvocationProvenance,
+  completionGate?: RunCompletionGate,
 ): Promise<void> {
   const { nodes, edges } = resolved;
   const { backEdgeIds } = classifyEdges(nodes, edges);
@@ -423,7 +480,8 @@ async function executeRun(
   db.update(runs)
     .set({
       runDir: path.relative(process.cwd(), workspace.runDir),
-      imports: workspace.imports as unknown as Record<string, unknown>,
+      // 工作区导入摘要稍后补齐，但不能覆盖受理时已经持久化的入口来源证明。
+      imports: { ...workspace.imports, invocation } as unknown as Record<string, unknown>,
     })
     .where(eq(runs.id, runId))
     .run();
@@ -676,10 +734,12 @@ async function executeRun(
 
     const nodeRow = resolved.nodeRows.get(nodeId);
     if (!nodeRow?.actionId) throw new Error("Action 节点缺少 actionId");
+    const definition = resolved.actionDefinitions.get(nodeRow.actionId);
+    if (!definition) throw new Error(`Action 节点「${state.node.label}」缺少受理时定义快照`);
     const result = await runActionNode({
       runId,
       node: state.node,
-      actionId: nodeRow.actionId,
+      definition,
       inputs: nodeInputs,
       proc,
       workspace,
@@ -767,6 +827,53 @@ async function executeRun(
       disposalFailures.add(runId);
       firstError ??= `运行子进程无法确认已退出：${err instanceof Error ? err.message : String(err)}`;
       console.error("[engine] 子进程收束失败", runId, err);
+    }
+  }
+
+  // 专用调用入口可在引擎写 success 前复核业务完成条件。证据只有在复核通过后
+  // 才与运行元数据一起持久化；事件日志随后可按保留策略清理，不会让既有成功运行
+  // 失去读取依据。回调或证据落库失败都把本次运行收束为 failed。
+  if (!cancelled && !isRunCancelled(runId) && firstError === null && completionGate) {
+    try {
+      const completion = completionGate(runId);
+      if (!completion.ok) {
+        firstError = `运行完成校验失败：${completion.error}`;
+      } else {
+        const row = db
+          .select({ imports: runs.imports })
+          .from(runs)
+          .where(eq(runs.id, runId))
+          .get();
+        if (!row) throw new Error("运行记录不存在");
+        db.transaction((tx) => {
+          if (completion.result) {
+            const digest = createHash("sha256")
+              .update(completion.result.content, "utf8")
+              .digest("hex");
+            if (
+              completion.result.kind === "" ||
+              !/^[0-9a-f]{64}$/.test(completion.result.sha256) ||
+              digest !== completion.result.sha256
+            ) {
+              throw new Error("持久业务结果的内容摘要无效");
+            }
+            tx.insert(runResults)
+              .values({ runId, ...completion.result })
+              .run();
+          }
+          tx.update(runs)
+            .set({
+              imports: {
+                ...(row.imports ?? {}),
+                completion: completion.evidence,
+              },
+            })
+            .where(eq(runs.id, runId))
+            .run();
+        });
+      }
+    } catch (error) {
+      firstError = `运行完成校验失败：${error instanceof Error ? error.message : String(error)}`;
     }
   }
 

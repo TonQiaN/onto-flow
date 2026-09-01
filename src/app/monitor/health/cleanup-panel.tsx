@@ -51,9 +51,9 @@ const SPECS: TargetSpec[] = [
   {
     key: "runs",
     title: "旧运行记录",
-    what: "删除早于 N 天的 runs 记录，并级联删除其 run_nodes / run_events / node_usage。",
+    what: "删除早于 N 天的 runs 记录，并级联删除其节点、事件、用量与持久业务结果。",
     impact:
-      "运行历史、运行快照与成本明细一并消失，成本分析的历史区间会缺口；进行中的运行不会被删。",
+      "运行历史、运行快照、成本明细与专用 API 结果一并消失，成本分析的历史区间会缺口；进行中的运行不会被删。",
     defaultDays: 90,
   },
 ];

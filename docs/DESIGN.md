@@ -36,8 +36,10 @@ src/
 | /api/workflows | GET, POST | |
 | /api/workflows/[id] | GET, PUT, DELETE | GET 返回 nodes+edges+校验结果；PUT 保存整图（nodes+edges 整体替换，节点 id 由前端生成保持连线引用） |
 | /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；校验不通过 422 `{ issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
+| /api/internal/resume-matches | POST | 「简历匹配评分」工作流调用入口；body 严格为 `{ job: PortValue(file), resume: PortValue(file) }`，调用方先经 `/api/uploads` 取得两个值；202 返回 `runId`、`statusUrl`、`historyUrl`，不暴露工作流或节点 id |
+| /api/internal/resume-matches/[id] | GET | 只查询由该入口 POST 受理并在 run 元数据中留下来源证明的运行（同名工作流经通用入口启动仍为 404）；running/failed/cancelled 时 `result=null`，success 时读取完成门禁写入 `run_results` 的精确 JSON，再次严格校验并核对完成证据里的内容 SHA-256 后返回；工作区/事件清理不影响结果，删除 run 才级联删除 |
 | /api/runs?workflowId=&status= | GET | 运行列表；每行带 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用） |
-| /api/runs/[id] | GET, DELETE | GET：run + run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage 外键级联，连同运行目录），running 时 409 |
+| /api/runs/[id] | GET, DELETE | GET：run + run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage / run_results 外键级联，连同运行目录），running 时 409 |
 | /api/runs/[id]/files?path= | GET | 只读预览已结束运行目录内的 UTF-8 文本文件（执行中 409；路径收敛在该 run 的 run_dir 内；256KB 按完整字符截断，二进制或非法 UTF-8 为 415）；运行详情看输入与产物正文的唯一通道（ADR-0012） |
 | /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
 | /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
@@ -56,6 +58,7 @@ src/
 - 多路运行的界面契约：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running`），点击深链 `/workflows/<id>?runId=<runId>` 精确跟随那一路；画布运行条在同一工作流多路并行时出现切换器，「运行」按钮在运行中仍可再次发起（发起后运行条切到新的一路，旧的经切换器回看）；运行详情的「回画布看动画」同样带 runId 深链。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。全部输入物化到 `workspace/inputs/<节点id>/`——文件拷原件，文字物化为 `<节点名>.md`、JSON 为 `<节点名>.json`，提示里只给路径不内联（ADR-0012）；Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
 - 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
+- 专用工作流调用入口可注册完成门禁；门禁核对最终产物后，引擎在同一事务内把完成证据写进 run 元数据、把精确 UTF-8 结果写进 `run_results`，随后才把运行标为 success。工作区与事件清理不删除持久业务结果；删除 run 时由外键级联删除。
 
 ## 引擎实现规范（DeepSeek Harness）
 
@@ -66,6 +69,11 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `node --import tsx src/server/harness/runner.ts <cordis.yml>` 启动子进程；无常驻共享 host。
   子进程 stdout 只承载 JSON-RPC，stderr 写 `<run>/logs/harness.stderr.log`，运行结束在 `finally`
   中逐级收束子进程，任何路径都不得遗留 `running`。
+- **受理时执行快照**：`resolveWorkflow` 在同一个事件循环片段内一次读取图所引用的 Object Type、
+  Action、模型、端口、Skill 身份关系、Tool 源码与 Action→Tool 归属。运行受理、Tool 物化和稍后
+  启动的每个 Action 都消费同一对象；共享库的并发保存只影响下一次运行。Skill 正文仍按下条的活链接
+  契约读取，并在各 Action 会话启动前把当时可读的工作区投影全文写进节点快照；受理边界先验证并
+  持有全部 Skill 投影，库内删除不会在运行与子进程完全收束前拆掉链接目标。
 - **能力与隔离**：工作流级指令写 `workspace/AGENTS.md`；Skill 以 ASCII slug 链进
   `workspace/.agents/skills/`，由 `skill-filesystem` 按描述发现，不强制拼进提示。Tool 以 ASCII id
   物化为 `<run>/plugins/tool-<id>.ts` cordis 插件；工作流并集进入全局工具面后，每个 Action
@@ -157,5 +165,23 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   以可见页面为准。
 - 六个评委与汇总使用 `deepseek-v4-flash`。评委只经 `job.md` / `resume.md` 读解析结果；汇总等
   六份 `scores/*.md` 全部结算后，再回看 `job.md` / `resume.md`，自动裁决评委分歧、证据缺口、
-  分数不自洽与不允许的评分依据。最终 `report.md` 必须给出推荐判断、最终分、证据充分度、否决
-  原因及全部改分记录，不保留未裁决项。
+  分数不自洽与不允许的评分依据。最终产物固定为 `match-result.json`：JSON Schema 禁止额外字段，
+  `src/lib/resume-match.ts` 再核对总分、档位、否决、证据充分度、硬性条件及改分记录的跨字段关系。
+- 汇总 Action 独享 `validate_resume_match_result` Tool；它写出文件后必须反复调用，直到轨迹留下
+  `valid=true`、错误为空且带实际读取内容 SHA-256 的回执。引擎在写 `success` 前核对该 SHA-256
+  与最终产物字节，并把它固化进运行元数据，同时把精确 JSON 写入 `run_results`；工作区与事件明细
+  随后可以清理，成功结果不会因此失去读取依据。
+  只写出合法 JSON 却跳过 Tool、回执落库失败或校验后又改文件的运行都收束为失败。Agent 自检与
+  API 边界不会各自维护一套规则。该入口还会验证汇总 Action 仍引用此 Tool、源码 SHA-256 匹配
+  内置 pin，本次全局设置快照没有停用它或 `read`/`write`/`bash`/`read_image`/
+  `structured_output` 这些必需基础工具，且汇总 Action 不在任何回边的重入范围内。受理时把
+  结果输出节点和汇总校验节点 id 与来源证明
+  一起持久化，不按 `startedAt` 反推修订。岗位 JD 与简历输入还必须
+  各自使用指定 Object Type，并分别连到解析 Action 的对应端口；八个固定 Action 的完整输入输出
+  端口集合、产物路径与 11 个指定节点间的 23 条业务边必须精确匹配种子定义，六位评审各自接齐岗位与
+  简历且各有一份结论进入汇总。工作流描述生成的共同指令，以及八个 Action 的 prompt、rule、
+  provider/model、思考强度、重入策略及完整 Skill/Tool 集合，也必须匹配经过审查的 seed 摘要 pin；
+  网页编辑任一行为定义后，专用入口拒绝付费
+  运行，直到 seed 定义与 pin 经过代码审查并同步更新。随后把通过预检的同一图、
+  Action/Tool 定义与设置对象交给 `startResolvedRun`，并发画布或共享库保存不能换掉实际执行快照。
+  缺失或被改写的契约不得先产生模型费用再失败。

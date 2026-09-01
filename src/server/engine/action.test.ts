@@ -10,6 +10,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import type { ResolvedNode } from "../../lib/graph";
+import type { ResolvedActionDefinition } from "../resolve";
 import type { ActionNodeContext } from "./action";
 
 const sqlite = new Database(":memory:");
@@ -70,6 +71,7 @@ const {
   recordSessionEvent,
   unpersistedUsageForSession,
 } = await import("./events");
+const { skillSlug } = await import("../skill-library");
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-action-test-"));
 
 function resolvedNode(exitName: string | null = null): ResolvedNode {
@@ -98,6 +100,54 @@ function resolvedNode(exitName: string | null = null): ResolvedNode {
   };
 }
 
+function admittedDefinition(): ResolvedActionDefinition {
+  const now = new Date(1);
+  return {
+    action: {
+      id: "action-1",
+      name: "测试 Action",
+      description: "",
+      prompt: "写报告",
+      rule: "",
+      modelId: "model-1",
+      reasoningEffort: "high",
+      maxReentries: 0,
+      onExhausted: "fail",
+      createdAt: now,
+      updatedAt: now,
+    },
+    model: {
+      id: "model-1",
+      providerId: "deepseek-official",
+      modelId: "test-model",
+      displayName: "测试模型",
+    },
+    ports: {
+      inputs: [
+        {
+          name: "source",
+          objectTypeId: "type-input",
+          objectTypeName: "PDF 输入",
+          kind: "file",
+          artifactPath: null,
+          exitName: null,
+        },
+      ],
+      outputs: [
+        {
+          name: "result",
+          objectTypeId: "type-1",
+          objectTypeName: "测试报告",
+          kind: "file",
+          artifactPath: "result.md",
+          exitName: null,
+        },
+      ],
+    },
+    skills: [],
+  };
+}
+
 function context(options?: {
   round?: number;
   runTurn?: (
@@ -108,6 +158,7 @@ function context(options?: {
   dispose?: () => Promise<void>;
   usage?: Record<string, number>;
   inputs?: ActionNodeContext["inputs"];
+  definition?: ResolvedActionDefinition;
 }): ActionNodeContext {
   const round = options?.round ?? 0;
   const sessionId = round === 0 ? "node-1" : `node-1#${round + 1}`;
@@ -147,7 +198,7 @@ function context(options?: {
   return {
     runId: "run-1",
     node: resolvedNode(),
-    actionId: "action-1",
+    definition: options?.definition ?? admittedDefinition(),
     inputs: options?.inputs ?? {},
     proc: proc as unknown as ActionNodeContext["proc"],
     workspace: {
@@ -196,6 +247,7 @@ beforeEach(() => {
   clearUnpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1#2" });
   fs.rmSync(path.join(workspaceRoot, "result.md"), { force: true });
   fs.rmSync(path.join(workspaceRoot, "rounds"), { recursive: true, force: true });
+  fs.rmSync(path.join(workspaceRoot, ".agents"), { recursive: true, force: true });
 });
 
 afterAll(() => {
@@ -223,15 +275,57 @@ describe("Action 执行时边界", () => {
     await running;
   });
 
-  it("运行开始后出口归属或产物路径漂移都会中止", async () => {
-    sqlite.prepare("update action_ports set exit_name = '通过' where id = 'port-1'").run();
-
-    await expect(runActionNode(context())).rejects.toThrow("端口在运行开始后被改动");
-
+  it("受理后共享 Action 被改写也仍使用受理时完整定义", async () => {
+    let renderedPrompt = "";
+    const admitted = context({
+      runTurn: async (_sessionId, messages, options) => {
+        const message = messages[0];
+        renderedPrompt = message?.type === "text" ? message.text : "";
+        expect(options?.agentOptions).toEqual({
+          provider: "deepseek-official",
+          model: "test-model",
+        });
+      },
+    });
+    sqlite.prepare("update actions set prompt = '网页改写后的任务' where id = 'action-1'").run();
     sqlite
-      .prepare("update action_ports set exit_name = NULL, artifact_path = 'changed.md' where id = 'port-1'")
+      .prepare("update action_ports set exit_name = '通过', artifact_path = 'changed.md' where id = 'port-1'")
       .run();
-    await expect(runActionNode(context())).rejects.toThrow("端口在运行开始后被改动");
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+
+    await expect(runActionNode(admitted)).resolves.toMatchObject({ selectedExit: null });
+    expect(renderedPrompt).toContain("写报告");
+    expect(renderedPrompt).not.toContain("网页改写后的任务");
+    const row = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
+    expect(JSON.parse(row.snapshot)).toMatchObject({
+      prompt: "写报告",
+      ports: { outputs: [{ artifactPath: "result.md" }] },
+    });
+  });
+
+  it("Skill 关系冻结但节点快照记录会话启动前的活投影正文", async () => {
+    const skill = { id: "skill-live", name: "核对规范" };
+    const definition = admittedDefinition();
+    definition.skills = [skill];
+    const skillDir = path.join(workspaceRoot, ".agents", "skills", skillSlug(skill));
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: live\n---\n\n编辑后的正文\n",
+    );
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+
+    await runActionNode(context({ definition }));
+
+    const row = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
+    expect(JSON.parse(row.snapshot)).toMatchObject({
+      skills: [
+        {
+          name: "核对规范",
+          content: "---\nname: live\n---\n\n编辑后的正文\n",
+        },
+      ],
+    });
   });
 
   it("回边重入的新会话用量累加到节点历史轮次而不是覆盖", async () => {

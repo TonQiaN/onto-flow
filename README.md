@@ -87,13 +87,34 @@ npm run dev
 简历都可上传 PDF、Markdown 或纯文本；文件以原件进入工作区，「简历评分·解析」使用
 DeepSeek V4 Flash Vision，自己用 bash 调 Poppler 抽取文本层、逐页栅格化并对每页执行视觉核对，
 六个评委与汇总继续使用文本模型。最终汇总会回看岗位与简历原文，自动裁决评委分歧、证据缺口和分数不自洽，并把明确的
-推荐判断、依据、证据充分度及所有改分记录写进 `report.md`，不留下未裁决项。命令行付费验收可运行：
+推荐判断、依据、证据充分度及所有改分记录写进严格的 `match-result.json`。汇总必须调用
+`validate_resume_match_result` 校验字段和总分/档位/否决等跨字段关系，得到 `valid=true` 才能提交。
+
+内部调用方先把岗位和简历分别传给 `/api/uploads`，再把返回的两个 file PortValue 作为
+`{ job, resume }` POST 到 `/api/internal/resume-matches`；接口返回 `runId`，随后 GET
+`/api/internal/resume-matches/<runId>` 查询状态与最终 JSON，不需要知道工作流或节点 id。POST 会在
+付费运行前核对完整图、岗位/简历各自的对象类型与解析连线、JSON 契约、汇总 Action 对校验 Tool
+的引用和内置源码摘要、校验 Tool 与 `read`/`write`/`bash`/`read_image`/`structured_output`
+均未被全局停用，以及汇总 Action 不会被回边重入；八个固定 Action 的完整
+输入输出端口集合、产物路径及 11 个指定节点间的 23 条业务边都必须精确齐全，六位评审各自都要收到岗位与
+简历、并各有且仅有一份结论进入汇总。工作流描述生成的共同指令，以及八个 Action 的 prompt、rule、
+provider/model、思考强度、重入策略与完整 Skill/Tool 集合，还必须匹配经过代码审查的 seed 摘要 pin。
+任一条件被网页编辑
+破坏都会直接拒绝，不启动模型。
+通过后执行的就是这份图、Action、模型、端口、Tool 与设置快照，并发保存不会把已预检定义替换成另一版。
+校验 Tool 同时返回它实际读取内容的 SHA-256；引擎在写 `success` 前把 `valid=true`、错误为空且与
+最终产物字节一致的回执固化为运行完成证据，并把精确 JSON 存成随 run 生命周期管理的持久业务结果；
+因此工作区或监控事件明细被清理后仍可读取。仅写出结构合法 JSON、但没有实际完成校验调用的运行会
+收束为失败。运行受理时还会把入口来源与结果节点身份和 run
+同步持久化；专用 GET 只读取专用 POST 发起的运行，同名工作流经通用运行接口启动也返回 404。
+命令行付费验收会真实走这组 HTTP 接口，并继续核对运行历史、工作区产物与 Agent 轨迹：
 
 ```bash
 npx tsx scripts/run-resume.ts [data/ 内岗位路径] [data/ 内简历路径]
 ```
 
-该脚本只打印 run id、节点/产物计数、token 与费用等脱敏指标，不回显简历或报告正文。
+运行前需保持 `npm run dev` 在仓库根启动。脚本只打印 run id、最终分/档位、节点/产物/轨迹计数、
+token 与费用等脱敏指标，不回显岗位、简历或结果正文。
 
 ## 测试
 

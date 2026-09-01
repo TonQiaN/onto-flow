@@ -16,9 +16,24 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { db, skills } from "@/db";
 import { DATA_DIR } from "@/server/fs-safety";
 import { assertSafeName } from "@/server/harness/ids";
+
+interface SkillLibraryGlobals {
+  /** skill slug -> 仍可能读取该投影的已受理运行。挂全局避免 HMR 丢失所有权。 */
+  ontoflowSkillProjectionHolds?: Map<string, Set<string>>;
+  /** 数据库行已删除，但投影仍被已受理运行持有；最后一个持有者释放后再删目录。 */
+  ontoflowPendingSkillProjectionRemovals?: Set<string>;
+}
+
+const g = globalThis as SkillLibraryGlobals;
+const projectionHolds = g.ontoflowSkillProjectionHolds ?? new Map<string, Set<string>>();
+g.ontoflowSkillProjectionHolds = projectionHolds;
+const pendingRemovals =
+  g.ontoflowPendingSkillProjectionRemovals ?? new Set<string>();
+g.ontoflowPendingSkillProjectionRemovals = pendingRemovals;
 
 /** 全局技能库根目录。 */
 export const SKILL_LIBRARY_DIR = path.join(DATA_DIR, "skills");
@@ -29,16 +44,12 @@ function quote(value: string): string {
 }
 
 /**
- * 库实体 → 上游认得的技能名。ASCII 部分尽量保留可读性，恒缀 6 位 id 保证唯一：
- * 两个中文名派生出的 ASCII 段可能都为空，没有后缀就会撞成同一个目录。
+ * 库实体 → 上游认得的稳定技能名。目录不能依赖展示名：运行工作区持有的是指向
+ * 这个目录的活链接，改名若换目录会让已经受理的运行断链。id 的摘要既满足上游
+ * ASCII slug 约束，也避免把数据库 id 的标点规则扩散到技能协议。
  */
-export function skillSlug(skill: { id: string; name: string }): string {
-  const ascii = skill.name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const suffix = skill.id.replace(/[^a-z0-9]/g, "").slice(0, 6) || "000000";
-  return ascii ? `${ascii}-${suffix}` : `skill-${suffix}`;
+export function skillSlug(skill: { id: string }): string {
+  return `skill-${createHash("sha256").update(skill.id, "utf8").digest("hex").slice(0, 20)}`;
 }
 
 function skillDir(slug: string): string {
@@ -46,9 +57,13 @@ function skillDir(slug: string): string {
   return path.join(SKILL_LIBRARY_DIR, slug);
 }
 
+function skillFile(slug: string): string {
+  return path.join(skillDir(slug), "SKILL.md");
+}
+
 /**
- * 把一个 Skill 写进磁盘投影。改名时传入旧名字，旧目录一并移除——
- * 否则库里改了名，磁盘上会多出一个没人引用却仍会被发现的技能。
+ * 把一个 Skill 写进磁盘投影。目录只由 id 决定，改名与正文更新都在同一路径内
+ * 原子替换 SKILL.md，已经受理的运行所持活链接不会失效。
  */
 export function materializeSkill(skill: {
   id: string;
@@ -74,7 +89,9 @@ export function materializeSkill(skill: {
   const tmp = path.join(SKILL_LIBRARY_DIR, `.skill-${slug}-${crypto.randomUUID()}.tmp`);
   try {
     fs.writeFileSync(tmp, `${frontmatter}${skill.content}\n`, "utf8");
-    fs.renameSync(tmp, path.join(dir, "SKILL.md"));
+    fs.renameSync(tmp, skillFile(slug));
+    // 同 id 的修订恢复会重新建立数据库行；成功写回后取消先前的延迟删除意图。
+    pendingRemovals.delete(slug);
   } finally {
     fs.rmSync(tmp, { force: true });
   }
@@ -90,7 +107,69 @@ export function removeSkillDir(slug: string): void {
 }
 
 export function removeSkill(skill: { id: string; name: string }): void {
-  removeSkillDir(skillSlug(skill));
+  const slug = skillSlug(skill);
+  if ((projectionHolds.get(slug)?.size ?? 0) > 0) {
+    pendingRemovals.add(slug);
+    return;
+  }
+  pendingRemovals.delete(slug);
+  removeSkillDir(slug);
+}
+
+/**
+ * 受理运行时取得 Skill 投影的生命期所有权。检查与登记都是同步操作：删除请求只能
+ * 发生在它们之前或之后，不能卡在中间。缺失投影在返回 runId 前失败，避免先跑付费节点
+ * 再由后续 Action 发现断链。
+ */
+export function retainSkillProjections(
+  runId: string,
+  skillRows: ReadonlyArray<{ id: string; name: string }>,
+): void {
+  const retained: string[] = [];
+  try {
+    for (const skill of skillRows) {
+      const slug = skillSlug(skill);
+      if (retained.includes(slug)) continue;
+      if (pendingRemovals.has(slug)) {
+        throw new Error(`技能「${skill.name}」已删除，不能用于本次运行`);
+      }
+      try {
+        const stat = fs.statSync(skillFile(slug));
+        if (!stat.isFile()) throw new Error("投影不是普通文件");
+        fs.accessSync(skillFile(slug), fs.constants.R_OK);
+      } catch {
+        throw new Error(`技能「${skill.name}」的磁盘投影不存在或不可读`);
+      }
+      const holders = projectionHolds.get(slug) ?? new Set<string>();
+      holders.add(runId);
+      projectionHolds.set(slug, holders);
+      retained.push(slug);
+    }
+  } catch (error) {
+    for (const slug of retained) {
+      const holders = projectionHolds.get(slug);
+      holders?.delete(runId);
+      if (holders?.size === 0) projectionHolds.delete(slug);
+    }
+    throw error instanceof Error ? error : new Error("技能磁盘投影不可读");
+  }
+}
+
+/**
+ * 运行完全静止后释放投影；若网页已删除该 Skill，最后一个运行释放时才真正删目录。
+ * 清理投影失败只记日志，不能把已经写好的运行终态改坏。
+ */
+export function releaseSkillProjections(
+  runId: string,
+  skillRows: ReadonlyArray<{ id: string; name: string }>,
+): void {
+  for (const slug of new Set(skillRows.map(skillSlug))) {
+    const holders = projectionHolds.get(slug);
+    holders?.delete(runId);
+    if ((holders?.size ?? 0) > 0) continue;
+    projectionHolds.delete(slug);
+    if (pendingRemovals.delete(slug)) removeSkillDir(slug);
+  }
 }
 
 /**
@@ -102,7 +181,12 @@ export function rebuildSkillLibrary(): void {
   const rows = db.select().from(skills).all();
   const wanted = new Set(rows.map(skillSlug));
   for (const entry of fs.readdirSync(SKILL_LIBRARY_DIR, { withFileTypes: true })) {
-    if (entry.isDirectory() && !wanted.has(entry.name)) removeSkillDir(entry.name);
+    if (!entry.isDirectory() || wanted.has(entry.name)) continue;
+    if ((projectionHolds.get(entry.name)?.size ?? 0) > 0) {
+      pendingRemovals.add(entry.name);
+    } else {
+      removeSkillDir(entry.name);
+    }
   }
   for (const row of rows) materializeSkill(row);
 }
