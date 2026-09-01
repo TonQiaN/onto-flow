@@ -25,9 +25,9 @@ import {
   type ResumeMatchResult,
 } from "@/lib/resume-match";
 import { isWithinData, resolveWithinData } from "@/server/fs-safety";
-import { startRun } from "@/server/engine/runner";
+import { startResolvedRun } from "@/server/engine/runner";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
-import { readSettings } from "@/server/settings";
+import { readSettings, type SettingsDocument } from "@/server/settings";
 import {
   type WriteResult,
   writeFail,
@@ -194,7 +194,10 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
 }
 
 /** 汇总 Action 必须实际持有校验 Tool，且本次运行快照不能把它全局摘掉。 */
-function validateValidatorCapability(resolved: ResolvedWorkflow): string | null {
+function validateValidatorCapability(
+  resolved: ResolvedWorkflow,
+  settings: SettingsDocument,
+): string | null {
   const outputNode = resolved.nodes.find(
     (node) => node.kind === "output" && node.label === RESUME_MATCH_OUTPUT_LABEL,
   );
@@ -221,7 +224,7 @@ function validateValidatorCapability(resolved: ResolvedWorkflow): string | null 
   if (!validator) {
     return `简历匹配汇总 Action 必须引用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}`;
   }
-  if (readSettings().disabledTools.includes(RESUME_MATCH_VALIDATOR_TOOL_NAME)) {
+  if (settings.disabledTools.includes(RESUME_MATCH_VALIDATOR_TOOL_NAME)) {
     return `全局设置已停用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}，不能启动简历匹配运行`;
   }
   return null;
@@ -242,17 +245,24 @@ export async function startResumeMatch(
   if (!resolved) return writeFail(500, "简历匹配工作流无法解析");
   const contractError = validateWorkflowContract(resolved);
   if (contractError) return writeFail(500, contractError);
-  const capabilityError = validateValidatorCapability(resolved);
+  // 设置与图都只取一次；同一对象交给 startResolvedRun，网页并发保存不能让
+  // “预检旧图、付费执行新图”，设置修改也只影响下一次运行。
+  const settings = readSettings();
+  const capabilityError = validateValidatorCapability(resolved, settings);
   if (capabilityError) return writeFail(500, capabilityError);
   const inputs = resolved.nodes.filter((node) => node.kind === "input");
   const jobNode = inputs.find((node) => node.label === RESUME_MATCH_JOB_INPUT_LABEL);
   const resumeNode = inputs.find((node) => node.label === RESUME_MATCH_RESUME_INPUT_LABEL);
   // validateWorkflowContract 已证明这两个节点存在；保留显式守卫让类型收窄不靠断言。
   if (!jobNode || !resumeNode) return writeFail(500, "简历匹配工作流输入定义无效");
-  const started = await startRun(workflow.id, {
-    [jobNode.id]: invocation.job,
-    [resumeNode.id]: invocation.resume,
-  });
+  const started = await startResolvedRun(
+    resolved,
+    {
+      [jobNode.id]: invocation.job,
+      [resumeNode.id]: invocation.resume,
+    },
+    settings,
+  );
   if (!started.ok) {
     return started.status === 422
       ? writeFail(started.status, started.error, started.issues)

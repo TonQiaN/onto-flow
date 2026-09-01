@@ -163,5 +163,6 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `src/lib/resume-match.ts` 再核对总分、档位、否决、证据充分度、硬性条件及改分记录的跨字段关系。
 - 汇总 Action 独享 `validate_resume_match_result` Tool；它写出文件后必须反复调用，直到轨迹留下
   `valid=true` 才能提交。内部工作流调用入口在成功响应时用同一个校验函数再验一次，Agent 自检与
-  API 边界不会各自维护一套规则。该入口还会在 `startRun` 前验证汇总 Action 仍引用此 Tool，且本次
-  全局设置快照没有停用它；缺失校验能力时不得先产生模型费用再失败。
+  API 边界不会各自维护一套规则。该入口还会验证汇总 Action 仍引用此 Tool，且本次全局设置快照
+  没有停用它；随后把通过预检的同一图与设置对象交给 `startResolvedRun`，并发画布保存不能换掉
+  实际执行快照。缺失校验能力时不得先产生模型费用再失败。

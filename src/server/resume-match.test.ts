@@ -15,11 +15,13 @@ import type { ResolvedWorkflow } from "./resolve";
 
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
-  startRun: vi.fn(),
+  startResolvedRun: vi.fn(),
 }));
 
 vi.mock("@/server/resolve", () => ({ resolveWorkflow: controls.resolveWorkflow }));
-vi.mock("@/server/engine/runner", () => ({ startRun: controls.startRun }));
+vi.mock("@/server/engine/runner", () => ({
+  startResolvedRun: controls.startResolvedRun,
+}));
 vi.mock("@/server/fs-safety", () => ({
   isWithinData: () => true,
   resolveWithinData: (value: string) => value,
@@ -197,8 +199,8 @@ beforeEach(() => {
     .prepare("insert into action_tools (action_id, tool_id) values (?, ?)")
     .run(reportActionId, validatorToolId);
   controls.resolveWorkflow.mockReset();
-  controls.startRun.mockReset();
-  controls.startRun.mockResolvedValue({ ok: true, runId: "run-1" });
+  controls.startResolvedRun.mockReset();
+  controls.startResolvedRun.mockResolvedValue({ ok: true, runId: "run-1" });
 });
 
 afterAll(() => {
@@ -207,26 +209,35 @@ afterAll(() => {
 });
 
 describe("简历匹配工作流预检", () => {
-  it("完整契约通过后才调用 startRun", async () => {
-    controls.resolveWorkflow.mockResolvedValue(resolved());
+  it("完整契约通过后把同一图与设置快照交给运行受理", async () => {
+    const graph = resolved();
+    controls.resolveWorkflow.mockResolvedValue(graph);
     await expect(startResumeMatch(invocation)).resolves.toEqual({
       ok: true,
       data: { runId: "run-1" },
     });
-    expect(controls.startRun).toHaveBeenCalledOnce();
+    expect(controls.resolveWorkflow).toHaveBeenCalledOnce();
+    expect(controls.startResolvedRun).toHaveBeenCalledWith(
+      graph,
+      {
+        "job-input": invocation.job,
+        "resume-input": invocation.resume,
+      },
+      expect.objectContaining({ disabledTools: [] }),
+    );
   });
 
   it.each([
     ["输出标签", resolved({ outputLabel: "旧评分报告" })],
     ["产物路径", resolved({ artifactPath: "report.json" })],
-  ])("%s 被编辑后在 startRun 前失败", async (_name, graph) => {
+  ])("%s 被编辑后在运行受理前失败", async (_name, graph) => {
     controls.resolveWorkflow.mockResolvedValue(graph);
     const result = await startResumeMatch(invocation);
     expect(result.ok).toBe(false);
-    expect(controls.startRun).not.toHaveBeenCalled();
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 
-  it("JSON Schema 不兼容时在 startRun 前失败", async () => {
+  it("JSON Schema 不兼容时在运行受理前失败", async () => {
     sqlite
       .prepare("update object_types set json_schema = ? where id = ?")
       .run(JSON.stringify({ type: "object" }), resultTypeId);
@@ -237,10 +248,10 @@ describe("简历匹配工作流预检", () => {
       status: 500,
       error: "「评分结果」必须使用简历匹配的严格 JSON Schema",
     });
-    expect(controls.startRun).not.toHaveBeenCalled();
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 
-  it("汇总 Action 未引用校验 Tool 时在 startRun 前失败", async () => {
+  it("汇总 Action 未引用校验 Tool 时在运行受理前失败", async () => {
     sqlite.prepare("delete from action_tools").run();
     controls.resolveWorkflow.mockResolvedValue(resolved());
 
@@ -249,10 +260,10 @@ describe("简历匹配工作流预检", () => {
       status: 500,
       error: `简历匹配汇总 Action 必须引用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}`,
     });
-    expect(controls.startRun).not.toHaveBeenCalled();
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 
-  it("校验 Tool 被全局停用时在 startRun 前失败", async () => {
+  it("校验 Tool 被全局停用时在运行受理前失败", async () => {
     sqlite
       .prepare("insert into settings (id, document, updated_at) values (1, ?, 0)")
       .run(
@@ -271,7 +282,7 @@ describe("简历匹配工作流预检", () => {
       status: 500,
       error: `全局设置已停用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}，不能启动简历匹配运行`,
     });
-    expect(controls.startRun).not.toHaveBeenCalled();
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 });
 
