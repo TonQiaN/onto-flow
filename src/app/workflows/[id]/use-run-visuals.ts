@@ -356,11 +356,11 @@ export function formatTokens(n: number): string {
   return `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-/** 费用展示：0 → “$0”；极小值不塌成 0 */
+/** 人民币费用展示：0 → “¥0”；极小值不塌成 0 */
 export function formatCost(cost: number): string {
-  if (cost <= 0) return "$0";
-  if (cost < 0.0001) return "<$0.0001";
-  return `$${cost.toFixed(4)}`;
+  if (cost <= 0) return "¥0";
+  if (cost < 0.0001) return "<¥0.0001";
+  return `¥${cost.toFixed(4)}`;
 }
 
 export { formatDuration };

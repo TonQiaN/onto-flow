@@ -82,6 +82,11 @@ export function isRunExecutionActive(runId: string): boolean {
   return activeRuns.has(runId);
 }
 
+/** 清理与准入只读快照；不把可变 Set 暴露到执行器之外。 */
+export function activeRunExecutionIds(): string[] {
+  return [...activeRuns];
+}
+
 /** PortValue 形态校验（前端传入的运行输入不可信） */
 function isPortValue(value: unknown): value is PortValue {
   if (!value || typeof value !== "object") return false;
@@ -161,11 +166,15 @@ export async function startRun(
   // 全局并发准入：每个运行都是一个独立子进程，无上限的对外调用会把机器拖垮。
   // 计数查库（含尚未 launch 的运行），且从查数到 insert 之间没有 await——
   // better-sqlite3 同步执行，两个并发 startRun 不会同时读到同一个空位。
-  const active = db
+  const runningIds = db
     .select({ id: runs.id })
     .from(runs)
     .where(eq(runs.status, "running"))
-    .all().length;
+    .all()
+    .map((row) => row.id);
+  // cancelRun 会先写 cancelled，再等子进程与 finally 真正收束；这段窗口仍占一份
+  // 运行时资源，不能因数据库终态提前释放准入名额。
+  const active = new Set([...runningIds, ...activeRuns]).size;
   if (active >= MAX_CONCURRENT_RUNS) {
     return {
       ok: false,

@@ -748,8 +748,28 @@ function EditorInner({ workflowId }: { workflowId: string }) {
           deepLinkHandledRef.current = true;
           const wanted = new URLSearchParams(window.location.search).get("runId");
           if (wanted) {
-            subscribeRun(wanted);
-            return;
+            let belongsToWorkflow = rows.some((row) => row.id === wanted);
+            if (!belongsToWorkflow) {
+              const detailRes = await fetch(
+                `/api/runs/${encodeURIComponent(wanted)}`,
+                { cache: "no-store" },
+              );
+              if (detailRes.ok) {
+                const detail = (await detailRes.json()) as {
+                  run?: { workflowId?: string };
+                };
+                belongsToWorkflow = detail.run?.workflowId === workflowId;
+              }
+            }
+            if (disposed) return;
+            if (belongsToWorkflow) {
+              subscribeRun(wanted);
+              return;
+            }
+            const url = new URL(window.location.href);
+            url.searchParams.delete("runId");
+            window.history.replaceState(null, "", url);
+            setBanner("链接中的运行不存在或不属于当前工作流，已停止跟随");
           }
         }
         const current = visualsRef.current;

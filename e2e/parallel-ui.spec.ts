@@ -151,6 +151,7 @@ test.describe("多路并行界面", () => {
       await expect(page.getByText("运行中", { exact: true })).toBeVisible({
         timeout: 10_000,
       });
+      await expect(page.getByText("¥0", { exact: true }).first()).toBeVisible();
 
       // 并行切换器：两路都在选项里，切到另一路后 URL 跟着换。
       const switcher = page.getByTestId("run-switcher");
@@ -178,6 +179,42 @@ test.describe("多路并行界面", () => {
     for (const runId of [runA, runB]) {
       const del = await request.delete(`/api/runs/${runId}`);
       expect(del.ok(), `删除运行 ${runId}`).toBeTruthy();
+    }
+  });
+
+  test("深链运行必须属于当前工作流", async ({ page, request }) => {
+    const currentRes = await request.post("/api/workflows", {
+      data: { name: `${PREFIX}深链目标`, description: "深链归属验收" },
+    });
+    const otherRes = await request.post("/api/workflows", {
+      data: { name: `${PREFIX}其它工作流`, description: "不得被目标画布跟随" },
+    });
+    expect(currentRes.ok()).toBeTruthy();
+    expect(otherRes.ok()).toBeTruthy();
+    const currentId = ((await currentRes.json()) as { id: string }).id;
+    const other = (await otherRes.json()) as { id: string; name: string };
+    const foreignRunId = insertSyntheticRun(other.id, other.name);
+
+    try {
+      await page.goto(`/workflows/${currentId}?runId=${foreignRunId}`);
+      await expect(
+        page.getByText("链接中的运行不存在或不属于当前工作流，已停止跟随"),
+      ).toBeVisible({ timeout: 10_000 });
+      await expect(page).toHaveURL(`/workflows/${currentId}`);
+      await expect(page.getByRole("button", { name: "取消运行" })).toHaveCount(0);
+
+      const database = openDb();
+      try {
+        expect(
+          database.prepare("select status from runs where id = ?").get(foreignRunId),
+        ).toEqual({ status: "running" });
+      } finally {
+        database.close();
+      }
+    } finally {
+      finishSyntheticRuns([foreignRunId]);
+      const del = await request.delete(`/api/runs/${foreignRunId}`);
+      expect(del.ok(), `删除运行 ${foreignRunId}`).toBeTruthy();
     }
   });
 });

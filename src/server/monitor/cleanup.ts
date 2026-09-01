@@ -11,7 +11,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import { isRunExecutionActive } from "@/server/engine/runner";
+import {
+  activeRunExecutionIds,
+  isRunExecutionActive,
+} from "@/server/engine/runner";
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
 import { dirStat, formatBytes } from "./disk";
 import type { CleanupRequest, CleanupResult, CleanupTarget } from "./types";
@@ -132,23 +135,36 @@ function cleanEvents(
   beforeDays: number,
   dryRun: boolean,
 ): CleanupResult {
-  const rows = db
-    .all<{ id: number; runId: string; bytes: number }>(sql`
-      select e.id, e.run_id as runId,
-        length(cast(coalesce(e.payload, '') as blob)) as bytes
+  const activeIds = activeRunExecutionIds();
+  const activeFilter =
+    activeIds.length === 0
+      ? sql``
+      : sql`and e.run_id not in (${sql.join(
+          activeIds.map((id) => sql`${id}`),
+          sql`, `,
+        )})`;
+  const stat = db.get<{ count: number; bytes: number }>(sql`
+      select count(*) as count,
+        coalesce(sum(length(cast(coalesce(e.payload, '') as blob))), 0) as bytes
       from run_events e
       join runs r on r.id = e.run_id
       where e.ts < ${cutoff} and r.status <> 'running'
-    `)
-    .filter((row) => !isRunExecutionActive(row.runId));
-  const count = rows.length;
-  const bytes = rows.reduce((sum, row) => sum + row.bytes, 0);
+        ${activeFilter}
+    `);
+  const count = stat?.count ?? 0;
+  const bytes = stat?.bytes ?? 0;
 
   let vacuumNote = "";
   if (!dryRun && count > 0) {
-    db.transaction((tx) => {
-      for (const row of rows) tx.run(sql`delete from run_events where id = ${row.id}`);
-    });
+    db.run(sql`
+      delete from run_events where id in (
+        select e.id
+        from run_events e
+        join runs r on r.id = e.run_id
+        where e.ts < ${cutoff} and r.status <> 'running'
+          ${activeFilter}
+      )
+    `);
     try {
       db.run(sql`vacuum`);
       vacuumNote = "；已 VACUUM 回收文件空间";

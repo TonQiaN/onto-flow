@@ -86,7 +86,8 @@ CREATE TABLE run_nodes (
   new Set();
 (globalThis as unknown as { ontoflowRunProcesses?: Map<string, unknown> }).ontoflowRunProcesses =
   new Map();
-(globalThis as unknown as { ontoflowActiveRuns?: Set<string> }).ontoflowActiveRuns = new Set();
+const activeRuns = new Set<string>();
+(globalThis as unknown as { ontoflowActiveRuns?: Set<string> }).ontoflowActiveRuns = activeRuns;
 
 let startRun: typeof import("./runner").startRun;
 let cancelRun: typeof import("./runner").cancelRun;
@@ -299,6 +300,7 @@ beforeAll(async () => {
 beforeEach(() => {
   controls.dispose.mockClear();
   controls.cancel.mockClear();
+  activeRuns.clear();
 });
 
 describe("回边重入", () => {
@@ -359,6 +361,25 @@ describe("回边重入", () => {
 });
 
 describe("运行取消终态", () => {
+  it("cancelled 但仍在收尾的执行器继续占用并发名额", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    for (let index = 0; index < 16; index += 1) {
+      activeRuns.add(`settling-${index}`);
+    }
+
+    await expect(
+      startRun("workflow-1", {
+        "input-node": { kind: "text", text: "测试" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 429,
+      error: "并行运行已达上限 16，请等待现有运行结束后重试",
+    });
+    expect(sqlite.prepare("SELECT count(*) AS count FROM runs").get()).toEqual({ count: 0 });
+  });
+
   it("Action 在取消后才返回成功时仍保持 cancelled", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());

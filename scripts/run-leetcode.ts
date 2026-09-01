@@ -7,13 +7,13 @@
  * 脚本再做一次本地独立验收（python3 按固定用例跑），防止“测试与解题合谋”
  * 的假通过。运行记录留在库里作为证据。
  */
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { eq } from "drizzle-orm";
 import { db, runNodes, runs } from "../src/db";
 import { DATA_DIR } from "../src/server/fs-safety";
 import { startRun } from "../src/server/engine/runner";
 import { seedLeetcodeWorkflow, LEETCODE_INPUT_NODE_ID } from "./seed-leetcode";
+import { runSandboxedPythonVerification } from "./leetcode-verifier";
 import type { PortValue } from "../src/lib/values";
 
 const RUN_COUNT = Number(process.argv[2] ?? 1);
@@ -113,14 +113,27 @@ async function main(): Promise<void> {
       continue;
     }
     const finalPath = path.join(DATA_DIR, value.file.path);
-    const verify = spawnSync("python3", ["-c", VERIFY_PY, finalPath], {
-      encoding: "utf8",
-      timeout: 30_000,
+    if (!row.runDir) {
+      console.log("  异常：运行没有工作区路径，无法独立验收");
+      failed += 1;
+      continue;
+    }
+    const verify = await runSandboxedPythonVerification({
+      workspaceRoot: path.resolve(process.cwd(), row.runDir, "workspace"),
+      artifactPath: finalPath,
+      verificationCode: VERIFY_PY,
     });
-    const verdict = verify.status === 0 ? "本地独立验收通过" : "本地独立验收失败";
+    const accepted = verify.exitCode === 0 && !verify.timedOut && !verify.sandbox.denied;
+    const verdict = accepted ? "本地独立验收通过" : "本地独立验收失败";
     console.log(`  定稿：${value.file.path}`);
-    console.log(`  ${verdict}：${(verify.stdout || verify.stderr || "").trim().split("\n").join("；")}`);
-    if (verify.status !== 0) failed += 1;
+    console.log(
+      `  沙箱：${verify.sandbox.mode}/${verify.sandbox.enforcement}` +
+        `${verify.sandbox.denied ? "/denied" : ""}`,
+    );
+    console.log(
+      `  ${verdict}：${(verify.stdout || verify.stderr || "").trim().split("\n").join("；")}`,
+    );
+    if (!accepted) failed += 1;
   }
 
   if (failed > 0) throw new Error(`${failed} 个运行未通过验收`);
