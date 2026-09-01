@@ -49,6 +49,30 @@ export interface LaunchRunOptions {
   onSessionEvent?: (sessionId: string, event: unknown) => void;
 }
 
+/**
+ * initialize 已失败，dispose 又无法证明子进程退出。调用方必须保留 runProcess
+ * 的所有权并隔离对应工作区；只抛初始化错误会把仍可能存活的进程句柄丢掉。
+ */
+export class UnsettledRunLaunchError extends Error {
+  constructor(
+    readonly runProcess: RunProcess,
+    readonly initializationError: unknown,
+    readonly disposalError: unknown,
+  ) {
+    const initializationMessage =
+      initializationError instanceof Error
+        ? initializationError.message
+        : String(initializationError);
+    const disposalMessage =
+      disposalError instanceof Error ? disposalError.message : String(disposalError);
+    super(
+      `harness 初始化失败且子进程无法确认已退出：${initializationMessage}；` +
+        `收束错误：${disposalMessage}`,
+    );
+    this.name = "UnsettledRunLaunchError";
+  }
+}
+
 /** 写组合、spawn 子进程并完成 initialize；返回可驱动会话的句柄。 */
 export async function launchRun(
   workspace: RunWorkspace,
@@ -94,8 +118,10 @@ export async function launchRun(
     // 并行运行下这种僵尸会累积到拖垮机器。收束失败不掩盖首个错误。
     try {
       await proc.dispose();
-    } catch {
-      // 收束尽力而为：dispose 的阶梯打到 SIGKILL 还不退才会抛，此时只能带着原错误返回。
+    } catch (disposalError) {
+      // 这不是可以吞掉的次要错误：SIGKILL 后仍没有退出边沿时，句柄必须随异常
+      // 交还调用方隔离，不能让运行目录与并发名额被当作已经释放。
+      throw new UnsettledRunLaunchError(proc, cause, disposalError);
     }
     throw cause;
   }

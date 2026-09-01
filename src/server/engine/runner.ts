@@ -25,7 +25,10 @@ import {
 import { MAX_FILE_INPUT_BYTES, type PortValue } from "@/lib/values";
 import { DATA_DIR, isWithinData, resolveWithinData, safeBasename } from "@/server/fs-safety";
 import { assertSafeId } from "@/server/harness/ids";
-import { launchRun } from "@/server/harness/launch";
+import {
+  launchRun,
+  UnsettledRunLaunchError,
+} from "@/server/harness/launch";
 import type { RunProcess } from "@/server/harness/runtime";
 import {
   createRunWorkspace,
@@ -317,24 +320,36 @@ async function executeRun(
   // 即时写成 run_events / node_usage。
   const sinks = new Map<string, EventSinkContext>();
   // 设置已在准入时冻结：工作区创建期间发生的网页修改也只影响下一次运行。
-  const proc = await launchRun(workspace, {
-    credentialRefs: globalSettings.credentialRefs.map((r) => r.name),
-    composition: {
-      deepseek: {
-        apiKeyEnv: globalSettings.modelApiKeyEnv,
-        ...(globalSettings.modelBaseUrl ? { baseURL: globalSettings.modelBaseUrl } : {}),
+  let proc: RunProcess;
+  try {
+    proc = await launchRun(workspace, {
+      credentialRefs: globalSettings.credentialRefs.map((r) => r.name),
+      composition: {
+        deepseek: {
+          apiKeyEnv: globalSettings.modelApiKeyEnv,
+          ...(globalSettings.modelBaseUrl ? { baseURL: globalSettings.modelBaseUrl } : {}),
+        },
+        mcpServers: globalSettings.mcpServers,
+        toolPlugins: materializeToolPlugins(workspace, capabilities.tools),
       },
-      mcpServers: globalSettings.mcpServers,
-      toolPlugins: materializeToolPlugins(workspace, capabilities.tools),
-    },
-    onCrash: (message) => {
-      firstError ??= message;
-    },
-    onSessionEvent: (sessionId, event) => {
-      const sink = sinks.get(sessionId);
-      if (sink) recordSessionEvent(sink, event);
-    },
-  });
+      onCrash: (message) => {
+        firstError ??= message;
+      },
+      onSessionEvent: (sessionId, event) => {
+        const sink = sinks.get(sessionId);
+        if (sink) recordSessionEvent(sink, event);
+      },
+    });
+  } catch (error) {
+    if (error instanceof UnsettledRunLaunchError) {
+      // initialize 尚未返回时常规 proc 变量还不存在；异常携带的句柄是最后的
+      // 所有权通道。保留它并把运行永久隔离到进程重启，所有清理与新准入 fail-closed。
+      runProcesses.set(runId, error.runProcess);
+      disposalFailures.add(runId);
+      console.error("[engine] 初始化失败后的子进程收束失败", runId, error);
+    }
+    throw error;
+  }
   runProcesses.set(runId, proc);
 
   /**

@@ -82,9 +82,10 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   下一次运行。全局停用工具从会话工具面移除，晚注册工具另由 guard 兜底。
 - **完成、取消与错误**：`session/prompt` 懒创建会话，Next 侧等待同一会话依次进入 running / idle；
   人工取消走 `session/cancel`，运行与节点进入独立的 `cancelled` 终态。节点完成后关闭会话，一次
-  运行完成后关闭子进程；崩溃、超时与无产物都写入 run / run_node 的失败事实。若 dispose 在终止
-  升级后仍不能确认子进程退出，该运行保持 active 隔离所有权：预览、清理、删除与新准入容量都
-  fail-closed，不能用数据库终态冒充工作区已经静止。
+  运行完成后关闭子进程；崩溃、超时与无产物都写入 run / run_node 的失败事实。无论发生在
+  initialize 失败后的收束，还是正常执行的 finally，若 dispose 在终止升级后仍不能确认子进程
+  退出，该运行都保持 active 隔离所有权：预览、清理、删除与新准入容量 fail-closed，不能用
+  数据库终态冒充工作区已经静止。
 - **事件、轨迹与用量**：`session.event` 通知到达时立刻归一为 text / reasoning / tool /
   session.idle / session.error 并落库。每个 step 的 usage chunk 是不累积值，按
   `(sessionId, turn:step)` 唯一化后求和；完整原始会话另存 `<run>/sessions/**/session.jsonl`。

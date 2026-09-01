@@ -12,6 +12,7 @@ import type { ResolvedWorkflow } from "../resolve";
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
   runActionNode: vi.fn(),
+  launchRun: vi.fn(),
   dispose: vi.fn(async () => {}),
   cancel: vi.fn(async () => {}),
 }));
@@ -42,12 +43,19 @@ vi.mock("@/server/harness/workspace", () => ({
     imports: { instructionsDigest: "test", items: [] },
   }),
 }));
-vi.mock("@/server/harness/launch", () => ({
-  launchRun: async () => ({
-    dispose: controls.dispose,
-    cancel: controls.cancel,
-  }),
-}));
+vi.mock("@/server/harness/launch", () => {
+  class UnsettledRunLaunchError extends Error {
+    constructor(
+      readonly runProcess: unknown,
+      readonly initializationError: unknown,
+      readonly disposalError: unknown,
+    ) {
+      super("harness 初始化失败且子进程无法确认已退出");
+      this.name = "UnsettledRunLaunchError";
+    }
+  }
+  return { launchRun: controls.launchRun, UnsettledRunLaunchError };
+});
 vi.mock("./capabilities", () => ({
   collectCapabilities: () => ({
     skills: [],
@@ -98,6 +106,7 @@ let startRun: typeof import("./runner").startRun;
 let cancelRun: typeof import("./runner").cancelRun;
 let isRunExecutionActive: typeof import("./runner").isRunExecutionActive;
 let deleteRun: typeof import("../monitor/cleanup").deleteRun;
+let UnsettledRunLaunchError: typeof import("../harness/launch").UnsettledRunLaunchError;
 
 function resolvedWorkflow(): ResolvedWorkflow {
   const workflow = {
@@ -300,9 +309,15 @@ function loopWorkflow(): ResolvedWorkflow {
 beforeAll(async () => {
   ({ startRun, cancelRun, isRunExecutionActive } = await import("./runner"));
   ({ deleteRun } = await import("../monitor/cleanup"));
+  ({ UnsettledRunLaunchError } = await import("../harness/launch"));
 });
 
 beforeEach(() => {
+  controls.launchRun.mockReset();
+  controls.launchRun.mockResolvedValue({
+    dispose: controls.dispose,
+    cancel: controls.cancel,
+  });
   controls.dispose.mockReset();
   controls.dispose.mockResolvedValue(undefined);
   controls.cancel.mockClear();
@@ -463,6 +478,43 @@ describe("运行取消终态", () => {
       expect(run.status).toBe("failed");
       expect(run.error).toContain("运行子进程无法确认已退出");
     });
+    expect(isRunExecutionActive(startedRun.runId)).toBe(true);
+    expect(deleteRun(startedRun.runId)).toEqual({
+      ok: false,
+      status: 409,
+      error: "运行执行尚未完全收束，不能删除",
+    });
+  });
+
+  it("初始化失败后的收束不明也保留进程句柄与活动所有权", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    const strandedProcess = {
+      dispose: controls.dispose,
+      cancel: controls.cancel,
+    };
+    controls.launchRun.mockRejectedValueOnce(
+      new UnsettledRunLaunchError(
+        strandedProcess as never,
+        new Error("initialize 请求超时"),
+        new Error("SIGKILL 后仍未退出"),
+      ),
+    );
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("failed");
+      expect(run.error).toContain("harness 初始化失败且子进程无法确认已退出");
+    });
+    expect(runProcesses.get(startedRun.runId)).toBe(strandedProcess);
     expect(isRunExecutionActive(startedRun.runId)).toBe(true);
     expect(deleteRun(startedRun.runId)).toEqual({
       ok: false,
