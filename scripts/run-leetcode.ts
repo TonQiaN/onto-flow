@@ -19,6 +19,7 @@ import {
 import { abortRunBatch, admitWholeBatch } from "./batch-runs";
 import { seedLeetcodeWorkflow, LEETCODE_INPUT_NODE_ID } from "./seed-leetcode";
 import { runSandboxedPythonVerification } from "./leetcode-verifier";
+import { totalUsageTokens } from "./token-total";
 import type { PortValue } from "../src/lib/values";
 
 const RUN_COUNT = Number(process.argv[2] ?? 1);
@@ -94,11 +95,7 @@ async function main(): Promise<void> {
     // 会话 id 带轮次后缀（node#N），据此还原测试节点实际跑到第几轮。
     const roundMatch = tester?.sessionId?.match(/#(\d+)$/);
     const roundCount = roundMatch ? Number(roundMatch[1]) : tester?.sessionId ? 1 : 0;
-    const tokens = nodes.reduce(
-      // outputTokens 已含推理 token；reasoningTokens 只作拆分展示，不能再次计总量。
-      (sum, n) => sum + n.inputTokens + n.outputTokens,
-      0,
-    );
+    const tokens = nodes.reduce((sum, node) => sum + totalUsageTokens(node), 0);
     const seconds = row.finishedAt
       ? `${Math.round((row.finishedAt.getTime() - row.startedAt.getTime()) / 1000)}s`
       : "-";

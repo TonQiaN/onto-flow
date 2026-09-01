@@ -20,6 +20,7 @@ import {
   workflows,
 } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
+import { totalUsageTokens } from "./token-total";
 
 const PREFIX = "引擎冒烟";
 
@@ -167,7 +168,7 @@ async function main(): Promise<void> {
 
   console.log("\n节点：");
   for (const n of db.select().from(runNodes).where(eq(runNodes.runId, runId)).all()) {
-    const tok = n.inputTokens + n.outputTokens;
+    const tok = totalUsageTokens(n);
     console.log(
       `  ${n.label.padEnd(6)} ${n.status.padEnd(8)} tokens=${tok} 思考=${n.reasoningTokens}` +
         `${n.error ? ` 错误=${n.error}` : ""}`,

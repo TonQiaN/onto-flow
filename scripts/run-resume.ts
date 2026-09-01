@@ -12,6 +12,7 @@ import { db, runNodes, runs, workflowNodes, workflows } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import { DATA_DIR, resolveWithinData } from "../src/server/fs-safety";
 import { inspectPdfPages, readPdfPageCount } from "./resume-pdf-inspection";
+import { totalUsageTokens } from "./token-total";
 
 function fileInput(dataRelativePath: string) {
   const abs = resolveWithinData(dataRelativePath);
@@ -70,9 +71,7 @@ async function main(): Promise<void> {
   let totalCost = 0;
   const nodeRows = db.select().from(runNodes).where(eq(runNodes.runId, started.runId)).all();
   for (const n of nodeRows) {
-    // reasoning 已含在 outputTokens 里（适配器直取 completion_tokens），不重复相加。
-    const nodeTokens =
-      n.inputTokens + n.outputTokens + n.cacheReadTokens + n.cacheWriteTokens;
+    const nodeTokens = totalUsageTokens(n);
     totalTokens += nodeTokens;
     totalCost += n.cost;
     console.log(

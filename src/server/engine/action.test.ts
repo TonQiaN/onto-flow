@@ -317,6 +317,69 @@ describe("Action 执行时边界", () => {
     ).toMatchObject({ type: "usage" });
   });
 
+  it("正常会话的 usage 事件瞬时写入失败时进入最终结算重试链", async () => {
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+    sqlite.exec(`
+      CREATE TRIGGER fail_normal_usage_event_insert
+      BEFORE INSERT ON run_events
+      BEGIN SELECT RAISE(ABORT, 'forced normal usage event failure'); END;
+    `);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        runActionNode(
+          context({
+            usage: {
+              inputTokens: 10,
+              outputTokens: 4,
+              reasoningTokens: 2,
+              cacheReadTokens: 1,
+              cost: 0.1,
+            },
+          }),
+        ),
+      ).rejects.toThrow("会话 node-1 的用量事件尚未持久化");
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({ inputTokens: 10, outputTokens: 4 });
+      expect(sqlite.prepare("select count(*) as count from run_events").get()).toEqual({
+        count: 0,
+      });
+
+      sqlite.exec("DROP TRIGGER fail_normal_usage_event_insert;");
+      expect(() => finalizeUnsettledActionUsage("run-1")).not.toThrow();
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({ inputTokens: 10, outputTokens: 4 });
+      const payload = JSON.parse(
+        (
+          sqlite.prepare("select payload from run_events where type = 'usage'").get() as {
+            payload: string;
+          }
+        ).payload,
+      ) as Record<string, unknown>;
+      expect(payload).toMatchObject({ inputTokens: 10, outputTokens: 4 });
+      expect(payload.unsettledProcess).toBeUndefined();
+    } finally {
+      sqlite.exec("DROP TRIGGER IF EXISTS fail_normal_usage_event_insert;");
+      try {
+        finalizeUnsettledActionUsage("run-1");
+      } catch {
+        // 断言失败时仍尽量清掉全局测试状态；原始断言错误由 Vitest 保留。
+      }
+      log.mockRestore();
+    }
+  });
+
   it("会话与进程均无法确认静止时持续把迟到用量刷新到节点和同一结算事件", async () => {
     try {
       await expect(

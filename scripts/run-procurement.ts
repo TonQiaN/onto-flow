@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { db, purchasePlans, runNodes, runs, workflowNodes, workflows } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import { DATA_DIR } from "../src/server/fs-safety";
+import { totalUsageTokens } from "./token-total";
 
 async function main(): Promise<void> {
   if (!process.env.DEEPSEEK_API_KEY) throw new Error("缺少 DEEPSEEK_API_KEY");
@@ -58,9 +59,10 @@ async function main(): Promise<void> {
 
   let total = 0;
   for (const n of db.select().from(runNodes).where(eq(runNodes.runId, started.runId)).all()) {
-    total += n.inputTokens + n.outputTokens;
+    const tokens = totalUsageTokens(n);
+    total += tokens;
     console.log(
-      `  ${n.label.padEnd(12)} ${n.status.padEnd(8)} tokens=${n.inputTokens + n.outputTokens}` +
+      `  ${n.label.padEnd(12)} ${n.status.padEnd(8)} tokens=${tokens}` +
         `${n.error ? `\n      错误=${n.error}` : ""}`,
     );
   }
