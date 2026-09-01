@@ -937,6 +937,7 @@ describe("运行取消终态", () => {
         expect(run.error).toContain("运行子进程退出后的用量结算失败");
         expect(isRunExecutionActive(startedRun.runId)).toBe(true);
         expect(runProcesses.has(startedRun.runId)).toBe(true);
+        expect(controls.releaseSkillProjections).not.toHaveBeenCalled();
       });
 
       canSettle = true;
@@ -946,6 +947,7 @@ describe("运行取消终态", () => {
           expect(isRunExecutionActive(startedRun.runId)).toBe(false);
           expect(runProcesses.has(startedRun.runId)).toBe(false);
           expect(pendingUsageSettlements.has(startedRun.runId)).toBe(false);
+          expect(controls.releaseSkillProjections).toHaveBeenCalledOnce();
         },
         { timeout: 2_000 },
       );
