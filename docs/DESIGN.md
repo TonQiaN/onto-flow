@@ -173,7 +173,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   随后可以清理，成功结果不会因此失去读取依据。
   只写出合法 JSON 却跳过 Tool、回执落库失败或校验后又改文件的运行都收束为失败。Agent 自检与
   API 边界不会各自维护一套规则。该入口还会验证汇总 Action 仍引用此 Tool、源码 SHA-256 匹配
-  内置 pin、本次全局设置快照没有停用它，且汇总 Action 不在任何回边的重入范围内。受理时把
+  内置 pin，本次全局设置快照没有停用它或 `read`/`write`/`bash`/`read_image`/
+  `structured_output` 这些必需基础工具，且汇总 Action 不在任何回边的重入范围内。受理时把
   结果输出节点和汇总校验节点 id 与来源证明
   一起持久化，不按 `startedAt` 反推修订。岗位 JD 与简历输入还必须
   各自使用指定 Object Type，并分别连到解析 Action 的对应端口；八个固定 Action 的完整输入输出

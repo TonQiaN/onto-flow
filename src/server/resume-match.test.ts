@@ -925,6 +925,31 @@ describe("简历匹配工作流预检", () => {
     expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 
+  it.each(["read", "write", "bash", "read_image", "structured_output"])(
+    "必需基础工具 %s 被全局停用时在运行受理前失败",
+    async (toolName) => {
+      sqlite
+        .prepare("insert into settings (id, document, updated_at) values (1, ?, 0)")
+        .run(
+          JSON.stringify({
+            modelApiKeyEnv: "DEEPSEEK_API_KEY",
+            modelBaseUrl: "",
+            credentialRefs: [],
+            mcpServers: [],
+            disabledTools: [toolName],
+          }),
+        );
+      controls.resolveWorkflow.mockResolvedValue(resolved());
+
+      await expect(startResumeMatch(invocation)).resolves.toEqual({
+        ok: false,
+        status: 500,
+        error: `全局设置已停用简历匹配必需的基础工具 ${toolName}，不能启动简历匹配运行`,
+      });
+      expect(controls.startResolvedRun).not.toHaveBeenCalled();
+    },
+  );
+
   it("校验 Tool 保留名称但实现被改写时在运行受理前失败", async () => {
     sqlite
       .prepare("update tools set code = ? where id = ?")

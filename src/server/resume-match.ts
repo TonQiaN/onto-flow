@@ -60,6 +60,13 @@ import {
 } from "@/server/writers/types";
 
 const MAX_RESULT_BYTES = 1024 * 1024;
+const RESUME_MATCH_REQUIRED_BUILTIN_TOOLS = [
+  "read",
+  "write",
+  "bash",
+  "read_image",
+  "structured_output",
+] as const;
 
 interface ResumeMatchResultNodes {
   outputNodeId: string;
@@ -503,8 +510,8 @@ function resolvedResultNodes(resolved: ResolvedWorkflow): ResumeMatchResultNodes
     : null;
 }
 
-/** 汇总 Action 必须实际持有校验 Tool，且本次运行快照不能把它全局摘掉。 */
-function validateValidatorCapability(
+/** 专用付费入口依赖的校验 Tool 与基础工具必须在本次设置快照中全部可用。 */
+function validateRequiredCapabilities(
   resolved: ResolvedWorkflow,
   settings: SettingsDocument,
 ): string | null {
@@ -536,6 +543,12 @@ function validateValidatorCapability(
   }
   if (settings.disabledTools.includes(RESUME_MATCH_VALIDATOR_TOOL_NAME)) {
     return `全局设置已停用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}，不能启动简历匹配运行`;
+  }
+  const disabledBuiltin = RESUME_MATCH_REQUIRED_BUILTIN_TOOLS.find((name) =>
+    settings.disabledTools.includes(name),
+  );
+  if (disabledBuiltin) {
+    return `全局设置已停用简历匹配必需的基础工具 ${disabledBuiltin}，不能启动简历匹配运行`;
   }
   return null;
 }
@@ -597,7 +610,7 @@ export async function startResumeMatch(
   // 设置与图都只取一次；同一对象交给 startResolvedRun，网页并发保存不能让
   // “预检旧图、付费执行新图”，设置修改也只影响下一次运行。
   const settings = readSettings();
-  const capabilityError = validateValidatorCapability(resolved, settings);
+  const capabilityError = validateRequiredCapabilities(resolved, settings);
   if (capabilityError) return writeFail(500, capabilityError);
   const behaviorError = validateActionBehaviors(resolved);
   if (behaviorError) return writeFail(500, behaviorError);

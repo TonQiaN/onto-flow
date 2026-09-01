@@ -94,7 +94,8 @@ DeepSeek V4 Flash Vision，自己用 bash 调 Poppler 抽取文本层、逐页�
 `{ job, resume }` POST 到 `/api/internal/resume-matches`；接口返回 `runId`，随后 GET
 `/api/internal/resume-matches/<runId>` 查询状态与最终 JSON，不需要知道工作流或节点 id。POST 会在
 付费运行前核对完整图、岗位/简历各自的对象类型与解析连线、JSON 契约、汇总 Action 对校验 Tool
-的引用和内置源码摘要、该 Tool 未被全局停用，以及汇总 Action 不会被回边重入；八个固定 Action 的完整
+的引用和内置源码摘要、校验 Tool 与 `read`/`write`/`bash`/`read_image`/`structured_output`
+均未被全局停用，以及汇总 Action 不会被回边重入；八个固定 Action 的完整
 输入输出端口集合、产物路径及 11 个指定节点间的 23 条业务边都必须精确齐全，六位评审各自都要收到岗位与
 简历、并各有且仅有一份结论进入汇总。工作流描述生成的共同指令，以及八个 Action 的 prompt、rule、
 provider/model、思考强度、重入策略与完整 Skill/Tool 集合，还必须匹配经过代码审查的 seed 摘要 pin。
