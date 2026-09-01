@@ -9,9 +9,16 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../db/schema";
 import { validateGraph } from "../lib/graph";
 import {
+  RESUME_MATCH_CRITIC_ACTION_NAMES,
+  RESUME_MATCH_CRITIC_RESULT_PORT,
   RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
   RESUME_MATCH_JOB_PARSE_PORT,
+  RESUME_MATCH_PARSED_JOB_PORT,
+  RESUME_MATCH_PARSED_RESUME_PORT,
   RESUME_MATCH_PARSE_ACTION_NAME,
+  RESUME_MATCH_REPORT_ACTION_NAME,
+  RESUME_MATCH_REPORT_CRITICS_PORT,
+  RESUME_MATCH_REPORT_RESULT_PORT,
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
   RESUME_MATCH_RESUME_OBJECT_TYPE_NAME,
@@ -104,7 +111,13 @@ const workflowId = "resume-workflow";
 const resultTypeId = "resume-result-type";
 const jobTypeId = "job-type";
 const resumeTypeId = "resume-type";
+const parsedJobTypeId = "parsed-job-type";
+const parsedResumeTypeId = "parsed-resume-type";
+const verdictTypeId = "critic-verdict-type";
 const parseActionId = "resume-parse-action";
+const criticActionIds = RESUME_MATCH_CRITIC_ACTION_NAMES.map(
+  (_, index) => `resume-critic-action-${index}`,
+);
 const reportActionId = "resume-report-action";
 const validatorToolId = "resume-validator-tool";
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-resume-match-"));
@@ -230,6 +243,45 @@ function resolved(
       },
     ],
     [
+      parsedJobTypeId,
+      {
+        id: parsedJobTypeId,
+        name: "岗位要求Markdown",
+        kind: "file",
+        description: "",
+        jsonSchema: null,
+        builtin: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    [
+      parsedResumeTypeId,
+      {
+        id: parsedResumeTypeId,
+        name: "简历Markdown",
+        kind: "file",
+        description: "",
+        jsonSchema: null,
+        builtin: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    [
+      verdictTypeId,
+      {
+        id: verdictTypeId,
+        name: "评委结论",
+        kind: "file",
+        description: "",
+        jsonSchema: null,
+        builtin: false,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ],
+    [
       resultTypeId,
       {
         id: resultTypeId,
@@ -260,9 +312,30 @@ function resolved(
     port(RESUME_MATCH_JOB_PARSE_PORT, "file", jobTypeId),
     port(RESUME_MATCH_RESUME_PARSE_PORT, "file", resumeTypeId),
   ];
+  const parseOutputs = [
+    port(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobTypeId, "job.md"),
+    port(RESUME_MATCH_PARSED_RESUME_PORT, "file", parsedResumeTypeId, "resume.md"),
+  ];
+  const criticInputs = [
+    port(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobTypeId),
+    port(RESUME_MATCH_PARSED_RESUME_PORT, "file", parsedResumeTypeId),
+  ];
+  const criticOutputs = RESUME_MATCH_CRITIC_ACTION_NAMES.map((_, index) => [
+    port(
+      RESUME_MATCH_CRITIC_RESULT_PORT,
+      "file",
+      verdictTypeId,
+      `scores/critic-${index}.md`,
+    ),
+  ]);
+  const reportInputs = [
+    port(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobTypeId),
+    port(RESUME_MATCH_PARSED_RESUME_PORT, "file", parsedResumeTypeId),
+    port(RESUME_MATCH_REPORT_CRITICS_PORT, "file", verdictTypeId),
+  ];
   const reportOutputs = [
     port(
-      "结果",
+      RESUME_MATCH_REPORT_RESULT_PORT,
       "json",
       resultTypeId,
       options.artifactPath ?? RESUME_MATCH_RESULT_ARTIFACT,
@@ -311,6 +384,23 @@ function resolved(
     : [];
   const jobInputType = options.jobObjectTypeId ?? jobTypeId;
   const resumeInputType = options.resumeObjectTypeId ?? resumeTypeId;
+  const criticNodes = RESUME_MATCH_CRITIC_ACTION_NAMES.map((name, index) => ({
+    id: `critic-action-${index}`,
+    kind: "action" as const,
+    label: name,
+    inputs: criticInputs,
+    outputs: criticOutputs[index],
+  }));
+  const actionRow = (nodeId: string, actionId: string) => ({
+    id: nodeId,
+    workflowId,
+    kind: "action" as const,
+    actionId,
+    objectTypeId: null,
+    label: "",
+    x: 0,
+    y: 0,
+  });
   return {
     workflow: {
       id: workflowId,
@@ -339,13 +429,14 @@ function resolved(
         kind: "action",
         label: RESUME_MATCH_PARSE_ACTION_NAME,
         inputs: parseInputs,
-        outputs: [],
+        outputs: parseOutputs,
       },
+      ...criticNodes,
       {
         id: "report-action",
         kind: "action",
-        label: "简历评分·汇总",
-        inputs: [],
+        label: RESUME_MATCH_REPORT_ACTION_NAME,
+        inputs: reportInputs,
         outputs: reportOutputs,
       },
       {
@@ -371,52 +462,94 @@ function resolved(
         targetNodeId: "parse-action",
         targetPort: options.resumeTargetPort ?? RESUME_MATCH_RESUME_PARSE_PORT,
       },
+      ...criticNodes.flatMap((critic, index) => [
+        {
+          id: `critic-job-edge-${index}`,
+          sourceNodeId: "parse-action",
+          sourcePort: RESUME_MATCH_PARSED_JOB_PORT,
+          targetNodeId: critic.id,
+          targetPort: RESUME_MATCH_PARSED_JOB_PORT,
+        },
+        {
+          id: `critic-resume-edge-${index}`,
+          sourceNodeId: "parse-action",
+          sourcePort: RESUME_MATCH_PARSED_RESUME_PORT,
+          targetNodeId: critic.id,
+          targetPort: RESUME_MATCH_PARSED_RESUME_PORT,
+        },
+        {
+          id: `critic-report-edge-${index}`,
+          sourceNodeId: critic.id,
+          sourcePort: RESUME_MATCH_CRITIC_RESULT_PORT,
+          targetNodeId: "report-action",
+          targetPort: RESUME_MATCH_REPORT_CRITICS_PORT,
+        },
+      ]),
+      {
+        id: "report-job-edge",
+        sourceNodeId: "parse-action",
+        sourcePort: RESUME_MATCH_PARSED_JOB_PORT,
+        targetNodeId: "report-action",
+        targetPort: RESUME_MATCH_PARSED_JOB_PORT,
+      },
+      {
+        id: "report-resume-edge",
+        sourceNodeId: "parse-action",
+        sourcePort: RESUME_MATCH_PARSED_RESUME_PORT,
+        targetNodeId: "report-action",
+        targetPort: RESUME_MATCH_PARSED_RESUME_PORT,
+      },
       {
         id: "result-edge",
         sourceNodeId: "report-action",
-        sourcePort: "结果",
+        sourcePort: RESUME_MATCH_REPORT_RESULT_PORT,
         targetNodeId: "result-output",
         targetPort: "value",
       },
     ],
     nodeRows: new Map([
-      [
-        "parse-action",
-        {
-          id: "parse-action",
-          workflowId,
-          kind: "action" as const,
-          actionId: parseActionId,
-          objectTypeId: null,
-          label: "",
-          x: 0,
-          y: 0,
-        },
-      ],
-      [
-        "report-action",
-        {
-          id: "report-action",
-          workflowId,
-          kind: "action" as const,
-          actionId: reportActionId,
-          objectTypeId: null,
-          label: "",
-          x: 0,
-          y: 0,
-        },
-      ],
+      ["parse-action", actionRow("parse-action", parseActionId)],
+      ...criticActionIds.map(
+        (actionId, index) => [
+          `critic-action-${index}`,
+          actionRow(`critic-action-${index}`, actionId),
+        ] as const,
+      ),
+      ["report-action", actionRow("report-action", reportActionId)],
     ]),
     objectTypes: objectTypeRows,
     actionDefinitions: new Map([
-      [parseActionId, definition(parseActionId, RESUME_MATCH_PARSE_ACTION_NAME, parseInputs, [])],
-      [reportActionId, definition(reportActionId, "简历评分·汇总", [], reportOutputs)],
+      [
+        parseActionId,
+        definition(parseActionId, RESUME_MATCH_PARSE_ACTION_NAME, parseInputs, parseOutputs),
+      ],
+      ...criticActionIds.map(
+        (actionId, index) => [
+          actionId,
+          definition(
+            actionId,
+            RESUME_MATCH_CRITIC_ACTION_NAMES[index],
+            criticInputs,
+            criticOutputs[index],
+          ),
+        ] as const,
+      ),
+      [
+        reportActionId,
+        definition(
+          reportActionId,
+          RESUME_MATCH_REPORT_ACTION_NAME,
+          reportInputs,
+          reportOutputs,
+        ),
+      ],
     ]),
     capabilities: {
       skills: [],
       tools: toolRows,
-      toolNamesByActionId: new Map([
+      toolNamesByActionId: new Map<string, readonly string[]>([
         [parseActionId, []],
+        ...criticActionIds.map((actionId) => [actionId, []] as const),
         [
           reportActionId,
           validator && validatorReferenced ? [RESUME_MATCH_VALIDATOR_TOOL_NAME] : [],
@@ -507,6 +640,47 @@ describe("简历匹配工作流预检", () => {
     controls.resolveWorkflow.mockResolvedValue(graph);
     const result = await startResumeMatch(invocation);
     expect(result.ok).toBe(false);
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("缺少任一评审到汇总的结论边时在运行受理前失败", async () => {
+    const graph = resolved();
+    graph.edges = graph.edges.filter((edge) => edge.id !== "critic-report-edge-5");
+    controls.resolveWorkflow.mockResolvedValue(graph);
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: "简历匹配工作流必须保持解析、六位评审与汇总之间的完整固定编排",
+    });
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("重复一位评审冒充缺失评审时在运行受理前失败", async () => {
+    const graph = resolved();
+    const edge = graph.edges.find((candidate) => candidate.id === "critic-report-edge-5");
+    if (!edge) throw new Error("测试图缺少第六位评审结论边");
+    edge.sourceNodeId = "critic-action-0";
+    controls.resolveWorkflow.mockResolvedValue(graph);
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: "简历匹配工作流必须保持解析、六位评审与汇总之间的完整固定编排",
+    });
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("任一评审缺少岗位或简历来源边时在运行受理前失败", async () => {
+    const graph = resolved();
+    graph.edges = graph.edges.filter((edge) => edge.id !== "critic-resume-edge-4");
+    controls.resolveWorkflow.mockResolvedValue(graph);
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: "简历匹配工作流必须保持解析、六位评审与汇总之间的完整固定编排",
+    });
     expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
 

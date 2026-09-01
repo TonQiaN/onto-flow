@@ -13,6 +13,20 @@ export const RESUME_MATCH_RESUME_OBJECT_TYPE_NAME = "简历文件";
 export const RESUME_MATCH_PARSE_ACTION_NAME = "简历评分·解析";
 export const RESUME_MATCH_JOB_PARSE_PORT = "岗位文件";
 export const RESUME_MATCH_RESUME_PARSE_PORT = "简历文件";
+export const RESUME_MATCH_PARSED_JOB_PORT = "岗位要求";
+export const RESUME_MATCH_PARSED_RESUME_PORT = "简历";
+export const RESUME_MATCH_CRITIC_RESULT_PORT = "结论";
+export const RESUME_MATCH_REPORT_CRITICS_PORT = "评委结论";
+export const RESUME_MATCH_REPORT_RESULT_PORT = "结果";
+export const RESUME_MATCH_REPORT_ACTION_NAME = "简历评分·汇总";
+export const RESUME_MATCH_CRITIC_ACTION_NAMES = [
+  "简历评分·硬性条件",
+  "简历评分·技能匹配",
+  "简历评分·经验深度",
+  "简历评分·领域匹配",
+  "简历评分·履历稳定性",
+  "简历评分·真实性风险",
+] as const;
 export const RESUME_MATCH_OUTPUT_LABEL = "评分结果";
 export const RESUME_MATCH_RESULT_ARTIFACT = "match-result.json";
 export const RESUME_MATCH_RESULT_SCHEMA_VERSION = "1.0";

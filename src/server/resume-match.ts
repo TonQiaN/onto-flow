@@ -14,11 +14,18 @@ import {
 import { classifyEdges, downstreamOf, type ValidationIssue } from "@/lib/graph";
 import {
   parseResumeMatchResult,
+  RESUME_MATCH_CRITIC_ACTION_NAMES,
+  RESUME_MATCH_CRITIC_RESULT_PORT,
   RESUME_MATCH_JOB_INPUT_LABEL,
   RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
   RESUME_MATCH_JOB_PARSE_PORT,
   RESUME_MATCH_OUTPUT_LABEL,
   RESUME_MATCH_PARSE_ACTION_NAME,
+  RESUME_MATCH_PARSED_JOB_PORT,
+  RESUME_MATCH_PARSED_RESUME_PORT,
+  RESUME_MATCH_REPORT_ACTION_NAME,
+  RESUME_MATCH_REPORT_CRITICS_PORT,
+  RESUME_MATCH_REPORT_RESULT_PORT,
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
   RESUME_MATCH_RESUME_INPUT_LABEL,
@@ -179,6 +186,27 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
     );
   }
 
+  const actionNodes = resolved.nodes.filter((node) => node.kind === "action");
+  const uniqueAction = (name: string) => {
+    const matches = actionNodes.filter((node) => node.label === name);
+    return matches.length === 1 ? matches[0] : null;
+  };
+  const parseActionNode = uniqueAction(RESUME_MATCH_PARSE_ACTION_NAME);
+  const reportActionNode = uniqueAction(RESUME_MATCH_REPORT_ACTION_NAME);
+  const criticNodes = [] as typeof actionNodes;
+  for (const name of RESUME_MATCH_CRITIC_ACTION_NAMES) {
+    const node = uniqueAction(name);
+    if (node) criticNodes.push(node);
+  }
+  if (
+    !parseActionNode ||
+    !reportActionNode ||
+    criticNodes.length !== RESUME_MATCH_CRITIC_ACTION_NAMES.length ||
+    actionNodes.length !== RESUME_MATCH_CRITIC_ACTION_NAMES.length + 2
+  ) {
+    return "简历匹配工作流必须且只能包含解析、六位指定评审与汇总 Action";
+  }
+
   const jobOutgoing = resolved.edges.filter((edge) => edge.sourceNodeId === jobNode.id);
   const resumeOutgoing = resolved.edges.filter((edge) => edge.sourceNodeId === resumeNode.id);
   const jobEdge = jobOutgoing[0];
@@ -193,8 +221,7 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
     resumeOutgoing.length !== 1 ||
     jobEdge?.sourcePort !== "value" ||
     resumeEdge?.sourcePort !== "value" ||
-    parseNode?.kind !== "action" ||
-    parseNode.label !== RESUME_MATCH_PARSE_ACTION_NAME ||
+    parseNode?.id !== parseActionNode.id ||
     resumeEdge?.targetNodeId !== parseNode.id ||
     jobEdge?.targetPort !== RESUME_MATCH_JOB_PARSE_PORT ||
     resumeEdge?.targetPort !== RESUME_MATCH_RESUME_PARSE_PORT ||
@@ -227,7 +254,7 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
   const sourceNode = resolved.nodes.find((node) => node.id === incoming[0].sourceNodeId);
   const sourcePort = sourceNode?.outputs.find((port) => port.name === incoming[0].sourcePort);
   if (
-    sourceNode?.kind !== "action" ||
+    sourceNode?.id !== reportActionNode.id ||
     !sourcePort ||
     sourcePort.kind !== "json" ||
     sourcePort.objectTypeId !== outputPort.objectTypeId ||
@@ -244,6 +271,81 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
   );
   if (resultActionCanReenter) {
     return `「${RESUME_MATCH_OUTPUT_LABEL}」的上游 Action 不能位于回边重入范围内`;
+  }
+
+  // 专用入口不是任意图的通用执行器：六位评审缺一、重复一位，或只断开其中
+  // 一条岗位/简历/结论边，通用图仍可能合法，却会在付费后得到不完整评分。
+  const edgeTuple = (
+    sourceNodeId: string,
+    sourcePort: string,
+    targetNodeId: string,
+    targetPort: string,
+  ): readonly [string, string, string, string] => [
+    sourceNodeId,
+    sourcePort,
+    targetNodeId,
+    targetPort,
+  ];
+  const expectedEdges = [
+    edgeTuple(jobNode.id, "value", parseActionNode.id, RESUME_MATCH_JOB_PARSE_PORT),
+    edgeTuple(resumeNode.id, "value", parseActionNode.id, RESUME_MATCH_RESUME_PARSE_PORT),
+    ...criticNodes.flatMap((critic) => [
+      edgeTuple(
+        parseActionNode.id,
+        RESUME_MATCH_PARSED_JOB_PORT,
+        critic.id,
+        RESUME_MATCH_PARSED_JOB_PORT,
+      ),
+      edgeTuple(
+        parseActionNode.id,
+        RESUME_MATCH_PARSED_RESUME_PORT,
+        critic.id,
+        RESUME_MATCH_PARSED_RESUME_PORT,
+      ),
+      edgeTuple(
+        critic.id,
+        RESUME_MATCH_CRITIC_RESULT_PORT,
+        reportActionNode.id,
+        RESUME_MATCH_REPORT_CRITICS_PORT,
+      ),
+    ]),
+    edgeTuple(
+      parseActionNode.id,
+      RESUME_MATCH_PARSED_JOB_PORT,
+      reportActionNode.id,
+      RESUME_MATCH_PARSED_JOB_PORT,
+    ),
+    edgeTuple(
+      parseActionNode.id,
+      RESUME_MATCH_PARSED_RESUME_PORT,
+      reportActionNode.id,
+      RESUME_MATCH_PARSED_RESUME_PORT,
+    ),
+    edgeTuple(
+      reportActionNode.id,
+      RESUME_MATCH_REPORT_RESULT_PORT,
+      outputNode.id,
+      "value",
+    ),
+  ];
+  const edgeKey = (edge: readonly [string, string, string, string]) =>
+    JSON.stringify(edge);
+  const expectedEdgeKeys = expectedEdges.map(edgeKey).sort();
+  const actualEdgeKeys = resolved.edges
+    .map((edge) =>
+      edgeKey([
+        edge.sourceNodeId,
+        edge.sourcePort,
+        edge.targetNodeId,
+        edge.targetPort,
+      ]),
+    )
+    .sort();
+  if (
+    expectedEdgeKeys.length !== actualEdgeKeys.length ||
+    expectedEdgeKeys.some((key, index) => key !== actualEdgeKeys[index])
+  ) {
+    return "简历匹配工作流必须保持解析、六位评审与汇总之间的完整固定编排";
   }
   return null;
 }

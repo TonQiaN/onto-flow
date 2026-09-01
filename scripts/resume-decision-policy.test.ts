@@ -34,16 +34,16 @@ describe("简历评分闭环裁决契约", () => {
     );
     expect(criticKeys).toHaveLength(6);
     expect(source).toMatch(
-      /const report = upsertAction\(\{[\s\S]*?inputs: \[\s*\{ name: "岗位要求", objectTypeId: tJdMd \},\s*\{ name: "简历", objectTypeId: tResumeMd \},\s*\{ name: "评委结论", objectTypeId: tVerdict \},\s*\],\s*outputs:/,
+      /const report = upsertAction\(\{[\s\S]*?inputs: \[\s*\{ name: RESUME_MATCH_PARSED_JOB_PORT, objectTypeId: tJdMd \},\s*\{ name: RESUME_MATCH_PARSED_RESUME_PORT, objectTypeId: tResumeMd \},\s*\{ name: RESUME_MATCH_REPORT_CRITICS_PORT, objectTypeId: tVerdict \},\s*\],\s*outputs:/,
     );
     expect(source).toMatch(
-      /sourceNodeId: parseNode\.id,\s*sourcePort: "岗位要求",\s*targetNodeId: reportNode\.id,\s*targetPort: "岗位要求"/,
+      /sourceNodeId: parseNode\.id,\s*sourcePort: RESUME_MATCH_PARSED_JOB_PORT,\s*targetNodeId: reportNode\.id,\s*targetPort: RESUME_MATCH_PARSED_JOB_PORT/,
     );
     expect(source).toMatch(
-      /sourceNodeId: parseNode\.id,\s*sourcePort: "简历",\s*targetNodeId: reportNode\.id,\s*targetPort: "简历"/,
+      /sourceNodeId: parseNode\.id,\s*sourcePort: RESUME_MATCH_PARSED_RESUME_PORT,\s*targetNodeId: reportNode\.id,\s*targetPort: RESUME_MATCH_PARSED_RESUME_PORT/,
     );
     expect(source).toMatch(
-      /\.\.\.criticNodes\.map\(\(criticNode\) =>\s*edge\(\{\s*sourceNodeId: criticNode\.id,\s*sourcePort: "结论",\s*targetNodeId: reportNode\.id,\s*targetPort: "评委结论"/,
+      /\.\.\.criticNodes\.map\(\(criticNode\) =>\s*edge\(\{\s*sourceNodeId: criticNode\.id,\s*sourcePort: RESUME_MATCH_CRITIC_RESULT_PORT,\s*targetNodeId: reportNode\.id,\s*targetPort: RESUME_MATCH_REPORT_CRITICS_PORT/,
     );
   });
 
