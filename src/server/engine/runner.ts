@@ -189,6 +189,16 @@ function isPortValue(value: unknown): value is PortValue {
   return false;
 }
 
+/** JSON 输入在受理与物化阶段共用同一格式；递归过深等序列化失败不能逃成 500。 */
+function serializeJsonInput(value: unknown): string | null {
+  try {
+    const serialized = JSON.stringify(value, null, 2);
+    return serialized === undefined ? null : `${serialized}\n`;
+  } catch {
+    return null;
+  }
+}
+
 export async function startRun(
   workflowId: string,
   inputs: Record<string, unknown>,
@@ -254,12 +264,20 @@ export async function startResolvedRun(
     // 文字/JSON 输入的尺寸上限在校验期就判，超限走 422 而不是拿到 runId 后
     // 才在物化阶段异步失败——确定性的输入违规不该伪装成引擎故障（file 类的
     // 上限在上传边界已限，materializeRunInputs 的检查是纵深兜底）。
+    const serializedJson = value.kind === "json" ? serializeJsonInput(value.json) : null;
+    if (value.kind === "json" && serializedJson === null) {
+      issues.push({
+        nodeId: node.id,
+        message: `输入节点「${node.label}」的 JSON 内容无法安全序列化`,
+      });
+      continue;
+    }
     const inlineBytes =
       value.kind === "text"
         ? Buffer.byteLength(value.text, "utf8")
-        : value.kind === "json"
-          ? Buffer.byteLength(`${JSON.stringify(value.json, null, 2)}\n`, "utf8")
-          : 0;
+        : serializedJson === null
+          ? 0
+          : Buffer.byteLength(serializedJson, "utf8");
     if (inlineBytes > MAX_FILE_INPUT_BYTES) {
       issues.push({
         nodeId: node.id,
@@ -969,8 +987,10 @@ function materializeRunInputs(
     const label = nodes.find((node) => node.id === nodeId)?.label.trim() ?? "";
     const stem = safeBasename(label || "value");
     const name = boundedInputFilename(value.kind === "text" ? `${stem}.md` : `${stem}.json`);
-    const content =
-      value.kind === "text" ? value.text : `${JSON.stringify(value.json, null, 2)}\n`;
+    const content = value.kind === "text" ? value.text : serializeJsonInput(value.json);
+    if (content === null) {
+      throw new Error(`输入节点「${nodeId}」的 JSON 内容无法安全序列化`);
+    }
     if (Buffer.byteLength(content, "utf8") > MAX_FILE_INPUT_BYTES) {
       throw new Error(`输入节点「${nodeId}」的内容超过 32 MiB`);
     }

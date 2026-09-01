@@ -484,6 +484,32 @@ describe("运行输入物化", () => {
     );
   });
 
+  it("递归过深而无法序列化的 JSON 在受理边界返回 422", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(materializationWorkflow());
+    let json: Record<string, unknown> = {};
+    for (let depth = 0; depth < 20_000; depth += 1) json = { next: json };
+
+    await expect(
+      startRun("workflow-materialization", {
+        "text-input": { kind: "text", text: "正文" },
+        "json-input": { kind: "json", json },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 422,
+      error: "工作流校验未通过",
+      issues: [
+        {
+          nodeId: "json-input",
+          message: "输入节点「运行参数」的 JSON 内容无法安全序列化",
+        },
+      ],
+    });
+    expect(sqlite.prepare("SELECT COUNT(*) AS count FROM runs").get()).toEqual({ count: 0 });
+    expect(controls.launchRun).not.toHaveBeenCalled();
+  });
+
   it("超长中文节点名收敛为文件系统可接受的稳定文件名", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     fs.rmSync(runnerTestRoot, { recursive: true, force: true });

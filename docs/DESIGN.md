@@ -109,6 +109,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `data/` 内（`isWithinData` 在 startRun 入口 422 拦截，`resolveWithinData` 在 runner.ts
   物化时纵深兜底），`file.name` 用 `safeBasename` 只取 basename——防目录穿越读任意文件外泄、
   或覆盖工作区目标目录之外的文件。
+- **输入在受理边界可完整物化**：文字与 JSON 内容上限都是 32 MiB；JSON 按落盘格式预先
+  序列化，递归过深等无法安全序列化的输入以 422 拒绝，不得先建立运行再异步失败。
 - **文件输入原样物化，平台不做任何预处理（ADR-0011）**：所有文件输入原样拷贝为
   `inputs/<节点id>/<文件名>`；格式转换（抽文本、栅格化、逐页 `read_image`）是 Action 会话里
   模型用 `bash` 自己的工作。上传请求体在 multipart 解析前流式限流，单文件上限 32 MiB。
