@@ -157,9 +157,8 @@ interface Result {
   error?: string;
 }
 
-// backup_path 与正文在同一条 upsert 里落行：并行运行归档同一 plan_no 时，
-// 分开的 UPDATE 会交错出「行内容是 B 的、备份指针是 A 的」的撕裂状态；
-// 单条语句让最后写入者整行获胜，指针恒指向它自己刚写完的备份文件。
+// backup_path 与正文在同一条 upsert 里落行；BEGIN IMMEDIATE 还把“读取旧指针、
+// 写入新行”串成一个写入顺序。最后写入者整行获胜，并负责删除它替换掉的旧备份。
 const INSERT = \`INSERT INTO purchase_plans (
   plan_no, plan_title, plan_type, plan_year, org_units, category_summary,
   item_count, total_budget, budget_note, schedule_summary, review_conclusion,
@@ -238,6 +237,7 @@ export function apply(ctx: Context): void {
       const createdAt = new Date().toISOString();
       const db = new DatabaseSync(dbPath);
       let unownedBackupPath: string | null = null;
+      let transactionOpen = false;
       try {
         // 与 Next 进程共用同一个库文件，写入前先给足等待窗口。
         db.exec("PRAGMA busy_timeout = 5000;");
@@ -251,6 +251,13 @@ export function apply(ctx: Context): void {
         unownedBackupPath = backup.absolutePath;
         fs.mkdirSync(path.dirname(backup.absolutePath), { recursive: true });
         fs.writeFileSync(backup.absolutePath, args.plan_content, "utf8");
+        // 并发 upsert 必须在同一个写锁内先读旧指针；否则两个调用都可能只看到
+        // 更早的同一指针，后提交者无法得知并清理先提交者刚生成的备份。
+        db.exec("BEGIN IMMEDIATE;");
+        transactionOpen = true;
+        const previous = db
+          .prepare("SELECT backup_path AS backupPath FROM purchase_plans WHERE plan_no = ?")
+          .get(args.plan_no) as { backupPath: string | null } | undefined;
         db.prepare(INSERT).run(
           args.plan_no,
           args.plan_title,
@@ -269,8 +276,25 @@ export function apply(ctx: Context): void {
           backup.relativePath,
           createdAt,
         );
-        // upsert 成功后数据库行正式接管这份备份；后续读取回执失败也不能删它。
+        db.exec("COMMIT;");
+        transactionOpen = false;
+        // commit 后数据库行正式接管这份备份；后续读取回执失败也不能删它。
         unownedBackupPath = null;
+        const supersededCleanupError = removeSupersededBackup(
+          fs,
+          path,
+          dataDir,
+          previous?.backupPath ?? null,
+          backup.relativePath,
+        );
+        if (supersededCleanupError) {
+          return Promise.resolve({
+            ok: false,
+            planNo: args.plan_no,
+            backupPath: backup.relativePath,
+            error: \`归档已写入，但旧备份清理失败：\${supersededCleanupError}\`,
+          });
+        }
         const row = db
           .prepare("SELECT id FROM purchase_plans WHERE plan_no = ?")
           .get(args.plan_no) as { id: number } | undefined;
@@ -281,11 +305,20 @@ export function apply(ctx: Context): void {
           backupPath: backup.relativePath,
         });
       } catch (err) {
+        let rollbackError: string | null = null;
+        if (transactionOpen) {
+          try {
+            db.exec("ROLLBACK;");
+          } catch (error) {
+            rollbackError = error instanceof Error ? error.message : String(error);
+          }
+        }
         const cleanupError = removeUnownedBackup(fs, unownedBackupPath);
         return Promise.resolve({
           ok: false,
           error:
             (err instanceof Error ? err.message : String(err)) +
+            (rollbackError ? \`；数据库回滚失败：\${rollbackError}\` : "") +
             (cleanupError ? \`；失败备份清理失败：\${cleanupError}\` : ""),
         });
       } finally {

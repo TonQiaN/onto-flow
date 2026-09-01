@@ -38,8 +38,23 @@ export function purchasePlanBackupLocation(
   );
   return {
     relativePath,
-    absolutePath: resolveWithinData(pathModule, dataDir, relativePath),
+    absolutePath: resolvePurchasePlanBackupPath(pathModule, dataDir, relativePath),
   };
+}
+
+/** 数据库里的旧备份指针只能落在 data/documents/ 下，不能借清理路径删除其他运行数据。 */
+export function resolvePurchasePlanBackupPath(
+  pathModule: typeof path,
+  dataDir: string,
+  relativePath: string,
+): string {
+  const absolute = resolveWithinData(pathModule, dataDir, relativePath);
+  const documentsRoot = pathModule.resolve(dataDir, "documents");
+  const relative = pathModule.relative(documentsRoot, absolute);
+  if (relative === "" || relative.startsWith("..") || pathModule.isAbsolute(relative)) {
+    throw new Error("归档备份路径不在 data/documents/ 目录内");
+  }
+  return absolute;
 }
 
 /** 数据库尚未接管备份路径时，失败分支必须删除临时归档；ENOENT 视为已经清理。 */
@@ -64,12 +79,35 @@ export function removeUnownedBackup(
   }
 }
 
+/** upsert 已让新备份接管数据库行后，删除不再有主人的上一版；越界指针拒绝删除。 */
+export function removeSupersededBackup(
+  fsModule: Pick<typeof fs, "unlinkSync">,
+  pathModule: typeof path,
+  dataDir: string,
+  previousRelativePath: string | null,
+  currentRelativePath: string,
+): string | null {
+  if (previousRelativePath === null || previousRelativePath === currentRelativePath) {
+    return null;
+  }
+  try {
+    return removeUnownedBackup(
+      fsModule,
+      resolvePurchasePlanBackupPath(pathModule, dataDir, previousRelativePath),
+    );
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /** Tool 被物化到运行目录，故把同一份已测试函数源码嵌进插件而不是复制一套实现。 */
 export const PURCHASE_PLAN_PATH_HELPERS_SOURCE = [
   safePlanNoPathSegment,
   resolveWithinData,
+  resolvePurchasePlanBackupPath,
   purchasePlanBackupLocation,
   removeUnownedBackup,
+  removeSupersededBackup,
 ]
   .map((fn) => fn.toString())
   .join("\n\n");

@@ -27,7 +27,7 @@ import {
   isRunExecutionActive,
   startRun,
 } from "../src/server/engine/runner";
-import { abortRunBatch, requireWholeBatch } from "./batch-runs";
+import { abortRunBatch, admitWholeBatch } from "./batch-runs";
 import {
   createAction,
   loadActionDto,
@@ -293,15 +293,12 @@ async function main(): Promise<void> {
     { length: RUN_COUNT },
     (_, i) => `并行冒烟标记-${String(i + 1).padStart(width, "0")}号`,
   );
-  const started = await Promise.all(
+  const runIds = await admitWholeBatch(
     markers.map((marker) =>
       startRun(wf.id, { [INPUT_NODE_ID]: { kind: "text", text: `${marker}：这是本运行的专属需求，原样誊写即可。` } }),
     ),
+    { cancelRun, isRunExecutionActive },
   );
-  const runIds = await requireWholeBatch(started, {
-    cancelRun,
-    isRunExecutionActive,
-  });
   console.log(`已同时启动 ${runIds.length} 个运行`);
 
   const t0 = Date.now();

@@ -16,7 +16,7 @@ import {
   isRunExecutionActive,
   startRun,
 } from "../src/server/engine/runner";
-import { abortRunBatch, requireWholeBatch } from "./batch-runs";
+import { abortRunBatch, admitWholeBatch } from "./batch-runs";
 import { seedLeetcodeWorkflow, LEETCODE_INPUT_NODE_ID } from "./seed-leetcode";
 import { runSandboxedPythonVerification } from "./leetcode-verifier";
 import type { PortValue } from "../src/lib/values";
@@ -59,17 +59,14 @@ async function main(): Promise<void> {
   const { workflowId } = seedLeetcodeWorkflow();
   console.log(`工作流已就绪（${workflowId}），同时发起 ${RUN_COUNT} 个运行`);
 
-  const started = await Promise.all(
+  const runIds = await admitWholeBatch(
     Array.from({ length: RUN_COUNT }, () =>
       startRun(workflowId, {
         [LEETCODE_INPUT_NODE_ID]: { kind: "text", text: PROBLEM },
       }),
     ),
+    { cancelRun, isRunExecutionActive },
   );
-  const runIds = await requireWholeBatch(started, {
-    cancelRun,
-    isRunExecutionActive,
-  });
 
   const t0 = Date.now();
   for (;;) {

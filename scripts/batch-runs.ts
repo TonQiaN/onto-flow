@@ -59,21 +59,27 @@ export async function abortRunBatch(
 }
 
 /**
- * 批量准入必须全有或全撤：只要一项被 429/校验拒绝，就取消同批已受理运行并
- * 等执行器退出后再报错，避免付费脚本因 Promise.all 的部分成功留下无人照看的运行。
+ * 批量准入必须全有或全撤：同时等待每个启动 Promise，无论其中一项返回拒绝还是
+ * 直接抛错，都保留其他已受理的 runId，取消并等执行器退出后才把失败交还调用方。
  */
-export async function requireWholeBatch(
-  started: readonly StartRunResult[],
+export async function admitWholeBatch(
+  starts: readonly Promise<StartRunResult>[],
   options: BatchCleanupOptions,
 ): Promise<string[]> {
-  const rejected = started.flatMap((result, index) =>
-    result.ok ? [] : [{ index, result }],
+  const settled = await Promise.allSettled(starts);
+  const failures = settled.flatMap((entry, index) => {
+    if (entry.status === "rejected") {
+      const reason =
+        entry.reason instanceof Error ? entry.reason.message : String(entry.reason);
+      return [`第 ${index + 1} 个运行启动异常：${reason}`];
+    }
+    return entry.value.ok
+      ? []
+      : [`第 ${index + 1} 个运行启动失败：${JSON.stringify(entry.value)}`];
+  });
+  const runIds = settled.flatMap((entry) =>
+    entry.status === "fulfilled" && entry.value.ok ? [entry.value.runId] : [],
   );
-  const runIds = started.flatMap((result) => (result.ok ? [result.runId] : []));
-  if (rejected.length === 0) return runIds;
-
-  const failures = rejected
-    .map(({ index, result }) => `第 ${index + 1} 个运行启动失败：${JSON.stringify(result)}`)
-    .join("；");
-  return abortRunBatch(runIds, failures, options);
+  if (failures.length === 0) return runIds;
+  return abortRunBatch(runIds, failures.join("；"), options);
 }

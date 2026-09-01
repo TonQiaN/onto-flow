@@ -1,15 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StartRunResult } from "../src/server/engine/runner";
-import { abortRunBatch, requireWholeBatch } from "./batch-runs";
+import { abortRunBatch, admitWholeBatch } from "./batch-runs";
 
 describe("付费批量运行准入", () => {
   it("全部受理时原样返回运行 id，不发取消", async () => {
     const cancelRun = vi.fn();
     await expect(
-      requireWholeBatch(
+      admitWholeBatch(
         [
-          { ok: true, runId: "run-1" },
-          { ok: true, runId: "run-2" },
+          Promise.resolve({ ok: true as const, runId: "run-1" }),
+          Promise.resolve({ ok: true as const, runId: "run-2" }),
         ],
         { cancelRun, isRunExecutionActive: () => false },
       ),
@@ -30,7 +30,7 @@ describe("付费批量运行准入", () => {
     ];
 
     await expect(
-      requireWholeBatch(started, {
+      admitWholeBatch(started.map((result) => Promise.resolve(result)), {
         cancelRun,
         isRunExecutionActive: (runId) => active.has(runId),
         settleTimeoutMs: 20,
@@ -47,13 +47,37 @@ describe("付费批量运行准入", () => {
     ];
 
     await expect(
-      requireWholeBatch(started, {
+      admitWholeBatch(started.map((result) => Promise.resolve(result)), {
         cancelRun: async () => ({ ok: true }),
         isRunExecutionActive: () => true,
         settleTimeoutMs: 0,
         pollIntervalMs: 1,
       }),
     ).rejects.toThrow("1 个执行器在 0ms 内未退出：run-stuck");
+  });
+
+  it("一个启动 Promise 抛错时仍取消其他已经受理的运行", async () => {
+    const active = new Set(["run-1"]);
+    const cancelRun = vi.fn(async (runId: string) => {
+      active.delete(runId);
+      return { ok: true as const };
+    });
+
+    await expect(
+      admitWholeBatch(
+        [
+          Promise.resolve({ ok: true as const, runId: "run-1" }),
+          Promise.reject(new Error("数据库暂时不可写")),
+        ],
+        {
+          cancelRun,
+          isRunExecutionActive: (runId) => active.has(runId),
+          settleTimeoutMs: 20,
+          pollIntervalMs: 1,
+        },
+      ),
+    ).rejects.toThrow("第 2 个运行启动异常：数据库暂时不可写；已取消并收束同批已受理的 1 个运行");
+    expect(cancelRun).toHaveBeenCalledWith("run-1");
   });
 
   it("批量脚本等待超时时取消并等齐所有已受理运行", async () => {

@@ -80,7 +80,8 @@ npm run dev
 打开 http://localhost:3592 ，进入「工作流 → 采购集采计划生成」，点「运行」并上传
 `data/samples/采购需求示例.txt`，即可看到四个 Action 依次真实执行：
 需求整理 → 集采计划生成 → 集采计划审核（结构化 JSON 评价）→ 集采计划归档
-（经 `save_purchase_plan` 工具写入 `purchase_plans` 表 + 备份 Markdown 到 `data/documents/`）。
+（经 `save_purchase_plan` 工具写入 `purchase_plans` 表 + 备份 Markdown 到 `data/documents/`；
+同一计划编号再次归档会替换数据库行并清理上一份备份）。
 
 第二个案例先执行 `npx tsx scripts/seed-resume.ts`，再进入「工作流 → 简历匹配评分」。岗位与
 简历都可上传 PDF、Markdown 或纯文本；文件以原件进入工作区，「简历评分·解析」使用

@@ -113,7 +113,7 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - **孤儿运行对账**：`src/instrumentation.ts` 启动钩子调用 `reconcileOrphanRuns`，把上次进程
   遗留的 `running` run 及其 running/pending 节点失败化——否则 SSE 结束条件永假、无限轮询。
 - **模型输出用作文件名前先净化**：`save_purchase_plan` 里 `plan_no` 由模型产出，拼进备份
-  文件名前先取 basename、做 NFKC 归一与字符白名单净化；最终绝对路径再约束在 `data/` 内，
+  文件名前先取 basename、做 NFKC 归一与字符白名单净化；最终绝对路径再约束在 `data/documents/` 内，
   防止穿越写出 `documents/` 之外。
 - **HMR 下的运行所有权**：取消标记与在跑子进程句柄挂在 `globalThis`，使开发期 HMR 不会丢失
   对现存运行的取消和收束能力；运行结束必须删除对应句柄与取消标记。
@@ -126,7 +126,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - Skills：集采计划编制规范、集采计划审核要点（全文见 erp-seed.json）。
 - Tool：save_purchase_plan——物化为 cordis 插件并在本运行的 harness 子进程执行，用 `node:sqlite` 打开
   `process.env.ONTOFLOW_DB_PATH` 写 purchase_plans（17 字段见 schema.ts），备份 Markdown 写
-  `ONTOFLOW_DATA_DIR/documents/<safePlanNo>-<日期>.md`，返回 { id, planNo, backupPath }。
+  `ONTOFLOW_DATA_DIR/documents/<safePlanNo>-<日期>-<UUID>.md`；同一 `plan_no` 的并发 upsert 以
+  `BEGIN IMMEDIATE` 排定顺序，提交新指针后删除被替换的旧备份，返回 { id, planNo, backupPath }。
 - Actions（prompt/rule 全文见 erp-seed.json）：需求整理(deepseek, low)、集采计划生成(deepseek, high)、
   集采计划审核(deepseek, high；输出 审核评价+集采计划透传)、集采计划归档(deepseek, low；引用 save_purchase_plan)。
 - Workflow「采购集采计划生成」：输入节点(需求文件) → 需求整理 → 集采计划生成 → 集采计划审核 →

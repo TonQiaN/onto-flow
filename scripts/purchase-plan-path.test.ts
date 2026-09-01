@@ -5,6 +5,8 @@ import {
   PURCHASE_PLAN_PATH_HELPERS_SOURCE,
   purchasePlanBackupLocation,
   removeUnownedBackup,
+  removeSupersededBackup,
+  resolvePurchasePlanBackupPath,
 } from "./purchase-plan-path";
 
 const seedSource = fs.readFileSync(new URL("./seed.ts", import.meta.url), "utf8");
@@ -64,10 +66,47 @@ describe("集采计划归档路径", () => {
     }
   });
 
+  it("重复归档只删除 data/documents 内已被替换的旧备份", () => {
+    const root = fs.mkdtempSync(path.join("/tmp", "ontoflow-purchase-backup-"));
+    const documents = path.join(root, "documents");
+    const previous = path.join(documents, "CPP-001-old.md");
+    try {
+      fs.mkdirSync(documents, { recursive: true });
+      fs.writeFileSync(previous, "old");
+      expect(
+        removeSupersededBackup(
+          fs,
+          path,
+          root,
+          "documents/CPP-001-old.md",
+          "documents/CPP-001-new.md",
+        ),
+      ).toBeNull();
+      expect(fs.existsSync(previous)).toBe(false);
+      expect(
+        removeSupersededBackup(fs, path, root, "runs/other/artifact.md", "documents/new.md"),
+      ).toBe("归档备份路径不在 data/documents/ 目录内");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("旧备份路径解析拒绝 documents 根目录和其他数据目录", () => {
+    expect(() => resolvePurchasePlanBackupPath(path, "/tmp/data", "documents")).toThrow(
+      "归档备份路径不在 data/documents/ 目录内",
+    );
+    expect(() => resolvePurchasePlanBackupPath(path, "/tmp/data", "runs/a.md")).toThrow(
+      "归档备份路径不在 data/documents/ 目录内",
+    );
+  });
+
   it("生成插件嵌入失败备份清理函数", () => {
     expect(PURCHASE_PLAN_PATH_HELPERS_SOURCE).toContain("removeUnownedBackup");
+    expect(PURCHASE_PLAN_PATH_HELPERS_SOURCE).toContain("removeSupersededBackup");
     expect(seedSource).toContain("let unownedBackupPath: string | null = null;");
     expect(seedSource).toContain("unownedBackupPath = null;");
     expect(seedSource).toContain("removeUnownedBackup(fs, unownedBackupPath)");
+    expect(seedSource).toContain('db.exec("BEGIN IMMEDIATE;")');
+    expect(seedSource).toContain("removeSupersededBackup(");
   });
 });
