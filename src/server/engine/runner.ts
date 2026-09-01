@@ -62,7 +62,17 @@ export type CancelRunResult =
 /** 运行由哪个受理边界发起；专用入口只读取自己留下的持久来源证明。 */
 export type RunInvocationProvenance =
   | { source: "workflow" }
-  | { source: "resume-match-api"; contractVersion: 1 };
+  | {
+      source: "resume-match-api";
+      contractVersion: 1;
+      resultNodes: { outputNodeId: string; validatorNodeId: string };
+    };
+
+export type RunCompletionGate = (
+  runId: string,
+) =>
+  | { ok: true; evidence: Record<string, unknown> }
+  | { ok: false; error: string };
 
 /**
  * 进程级取消标记。executeRun 在每个节点开始前查它，已取消则停止调度剩余节点
@@ -222,6 +232,7 @@ export async function startResolvedRun(
   inputs: Record<string, unknown>,
   settings: SettingsDocument,
   invocation: RunInvocationProvenance,
+  completionGate?: RunCompletionGate,
 ): Promise<StartRunResult> {
   const issues = validateGraph(resolved.nodes, resolved.edges);
   for (const node of resolved.nodes) {
@@ -359,7 +370,7 @@ export async function startResolvedRun(
   // 异步执行，立即返回 runId。activeRuns 覆盖 executeRun 启动前到异常兜底后的
   // 全部生命期；cancelRun 提前写下 cancelled 也不能让清理路径误判为已经静止。
   activeRuns.add(runId);
-  void executeRun(runId, resolved, runInputs, settings, invocation)
+  void executeRun(runId, resolved, runInputs, settings, invocation, completionGate)
     .catch((err) => {
       failWholeRun(runId, err instanceof Error ? err.message : String(err));
     })
@@ -419,6 +430,7 @@ async function executeRun(
   rawInputs: Record<string, PortValue>,
   globalSettings: SettingsDocument,
   invocation: RunInvocationProvenance,
+  completionGate?: RunCompletionGate,
 ): Promise<void> {
   const { nodes, edges } = resolved;
   const { backEdgeIds } = classifyEdges(nodes, edges);
@@ -788,6 +800,36 @@ async function executeRun(
       disposalFailures.add(runId);
       firstError ??= `运行子进程无法确认已退出：${err instanceof Error ? err.message : String(err)}`;
       console.error("[engine] 子进程收束失败", runId, err);
+    }
+  }
+
+  // 专用调用入口可在引擎写 success 前复核业务完成条件。证据只有在复核通过后
+  // 才与运行元数据一起持久化；事件日志随后可按保留策略清理，不会让既有成功运行
+  // 失去读取依据。回调或证据落库失败都把本次运行收束为 failed。
+  if (!cancelled && !isRunCancelled(runId) && firstError === null && completionGate) {
+    try {
+      const completion = completionGate(runId);
+      if (!completion.ok) {
+        firstError = `运行完成校验失败：${completion.error}`;
+      } else {
+        const row = db
+          .select({ imports: runs.imports })
+          .from(runs)
+          .where(eq(runs.id, runId))
+          .get();
+        if (!row) throw new Error("运行记录不存在");
+        db.update(runs)
+          .set({
+            imports: {
+              ...(row.imports ?? {}),
+              completion: completion.evidence,
+            },
+          })
+          .where(eq(runs.id, runId))
+          .run();
+      }
+    } catch (error) {
+      firstError = `运行完成校验失败：${error instanceof Error ? error.message : String(error)}`;
     }
   }
 

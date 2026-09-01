@@ -16,6 +16,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { db, skills } from "@/db";
 import { DATA_DIR } from "@/server/fs-safety";
 import { assertSafeName } from "@/server/harness/ids";
@@ -29,16 +30,12 @@ function quote(value: string): string {
 }
 
 /**
- * 库实体 → 上游认得的技能名。ASCII 部分尽量保留可读性，恒缀 6 位 id 保证唯一：
- * 两个中文名派生出的 ASCII 段可能都为空，没有后缀就会撞成同一个目录。
+ * 库实体 → 上游认得的稳定技能名。目录不能依赖展示名：运行工作区持有的是指向
+ * 这个目录的活链接，改名若换目录会让已经受理的运行断链。id 的摘要既满足上游
+ * ASCII slug 约束，也避免把数据库 id 的标点规则扩散到技能协议。
  */
-export function skillSlug(skill: { id: string; name: string }): string {
-  const ascii = skill.name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  const suffix = skill.id.replace(/[^a-z0-9]/g, "").slice(0, 6) || "000000";
-  return ascii ? `${ascii}-${suffix}` : `skill-${suffix}`;
+export function skillSlug(skill: { id: string }): string {
+  return `skill-${createHash("sha256").update(skill.id, "utf8").digest("hex").slice(0, 20)}`;
 }
 
 function skillDir(slug: string): string {
@@ -47,8 +44,8 @@ function skillDir(slug: string): string {
 }
 
 /**
- * 把一个 Skill 写进磁盘投影。改名时传入旧名字，旧目录一并移除——
- * 否则库里改了名，磁盘上会多出一个没人引用却仍会被发现的技能。
+ * 把一个 Skill 写进磁盘投影。目录只由 id 决定，改名与正文更新都在同一路径内
+ * 原子替换 SKILL.md，已经受理的运行所持活链接不会失效。
  */
 export function materializeSkill(skill: {
   id: string;

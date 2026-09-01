@@ -19,7 +19,7 @@ export const RESUME_MATCH_RESULT_SCHEMA_VERSION = "1.0";
 export const RESUME_MATCH_VALIDATOR_TOOL_NAME = "validate_resume_match_result";
 /** seed 生成的权威 Tool 源码摘要；实现变化必须经过代码审查后显式更新此 pin。 */
 export const RESUME_MATCH_VALIDATOR_TOOL_SHA256 =
-  "600612e9bccc019013c58be00ae9c82155e1fedaa164d4af71048c9ef3a9f386";
+  "080d8fea2c8ebedeeadda585da547cb8d762d0460c796c626162cfaf4b014a64";
 
 export const RESUME_MATCH_DIMENSIONS = [
   "mustHave",

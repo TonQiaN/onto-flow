@@ -115,6 +115,7 @@ const pendingUsageSettlements = new Map<string, Promise<void>>();
 }).ontoflowPendingUsageSettlements = pendingUsageSettlements;
 
 let startRun: typeof import("./runner").startRun;
+let startResolvedRun: typeof import("./runner").startResolvedRun;
 let cancelRun: typeof import("./runner").cancelRun;
 let isRunExecutionActive: typeof import("./runner").isRunExecutionActive;
 let deleteRun: typeof import("../monitor/cleanup").deleteRun;
@@ -448,7 +449,7 @@ function loopWorkflow(): ResolvedWorkflow {
 }
 
 beforeAll(async () => {
-  ({ startRun, cancelRun, isRunExecutionActive } = await import("./runner"));
+  ({ startRun, startResolvedRun, cancelRun, isRunExecutionActive } = await import("./runner"));
   ({ deleteRun } = await import("../monitor/cleanup"));
   ({ UnsettledRunLaunchError } = await import("../harness/launch"));
 });
@@ -476,6 +477,88 @@ afterAll(() => {
 });
 
 describe("运行输入物化", () => {
+  it("专用入口完成校验通过后把证据固化到运行元数据", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+    const graph = materializationWorkflow();
+    controls.runActionNode.mockResolvedValue({
+      outputs: { 结果: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    const completionGate = vi.fn(() => ({
+      ok: true as const,
+      evidence: { kind: "test-contract", digest: "abc123" },
+    }));
+
+    const startedRun = await startResolvedRun(
+      graph,
+      {
+        "text-input": { kind: "text", text: "正文" },
+        "json-input": { kind: "json", json: { ok: true } },
+      },
+      {
+        modelApiKeyEnv: "DEEPSEEK_API_KEY",
+        modelBaseUrl: "",
+        credentialRefs: [],
+        mcpServers: [],
+        disabledTools: [],
+      },
+      { source: "workflow" },
+      completionGate,
+    );
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("select status, imports from runs where id = ?")
+        .get(startedRun.runId) as { status: string; imports: string };
+      expect(run.status).toBe("success");
+      expect(JSON.parse(run.imports)).toMatchObject({
+        invocation: { source: "workflow" },
+        completion: { kind: "test-contract", digest: "abc123" },
+      });
+    });
+    expect(completionGate).toHaveBeenCalledWith(startedRun.runId);
+  });
+
+  it("专用入口完成证据缺失时收束为 failed 而不是留下不可读 success", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+    const graph = materializationWorkflow();
+    controls.runActionNode.mockResolvedValue({
+      outputs: { 结果: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+
+    const startedRun = await startResolvedRun(
+      graph,
+      {
+        "text-input": { kind: "text", text: "正文" },
+        "json-input": { kind: "json", json: { ok: true } },
+      },
+      {
+        modelApiKeyEnv: "DEEPSEEK_API_KEY",
+        modelBaseUrl: "",
+        credentialRefs: [],
+        mcpServers: [],
+        disabledTools: [],
+      },
+      { source: "workflow" },
+      () => ({ ok: false, error: "权威回执未落库" }),
+    );
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("select status, error from runs where id = ?")
+        .get(startedRun.runId) as { status: string; error: string };
+      expect(run.status).toBe("failed");
+      expect(run.error).toBe("运行完成校验失败：权威回执未落库");
+    });
+  });
+
   it("文字与 JSON 在 Action 启动前完整落盘并改写成文件引用", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     fs.rmSync(runnerTestRoot, { recursive: true, force: true });

@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../db/schema";
 import {
@@ -90,7 +91,9 @@ CREATE TABLE run_events (
 `);
 (globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
 
-const { readResumeMatchRun, startResumeMatch } = await import("./resume-match");
+const { captureResumeMatchCompletion, readResumeMatchRun, startResumeMatch } = await import(
+  "./resume-match"
+);
 
 const workflowId = "resume-workflow";
 const resultTypeId = "resume-result-type";
@@ -105,7 +108,11 @@ const invocation = {
   resume: { kind: "file" as const, file: { path: "uploads/resume.md", name: "resume.md", mime: "text/markdown" } },
 };
 const resumeMatchImports = JSON.stringify({
-  invocation: { source: "resume-match-api", contractVersion: 1 },
+  invocation: {
+    source: "resume-match-api",
+    contractVersion: 1,
+    resultNodes: { outputNodeId: "result-output", validatorNodeId: "report-action" },
+  },
 });
 
 function validResult(): ResumeMatchResult {
@@ -478,7 +485,12 @@ describe("简历匹配工作流预检", () => {
         "resume-input": invocation.resume,
       },
       expect.objectContaining({ disabledTools: [] }),
-      { source: "resume-match-api", contractVersion: 1 },
+      {
+        source: "resume-match-api",
+        contractVersion: 1,
+        resultNodes: { outputNodeId: "result-output", validatorNodeId: "report-action" },
+      },
+      expect.any(Function),
     );
   });
 
@@ -601,7 +613,12 @@ describe("简历匹配工作流预检", () => {
       graph,
       expect.any(Object),
       expect.any(Object),
-      { source: "resume-match-api", contractVersion: 1 },
+      {
+        source: "resume-match-api",
+        contractVersion: 1,
+        resultNodes: { outputNodeId: "result-output", validatorNodeId: "report-action" },
+      },
+      expect.any(Function),
     );
   });
 });
@@ -625,7 +642,7 @@ describe("简历匹配运行结果", () => {
     });
   });
 
-  it("严格 JSON 仍须汇总 Action 留下 validator valid=true 持久回执", () => {
+  it("success 前固化 validator 回执，事件清理后仍能读取严格 JSON", () => {
     const result = validResult();
     const resultPath = path.join(tempRoot, RESUME_MATCH_RESULT_ARTIFACT);
     fs.writeFileSync(resultPath, JSON.stringify(result), "utf8");
@@ -685,16 +702,19 @@ describe("简历匹配运行结果", () => {
         JSON.stringify({
           tool: RESUME_MATCH_VALIDATOR_TOOL_NAME,
           status: "ok",
-          output: JSON.stringify({ valid: false, errors: ["未通过"] }),
+          output: JSON.stringify({ valid: false, errors: ["未通过"], resultSha256: "" }),
         }),
       );
 
     expect(readResumeMatchRun("run-1")).toEqual({
       ok: false,
       status: 500,
-      error: `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的 valid=true 持久回执`,
+      error: `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 对当前结果的持久完成证据`,
     });
 
+    const resultSha256 = createHash("sha256")
+      .update(JSON.stringify(result), "utf8")
+      .digest("hex");
     sqlite
       .prepare(
         "insert into run_events (run_id, node_id, ts, type, payload) values ('run-1', 'report-action', 101, 'tool', ?)",
@@ -703,9 +723,34 @@ describe("简历匹配运行结果", () => {
         JSON.stringify({
           tool: RESUME_MATCH_VALIDATOR_TOOL_NAME,
           status: "ok",
-          output: JSON.stringify({ valid: true, errors: [] }),
+          output: JSON.stringify({ valid: true, errors: [], resultSha256 }),
         }),
       );
+
+    fs.writeFileSync(resultPath, `${JSON.stringify(result)}\n`, "utf8");
+    expect(
+      captureResumeMatchCompletion("run-1", {
+        outputNodeId: "result-output",
+        validatorNodeId: "report-action",
+      }),
+    ).toEqual({ ok: false, error: "评分结果在机械校验后发生了变化" });
+    fs.writeFileSync(resultPath, JSON.stringify(result), "utf8");
+
+    const completion = captureResumeMatchCompletion("run-1", {
+      outputNodeId: "result-output",
+      validatorNodeId: "report-action",
+    });
+    expect(completion.ok).toBe(true);
+    if (!completion.ok) return;
+    sqlite
+      .prepare("update runs set imports = ? where id = 'run-1'")
+      .run(
+        JSON.stringify({
+          ...JSON.parse(resumeMatchImports),
+          completion: completion.evidence,
+        }),
+      );
+    sqlite.prepare("delete from run_events where run_id = 'run-1'").run();
 
     expect(readResumeMatchRun("run-1")).toMatchObject({
       ok: true,
@@ -713,7 +758,7 @@ describe("简历匹配运行结果", () => {
     });
   });
 
-  it("按运行时修订的 output 节点 id 读取，不受同名 Action 与当前图改写影响", () => {
+  it("按受理时持久节点 id 读取，不受同毫秒新修订与同名 Action 影响", () => {
     sqlite
       .prepare(
         "insert into revisions (id, entity_kind, entity_id, version_no, payload, created_at) values (?, 'workflow', ?, ?, ?, ?)",
@@ -747,16 +792,41 @@ describe("简历匹配运行结果", () => {
         workflowId,
         2,
         JSON.stringify({
-          nodes: [{ id: "replacement-output", kind: "output", label: "评分结果" }],
-          edges: [],
+          nodes: [
+            { id: "replacement-validator", kind: "action", label: "新汇总" },
+            { id: "replacement-output", kind: "output", label: "评分结果" },
+          ],
+          edges: [
+            {
+              sourceNodeId: "replacement-validator",
+              sourcePort: "结果",
+              targetNodeId: "replacement-output",
+              targetPort: "value",
+            },
+          ],
         }),
-        150,
+        100,
       );
     sqlite
       .prepare(
         "insert into runs (id, workflow_id, status, workflow_name, run_dir, imports, started_at, finished_at) values (?, ?, 'success', ?, ?, ?, 100, 101)",
       )
-      .run("run-1", workflowId, "简历匹配评分", tempRoot, resumeMatchImports);
+      .run(
+        "run-1",
+        workflowId,
+        "简历匹配评分",
+        tempRoot,
+        JSON.stringify({
+          invocation: {
+            source: "resume-match-api",
+            contractVersion: 1,
+            resultNodes: {
+              outputNodeId: "result-output",
+              validatorNodeId: "same-label-action",
+            },
+          },
+        }),
+      );
     sqlite
       .prepare(
         "insert into run_nodes (id, run_id, node_id, label, status, outputs) values (?, ?, ?, ?, 'success', ?)",
@@ -782,6 +852,16 @@ describe("简历匹配运行结果", () => {
           },
         }),
       );
+    sqlite
+      .prepare(
+        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('replacement-row', 'run-1', 'replacement-output', '评分结果', 'success', '{}')",
+      )
+      .run();
+    sqlite
+      .prepare(
+        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('replacement-validator-row', 'run-1', 'replacement-validator', '新汇总', 'success', '{}')",
+      )
+      .run();
 
     expect(readResumeMatchRun("run-1")).toEqual({
       ok: false,

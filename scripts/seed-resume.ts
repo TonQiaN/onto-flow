@@ -224,6 +224,7 @@ function upsertAction(input: {
  */
 const VALIDATE_RESUME_MATCH_TOOL_CODE = `import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { Context } from "@deepseek-ai/cordis";
 
 // seed 由 tsx 转译；Function#toString 会保留 esbuild 加在嵌套函数后的 __name 调用，
@@ -262,8 +263,12 @@ export function apply(ctx: Context): void {
         properties: {
           valid: { type: "boolean" },
           errors: { type: "array", items: { type: "string" } },
+          resultSha256: {
+            type: "string",
+            description: "本次校验实际读取的结果文件 SHA-256；无法读取时为空字符串",
+          },
         },
-        required: ["valid", "errors"],
+        required: ["valid", "errors", "resultSha256"],
       },
       // 签名是 (args, value)：第一个参数是调用参数，第二个才是返回值。
       render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }],
@@ -271,7 +276,7 @@ export function apply(ctx: Context): void {
     async execute(args: { result_path: string }) {
       const root = fs.realpathSync.native(process.cwd());
       if (path.isAbsolute(args.result_path)) {
-        return { valid: false, errors: ["result_path 必须是工作区相对路径"] };
+        return { valid: false, errors: ["result_path 必须是工作区相对路径"], resultSha256: "" };
       }
       const candidate = path.resolve(root, args.result_path);
       const expected = path.resolve(root, ${JSON.stringify(RESUME_MATCH_RESULT_ARTIFACT)});
@@ -279,35 +284,39 @@ export function apply(ctx: Context): void {
         return {
           valid: false,
           errors: ["result_path 必须指向固定产物 ${RESUME_MATCH_RESULT_ARTIFACT}"],
+          resultSha256: "",
         };
       }
       if (!inside(root, candidate)) {
-        return { valid: false, errors: ["result_path 越界工作区"] };
+        return { valid: false, errors: ["result_path 越界工作区"], resultSha256: "" };
       }
       let stat: fs.Stats;
       try {
         stat = fs.lstatSync(candidate);
       } catch {
-        return { valid: false, errors: ["结果文件不存在"] };
+        return { valid: false, errors: ["结果文件不存在"], resultSha256: "" };
       }
       if (!stat.isFile() || stat.size > 1024 * 1024) {
-        return { valid: false, errors: ["结果必须是 1 MiB 内的普通文件"] };
+        return { valid: false, errors: ["结果必须是 1 MiB 内的普通文件"], resultSha256: "" };
       }
       const real = fs.realpathSync.native(candidate);
       if (!inside(root, real)) {
-        return { valid: false, errors: ["结果文件真实路径越界工作区"] };
+        return { valid: false, errors: ["结果文件真实路径越界工作区"], resultSha256: "" };
       }
+      const bytes = fs.readFileSync(real);
+      const resultSha256 = createHash("sha256").update(bytes).digest("hex");
       let value: unknown;
       try {
-        value = JSON.parse(fs.readFileSync(real, "utf8"));
+        value = JSON.parse(bytes.toString("utf8"));
       } catch (error) {
         return {
           valid: false,
           errors: ["JSON 解析失败：" + (error instanceof Error ? error.message : String(error))],
+          resultSha256,
         };
       }
       const errors = validationErrors(value).slice(0, 100);
-      return { valid: errors.length === 0, errors };
+      return { valid: errors.length === 0, errors, resultSha256 };
     },
   });
 }

@@ -1,10 +1,10 @@
 /** 「简历匹配评分」工作流调用入口的服务层。 */
 import fs from "node:fs";
 import path from "node:path";
-import { and, desc, eq, lte } from "drizzle-orm";
+import { createHash } from "node:crypto";
+import { and, desc, eq } from "drizzle-orm";
 import {
   db,
-  revisions,
   runEvents,
   runNodes,
   runs,
@@ -39,6 +39,11 @@ import {
 } from "@/server/writers/types";
 
 const MAX_RESULT_BYTES = 1024 * 1024;
+
+interface ResumeMatchResultNodes {
+  outputNodeId: string;
+  validatorNodeId: string;
+}
 
 export interface ResumeMatchFileInput {
   kind: "file";
@@ -232,6 +237,21 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
   return null;
 }
 
+/** 完整契约通过后，从同一份受理快照取出结果与校验节点身份。 */
+function resolvedResultNodes(resolved: ResolvedWorkflow): ResumeMatchResultNodes | null {
+  const outputNode = resolved.nodes.find(
+    (node) => node.kind === "output" && node.label === RESUME_MATCH_OUTPUT_LABEL,
+  );
+  const incoming = outputNode
+    ? resolved.edges.find(
+        (edge) => edge.targetNodeId === outputNode.id && edge.targetPort === "value",
+      )
+    : undefined;
+  return outputNode && incoming
+    ? { outputNodeId: outputNode.id, validatorNodeId: incoming.sourceNodeId }
+    : null;
+}
+
 /** 汇总 Action 必须实际持有校验 Tool，且本次运行快照不能把它全局摘掉。 */
 function validateValidatorCapability(
   resolved: ResolvedWorkflow,
@@ -284,6 +304,8 @@ export async function startResumeMatch(
   if (!resolved) return writeFail(500, "简历匹配工作流无法解析");
   const contractError = validateWorkflowContract(resolved);
   if (contractError) return writeFail(500, contractError);
+  const resultNodes = resolvedResultNodes(resolved);
+  if (!resultNodes) return writeFail(500, "简历匹配工作流缺少稳定的结果节点身份");
   // 设置与图都只取一次；同一对象交给 startResolvedRun，网页并发保存不能让
   // “预检旧图、付费执行新图”，设置修改也只影响下一次运行。
   const settings = readSettings();
@@ -301,7 +323,8 @@ export async function startResumeMatch(
       [resumeNode.id]: invocation.resume,
     },
     settings,
-    { source: "resume-match-api", contractVersion: 1 },
+    { source: "resume-match-api", contractVersion: 1, resultNodes },
+    (runId) => captureResumeMatchCompletion(runId, resultNodes),
   );
   if (!started.ok) {
     return started.status === 422
@@ -321,88 +344,13 @@ function outputFile(value: unknown): ResumeMatchFileInput | null {
   return typeof parsed === "string" ? null : parsed;
 }
 
-interface HistoricalResultNodes {
-  outputNodeId: string;
-  validatorNodeId: string;
-}
-
-function revisionResultNodes(payload: Record<string, unknown>): HistoricalResultNodes | null {
-  if (!Array.isArray(payload.nodes) || !Array.isArray(payload.edges)) return null;
-  const nodes = payload.nodes.flatMap((value) => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
-    return [value as Record<string, unknown>];
-  });
-  const outputs = nodes.filter(
-    (node) =>
-      node.kind === "output" &&
-      node.label === RESUME_MATCH_OUTPUT_LABEL &&
-      typeof node.id === "string" &&
-      node.id !== "",
-  );
-  if (outputs.length !== 1) return null;
-  const outputNodeId = outputs[0].id as string;
-  const incoming = payload.edges.flatMap((value) => {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
-    const edge = value as Record<string, unknown>;
-    return edge.targetNodeId === outputNodeId &&
-      edge.targetPort === "value" &&
-      typeof edge.sourceNodeId === "string" &&
-      edge.sourceNodeId !== ""
-      ? [edge.sourceNodeId]
-      : [];
-  });
-  if (incoming.length !== 1) return null;
-  const validatorNodeId = incoming[0];
-  if (!nodes.some((node) => node.id === validatorNodeId && node.kind === "action")) return null;
-  return { outputNodeId, validatorNodeId };
-}
-
-/**
- * 工作流网页保存会整体替换节点，当前图不能解释旧运行。修订是每次保存的完整图
- * 快照：从 run.startedAt 之前倒序找，且节点 id 必须真实存在于该次 run_nodes，
- * 因而并发保存产生的新修订也不能把另一张图的 output 错配给这次运行。
- */
-function historicalResultNodes(run: typeof runs.$inferSelect): HistoricalResultNodes | null {
-  const runNodeIds = new Set(
-    db
-      .select({ nodeId: runNodes.nodeId })
-      .from(runNodes)
-      .where(eq(runNodes.runId, run.id))
-      .all()
-      .map((row) => row.nodeId),
-  );
-  const history = db
-    .select({ payload: revisions.payload })
-    .from(revisions)
-    .where(
-      and(
-        eq(revisions.entityKind, "workflow"),
-        eq(revisions.entityId, run.workflowId),
-        lte(revisions.createdAt, run.startedAt),
-      ),
-    )
-    .orderBy(desc(revisions.createdAt), desc(revisions.versionNo))
-    .all();
-  for (const revision of history) {
-    const nodes = revisionResultNodes(revision.payload);
-    if (
-      nodes &&
-      runNodeIds.has(nodes.outputNodeId) &&
-      runNodeIds.has(nodes.validatorNodeId)
-    ) {
-      return nodes;
-    }
-  }
-  return null;
-}
-
-function isValidValidatorReceipt(payload: Record<string, unknown> | null): boolean {
+function validatorReceiptHash(payload: Record<string, unknown> | null): string | null {
   if (
     payload?.tool !== RESUME_MATCH_VALIDATOR_TOOL_NAME ||
     payload.status !== "ok" ||
     typeof payload.output !== "string"
   ) {
-    return false;
+    return null;
   }
   try {
     const receipt = JSON.parse(payload.output) as unknown;
@@ -410,39 +358,137 @@ function isValidValidatorReceipt(payload: Record<string, unknown> | null): boole
       typeof receipt === "object" &&
       receipt !== null &&
       !Array.isArray(receipt) &&
+      exactKeys(receipt as Record<string, unknown>, ["valid", "errors", "resultSha256"]) &&
       (receipt as Record<string, unknown>).valid === true &&
       Array.isArray((receipt as Record<string, unknown>).errors) &&
-      ((receipt as Record<string, unknown>).errors as unknown[]).length === 0
-    );
+      ((receipt as Record<string, unknown>).errors as unknown[]).length === 0 &&
+      typeof (receipt as Record<string, unknown>).resultSha256 === "string" &&
+      /^[0-9a-f]{64}$/.test((receipt as Record<string, unknown>).resultSha256 as string)
+    )
+      ? ((receipt as Record<string, unknown>).resultSha256 as string)
+      : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+interface StoredResumeMatchInvocation {
+  source: "resume-match-api";
+  contractVersion: 1;
+  resultNodes: ResumeMatchResultNodes;
 }
 
 /** 同名工作流可从通用入口启动；只有专用 POST 原子写下的来源证明可由专用 GET 读取。 */
-function isResumeMatchInvocation(imports: Record<string, unknown> | null): boolean {
+function resumeMatchInvocation(
+  imports: Record<string, unknown> | null,
+): StoredResumeMatchInvocation | null {
   if (!imports || typeof imports.invocation !== "object" || imports.invocation === null) {
-    return false;
+    return null;
   }
   const invocation = imports.invocation as Record<string, unknown>;
-  return invocation.source === "resume-match-api" && invocation.contractVersion === 1;
+  if (
+    invocation.source !== "resume-match-api" ||
+    invocation.contractVersion !== 1 ||
+    typeof invocation.resultNodes !== "object" ||
+    invocation.resultNodes === null ||
+    Array.isArray(invocation.resultNodes)
+  ) {
+    return null;
+  }
+  const resultNodes = invocation.resultNodes as Record<string, unknown>;
+  if (
+    !exactKeys(resultNodes, ["outputNodeId", "validatorNodeId"]) ||
+    typeof resultNodes.outputNodeId !== "string" ||
+    resultNodes.outputNodeId === "" ||
+    typeof resultNodes.validatorNodeId !== "string" ||
+    resultNodes.validatorNodeId === ""
+  ) {
+    return null;
+  }
+  return {
+    source: "resume-match-api",
+    contractVersion: 1,
+    resultNodes: {
+      outputNodeId: resultNodes.outputNodeId,
+      validatorNodeId: resultNodes.validatorNodeId,
+    },
+  };
 }
 
-/** 成功结果只接受汇总 Action 自己持久化下来的 validator valid=true 回执。 */
-function hasValidatorReceipt(runId: string, nodeId: string): boolean {
-  return db
+/**
+ * success 前把事件里的权威 Tool 回执收束成运行元数据。事件写入丢失会让运行失败，
+ * 写入成功后事件可按监控保留策略清理，GET 仍由持久完成证据复核精确结果字节。
+ */
+export function captureResumeMatchCompletion(
+  runId: string,
+  resultNodes: ResumeMatchResultNodes,
+): { ok: true; evidence: Record<string, unknown> } | { ok: false; error: string } {
+  const receiptHash = db
     .select({ payload: runEvents.payload })
     .from(runEvents)
     .where(
       and(
         eq(runEvents.runId, runId),
-        eq(runEvents.nodeId, nodeId),
+        eq(runEvents.nodeId, resultNodes.validatorNodeId),
         eq(runEvents.type, "tool"),
       ),
     )
     .orderBy(desc(runEvents.id))
     .all()
-    .some((row) => isValidValidatorReceipt(row.payload));
+    .map((row) => validatorReceiptHash(row.payload))
+    .find((hash): hash is string => hash !== null);
+  if (!receiptHash) {
+    return {
+      ok: false,
+      error: `汇总 Action 缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的 valid=true 回执`,
+    };
+  }
+
+  const outputNode = db
+    .select()
+    .from(runNodes)
+    .where(
+      and(
+        eq(runNodes.runId, runId),
+        eq(runNodes.nodeId, resultNodes.outputNodeId),
+      ),
+    )
+    .get();
+  const output = outputFile(outputNode?.outputs?.value);
+  const run = db.select({ runDir: runs.runDir }).from(runs).where(eq(runs.id, runId)).get();
+  if (!output || !run) return { ok: false, error: "运行缺少可读取的 JSON 评分结果" };
+  const artifact = readResultArtifact(run.runDir, output);
+  if (!artifact.ok) return { ok: false, error: artifact.error };
+  const parsed = parseResumeMatchResult(artifact.content);
+  if (!parsed.ok) return { ok: false, error: "工作流产出的 JSON 未通过结果契约" };
+  const resultSha256 = createHash("sha256").update(artifact.content, "utf8").digest("hex");
+  if (resultSha256 !== receiptHash) {
+    return { ok: false, error: "评分结果在机械校验后发生了变化" };
+  }
+  return {
+    ok: true,
+    evidence: {
+      kind: "resume-match",
+      contractVersion: 1,
+      validatorTool: RESUME_MATCH_VALIDATOR_TOOL_NAME,
+      resultSha256,
+    },
+  };
+}
+
+function completionResultHash(imports: Record<string, unknown> | null): string | null {
+  if (!imports || typeof imports.completion !== "object" || imports.completion === null) {
+    return null;
+  }
+  const completion = imports.completion as Record<string, unknown>;
+  return exactKeys(completion, ["kind", "contractVersion", "validatorTool", "resultSha256"]) &&
+    completion.kind === "resume-match" &&
+    completion.contractVersion === 1 &&
+    completion.validatorTool === RESUME_MATCH_VALIDATOR_TOOL_NAME &&
+    typeof completion.resultSha256 === "string" &&
+    /^[0-9a-f]{64}$/.test(completion.resultSha256)
+    ? completion.resultSha256
+    : null;
 }
 
 function readResultArtifact(
@@ -481,10 +527,11 @@ function readResultArtifact(
 
 export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunView, string> {
   const run = db.select().from(runs).where(eq(runs.id, runId)).get();
+  const invocation = run ? resumeMatchInvocation(run.imports) : null;
   if (
     !run ||
     run.workflowName !== RESUME_MATCH_WORKFLOW_NAME ||
-    !isResumeMatchInvocation(run.imports)
+    !invocation
   ) {
     return writeFail(404, "简历匹配运行不存在");
   }
@@ -498,11 +545,10 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
   };
   if (run.status !== "success") return writeOk({ ...base, result: null });
 
-  const resultNodes = historicalResultNodes(run);
-  if (!resultNodes) return writeFail(500, "成功运行缺少可追溯的评分输出节点定义");
+  const resultNodes = invocation.resultNodes;
 
-  // 展示名不是节点身份：Action 也可以叫「评分结果」。修订只用来恢复节点 id，
-  // 权威结果仍以 (runId, nodeId) 精确读取，不能退回按 label 猜测。
+  // 展示名不是节点身份：Action 也可以叫「评分结果」。节点 id 已在受理时随来源
+  // 证明持久化，权威结果只以 (runId, nodeId) 精确读取，不能按 label 或时间猜测。
   const outputNode = db
     .select()
     .from(runNodes)
@@ -523,10 +569,12 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
   if (!parsed.ok) {
     return writeFail(500, "工作流产出的 JSON 未通过结果契约", parsed.errors);
   }
-  if (!hasValidatorReceipt(run.id, resultNodes.validatorNodeId)) {
+  const completionHash = completionResultHash(run.imports);
+  const resultSha256 = createHash("sha256").update(artifact.content, "utf8").digest("hex");
+  if (!completionHash || completionHash !== resultSha256) {
     return writeFail(
       500,
-      `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的 valid=true 持久回执`,
+      `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 对当前结果的持久完成证据`,
     );
   }
   return writeOk({ ...base, result: parsed.data });

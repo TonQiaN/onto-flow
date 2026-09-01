@@ -37,7 +37,7 @@ src/
 | /api/workflows/[id] | GET, PUT, DELETE | GET 返回 nodes+edges+校验结果；PUT 保存整图（nodes+edges 整体替换，节点 id 由前端生成保持连线引用） |
 | /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；校验不通过 422 `{ issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
 | /api/internal/resume-matches | POST | 「简历匹配评分」工作流调用入口；body 严格为 `{ job: PortValue(file), resume: PortValue(file) }`，调用方先经 `/api/uploads` 取得两个值；202 返回 `runId`、`statusUrl`、`historyUrl`，不暴露工作流或节点 id |
-| /api/internal/resume-matches/[id] | GET | 只查询由该入口 POST 受理并在 run 元数据中留下来源证明的运行（同名工作流经通用入口启动仍为 404）；running/failed/cancelled 时 `result=null`，success 时读取并再次严格校验 `match-result.json` 后返回 JSON 结果；成功运行的产物不合约则 500 `{ error, issues }` |
+| /api/internal/resume-matches/[id] | GET | 只查询由该入口 POST 受理并在 run 元数据中留下来源证明的运行（同名工作流经通用入口启动仍为 404）；running/failed/cancelled 时 `result=null`，success 时按受理时持久化的结果节点身份读取 `match-result.json`，再次严格校验并核对完成证据里的内容 SHA-256 后返回 JSON；成功运行的产物不合约则 500 `{ error, issues }` |
 | /api/runs?workflowId=&status= | GET | 运行列表；每行带 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用） |
 | /api/runs/[id] | GET, DELETE | GET：run + run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage 外键级联，连同运行目录），running 时 409 |
 | /api/runs/[id]/files?path= | GET | 只读预览已结束运行目录内的 UTF-8 文本文件（执行中 409；路径收敛在该 run 的 run_dir 内；256KB 按完整字符截断，二进制或非法 UTF-8 为 415）；运行详情看输入与产物正文的唯一通道（ADR-0012） |
@@ -166,10 +166,12 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   分数不自洽与不允许的评分依据。最终产物固定为 `match-result.json`：JSON Schema 禁止额外字段，
   `src/lib/resume-match.ts` 再核对总分、档位、否决、证据充分度、硬性条件及改分记录的跨字段关系。
 - 汇总 Action 独享 `validate_resume_match_result` Tool；它写出文件后必须反复调用，直到轨迹留下
-  `valid=true` 才能提交。内部工作流调用入口在成功响应时用同一个校验函数再验一次，并要求汇总
-  Action 自己的持久工具事件里存在 `valid=true`、错误为空的回执；只写出合法 JSON 却跳过 Tool
-  不能被 API 接受。Agent 自检与 API 边界不会各自维护一套规则。该入口还会验证汇总 Action 仍引用
-  此 Tool、源码 SHA-256 匹配内置 pin，且本次全局设置快照没有停用它。岗位 JD 与简历输入还必须
+  `valid=true`、错误为空且带实际读取内容 SHA-256 的回执。引擎在写 `success` 前核对该 SHA-256
+  与最终产物字节，并把它固化进运行元数据；事件明细随后可以清理，成功结果不会因此失去读取依据。
+  只写出合法 JSON 却跳过 Tool、回执落库失败或校验后又改文件的运行都收束为失败。Agent 自检与
+  API 边界不会各自维护一套规则。该入口还会验证汇总 Action 仍引用此 Tool、源码 SHA-256 匹配
+  内置 pin，且本次全局设置快照没有停用它。受理时把结果输出节点和汇总校验节点 id 与来源证明
+  一起持久化，不按 `startedAt` 反推修订。岗位 JD 与简历输入还必须
   各自使用指定 Object Type，并分别连到解析 Action 的对应端口；随后把通过预检的同一图、
   Action/Tool 定义与设置对象交给 `startResolvedRun`，并发画布或共享库保存不能换掉实际执行快照。
   缺失或被改写的契约不得先产生模型费用再失败。

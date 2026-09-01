@@ -9,16 +9,20 @@
 - 工作流调用入口为：
   - `POST /api/internal/resume-matches`
   - `GET /api/internal/resume-matches/<runId>`
-- POST 受理时把 `resume-match-api` 来源证明与 run 同步持久化；GET 拒绝同名工作流经通用入口发起的运行。
-- 当前来源证明契约下的新成功运行：`7a61f56f-3f54-48fd-a25b-46bedd04ff6f`
+- POST 受理时把 `resume-match-api` 来源证明与结果/校验节点 id 同 run 同步持久化；GET 拒绝同名工作流经通用入口发起的运行。
+- 当前来源与完成证据契约下的新成功运行：`b218d090-c7d7-44a0-92ed-eaf13e5e9501`
   - 11 / 11 节点成功；
   - 11 份工作区文件全部存在且非空（2 份物化输入、9 份 Action 产物）；
-  - 8 个 Action 各有 1 份可读会话轨迹，共 123 条投影记录；
+  - 8 个 Action 各有 1 份可读会话轨迹，共 136 条投影记录；
   - 汇总轨迹有且仅有 1 次 `validate_resume_match_result`，结果为 `valid=true`；
-- API 返回结果经服务器与验收脚本两次同源校验，且服务器复核汇总 Action 的持久 Tool 回执为
-  `valid=true`、错误为空；契约错误数为 0；
-  - 结果摘要为 `recommend`、总分 89、`strong`、证据充分度 `medium`；
-  - 权威总 token 211,581，费用 ¥0.273634，8 条节点结算事件均无明细落库兜底。
+- 校验 Tool 回执携带它实际读取的结果 SHA-256；引擎在写 `success` 前确认该摘要与最终产物字节
+  完全一致，再把 64 位摘要固化进 run 完成证据。磁盘独立复算结果同为
+  `22f308b91fc00cf8ff80945261670c593f1a378578e920f19f6ffc3bac5086a9`；
+- API 返回结果经服务器与验收脚本两次同源校验，契约错误数为 0；
+  - 结果摘要为 `recommend`、总分 88、`strong`、证据充分度 `medium`；
+  - 权威总 token 279,253，费用 ¥0.141521，8 条节点结算事件的明细落库失败数均为 0。
+- 边界测试在完成证据固化后删除该运行全部 `run_events`，专用 GET 仍返回同一严格 JSON；若回执
+  缺失、回执摘要与最终文件不一致或完成证据无法落库，引擎会把运行收束为 `failed`。
 - 运行详情、历史接口与专用状态接口均可见该成功运行；合成同名工作流的通用入口运行后，专用 GET 实测返回 404，测试记录已删除。
 
 首轮运行 `265e2a01-06c4-433e-b3db-aee227493f2f` 暴露校验 Tool 缺少转译辅助函数，已主动取消并保留轨迹；修正只发生在工作流 Tool 定义，没有修改 Harness。
@@ -32,15 +36,15 @@
 
 | 项目 | token |
 |---|---:|
-| input | 26,648 |
-| output（已包含 reasoning） | 19,685 |
-| reasoning（output 的子集） | 10,248 |
-| cache read | 165,248 |
+| input | 21,402 |
+| output（已包含 reasoning） | 21,691 |
+| reasoning（output 的子集） | 12,354 |
+| cache read | 236,160 |
 | cache write | 0 |
-| 权威总计，不重复加 reasoning | 211,581 |
-| 修正前公式会显示 | 221,829 |
+| 权威总计，不重复加 reasoning | 279,253 |
+| 修正前公式会显示 | 291,607 |
 
-差值 `10,248` 恰好等于 reasoning。仓库运行时契约已经明确：适配器把
+差值 `12,354` 恰好等于 reasoning。仓库运行时契约已经明确：适配器把
 `completion_tokens` 整体记进 `outputTokens`，`reasoningTokens` 只是其中的可见细分，计费与总量都不能再加一次。
 
 修正前重复发生在两个全局展示聚合处：
