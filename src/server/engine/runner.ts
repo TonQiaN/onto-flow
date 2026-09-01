@@ -58,6 +58,7 @@ export type CancelRunResult =
 interface RunnerGlobals {
   ontoflowCancelledRuns?: Set<string>;
   ontoflowRunProcesses?: Map<string, RunProcess>;
+  ontoflowActiveRuns?: Set<string>;
 }
 const g = globalThis as RunnerGlobals;
 const cancelledRuns: Set<string> = g.ontoflowCancelledRuns ?? new Set();
@@ -65,9 +66,20 @@ g.ontoflowCancelledRuns = cancelledRuns;
 /** 在跑运行的子进程句柄；cancelRun 要拿它去取消会话（挂 globalThis 以免 HMR 丢失）。 */
 const runProcesses: Map<string, RunProcess> = g.ontoflowRunProcesses ?? new Map();
 g.ontoflowRunProcesses = runProcesses;
+/**
+ * 从 executeRun 接管到其全部 finally/终态写入收束为止的运行。它比 runs.status
+ * 更精确：cancelRun 会先把状态写成 cancelled，此时子进程和工作区仍可能在收尾。
+ * 清理模块据此拒绝删除仍被执行器持有的目录或数据库记录。
+ */
+const activeRuns: Set<string> = g.ontoflowActiveRuns ?? new Set();
+g.ontoflowActiveRuns = activeRuns;
 
 export function isRunCancelled(runId: string): boolean {
   return cancelledRuns.has(runId);
+}
+
+export function isRunExecutionActive(runId: string): boolean {
+  return activeRuns.has(runId);
 }
 
 /** PortValue 形态校验（前端传入的运行输入不可信） */
@@ -189,10 +201,16 @@ export async function startRun(
       .run();
   }
 
-  // 异步执行，立即返回 runId
-  void executeRun(runId, resolved, runInputs).catch((err) => {
-    failWholeRun(runId, err instanceof Error ? err.message : String(err));
-  });
+  // 异步执行，立即返回 runId。activeRuns 覆盖 executeRun 启动前到异常兜底后的
+  // 全部生命期；cancelRun 提前写下 cancelled 也不能让清理路径误判为已经静止。
+  activeRuns.add(runId);
+  void executeRun(runId, resolved, runInputs)
+    .catch((err) => {
+      failWholeRun(runId, err instanceof Error ? err.message : String(err));
+    })
+    .finally(() => {
+      activeRuns.delete(runId);
+    });
 
   return { ok: true, runId };
 }

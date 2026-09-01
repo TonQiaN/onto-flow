@@ -89,7 +89,8 @@ async function main(): Promise<void> {
     const roundMatch = tester?.sessionId?.match(/#(\d+)$/);
     const roundCount = roundMatch ? Number(roundMatch[1]) : tester?.sessionId ? 1 : 0;
     const tokens = nodes.reduce(
-      (sum, n) => sum + n.inputTokens + n.outputTokens + n.reasoningTokens,
+      // outputTokens 已含推理 token；reasoningTokens 只作拆分展示，不能再次计总量。
+      (sum, n) => sum + n.inputTokens + n.outputTokens,
       0,
     );
     const seconds = row.finishedAt

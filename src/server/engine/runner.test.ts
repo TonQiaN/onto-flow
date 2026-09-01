@@ -4,7 +4,7 @@
  */
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import type { PortValue } from "../../lib/values";
 import type { ResolvedWorkflow } from "../resolve";
@@ -80,14 +80,18 @@ CREATE TABLE run_nodes (
   ontoflowDb?: unknown;
   ontoflowCancelledRuns?: Set<string>;
   ontoflowRunProcesses?: Map<string, unknown>;
+  ontoflowActiveRuns?: Set<string>;
 }).ontoflowDb = drizzle(sqlite, { schema });
 (globalThis as unknown as { ontoflowCancelledRuns?: Set<string> }).ontoflowCancelledRuns =
   new Set();
 (globalThis as unknown as { ontoflowRunProcesses?: Map<string, unknown> }).ontoflowRunProcesses =
   new Map();
+(globalThis as unknown as { ontoflowActiveRuns?: Set<string> }).ontoflowActiveRuns = new Set();
 
 let startRun: typeof import("./runner").startRun;
 let cancelRun: typeof import("./runner").cancelRun;
+let isRunExecutionActive: typeof import("./runner").isRunExecutionActive;
+let deleteRun: typeof import("../monitor/cleanup").deleteRun;
 
 function resolvedWorkflow(): ResolvedWorkflow {
   const workflow = {
@@ -288,7 +292,13 @@ function loopWorkflow(): ResolvedWorkflow {
 }
 
 beforeAll(async () => {
-  ({ startRun, cancelRun } = await import("./runner"));
+  ({ startRun, cancelRun, isRunExecutionActive } = await import("./runner"));
+  ({ deleteRun } = await import("../monitor/cleanup"));
+});
+
+beforeEach(() => {
+  controls.dispose.mockClear();
+  controls.cancel.mockClear();
 });
 
 describe("回边重入", () => {
@@ -378,6 +388,12 @@ describe("运行取消终态", () => {
 
     await started;
     await expect(cancelRun(startedRun.runId)).resolves.toEqual({ ok: true });
+    expect(isRunExecutionActive(startedRun.runId)).toBe(true);
+    expect(deleteRun(startedRun.runId)).toEqual({
+      ok: false,
+      status: 409,
+      error: "运行执行尚未完全收束，不能删除",
+    });
     releaseAction?.();
 
     await vi.waitFor(() => {
@@ -390,6 +406,9 @@ describe("运行取消终态", () => {
       expect(run.status).toBe("cancelled");
       expect(action.status).toBe("cancelled");
       expect(controls.dispose).toHaveBeenCalledOnce();
+      expect(isRunExecutionActive(startedRun.runId)).toBe(false);
     });
+    sqlite.prepare("UPDATE runs SET run_dir = NULL WHERE id = ?").run(startedRun.runId);
+    expect(deleteRun(startedRun.runId)).toEqual({ ok: true });
   });
 });

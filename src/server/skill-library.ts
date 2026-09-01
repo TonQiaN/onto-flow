@@ -68,12 +68,16 @@ export function materializeSkill(skill: {
     "---",
     "",
   ].join("\n");
-  // 原子替换：运行启动时的 digestDirectory 在线程池里读本目录，与这次写入在
-  // OS 层任意交错；直接写 SKILL.md 会让它读到 O_TRUNC 之后的半写文件，把错误
-  // 摘要记进 runs.imports。先写临时文件再 rename，读方要么旧整体要么新整体。
-  const tmp = path.join(dir, ".SKILL.md.tmp");
-  fs.writeFileSync(tmp, `${frontmatter}${skill.content}\n`, "utf8");
-  fs.renameSync(tmp, path.join(dir, "SKILL.md"));
+  // 原子替换：运行启动时的 digestDirectory 在线程池里读技能目录，与这次写入在
+  // OS 层任意交错；临时文件必须放在目录外，否则摘要枚举会把它也算成技能内容。
+  // 同库根、异目录仍在同一文件系统，rename 保持原子性；唯一名也允许并发写同一技能。
+  const tmp = path.join(SKILL_LIBRARY_DIR, `.skill-${slug}-${crypto.randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(tmp, `${frontmatter}${skill.content}\n`, "utf8");
+    fs.renameSync(tmp, path.join(dir, "SKILL.md"));
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 export function removeSkillDir(slug: string): void {
