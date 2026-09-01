@@ -149,7 +149,17 @@ export function PortValueView({ value, runId }: { value: unknown; runId?: string
   if (!pv || pv.kind !== "file") {
     return <span className="text-xs text-red-700">非文件值不符合当前运行契约</span>;
   }
-  if (runId) return <FileValue runId={runId} file={pv.file} />;
+  // 回边进入下一轮时同一端口会换成新的产物路径；key 随路径变化可同时清空
+  // 已加载的旧正文并让旧的在途请求失去挂载目标，徽章与预览不会跨轮串线。
+  if (runId) {
+    return (
+      <FileValue
+        key={`${runId}:${pv.file.path}`}
+        runId={runId}
+        file={pv.file}
+      />
+    );
+  }
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span

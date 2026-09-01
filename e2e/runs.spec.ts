@@ -439,6 +439,39 @@ function finishFixture(fixture: RunFixture): void {
   }
 }
 
+async function replaceFixtureArtifact(
+  fixture: RunFixture,
+  relativeName: string,
+  content: string,
+): Promise<void> {
+  const artifact = path.join(fixture.runDir, "workspace", relativeName);
+  await mkdir(path.dirname(artifact), { recursive: true });
+  await writeFile(artifact, content, "utf8");
+  const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
+  database.pragma("foreign_keys = ON");
+  database.pragma("busy_timeout = 5000");
+  try {
+    database
+      .prepare("update run_nodes set outputs = ? where run_id = ? and node_id = ?")
+      .run(
+        JSON.stringify({
+          结果: {
+            kind: "file",
+            file: {
+              path: path.relative(path.join(process.cwd(), "data"), artifact),
+              name: path.basename(artifact),
+              mime: "text/markdown",
+            },
+          },
+        }),
+        fixture.runId,
+        fixture.nodeA,
+      );
+  } finally {
+    database.close();
+  }
+}
+
 /**
  * 轨迹用完全合成的本地会话日志，避免失败 trace 把真实简历或模型上下文收进去。
  * fixture 只用 e2e 专属前缀与本 case 持有的目录清理，不触碰真实运行。
@@ -592,5 +625,32 @@ test.describe("运行历史", () => {
     const panelB = cardB.getByTestId("agent-trajectory-panel");
     await expect(panelB).toContainText("B_ONLY_SENTINEL");
     expect(trajectoryRequests).toHaveLength(3);
+  });
+
+  test("循环换轮时文件预览随产物路径重置，双点开头文件仍可读取", async ({ page, request }) => {
+    const current = fixture!;
+    setFixtureActive(current);
+    await page.goto(`/runs/${current.runId}`);
+    const cardA = page.locator(`[data-node-id="${current.nodeA}"]`);
+    await cardA.getByRole("button", { name: "查看内容" }).click();
+    await expect(cardA).toContainText("合成轨迹产物 A");
+
+    await replaceFixtureArtifact(current, "rounds/2/round-two.md", "第二轮独立产物");
+    await expect(cardA).toContainText("round-two.md");
+    await expect(cardA).not.toContainText("合成轨迹产物 A");
+    await expect(cardA.getByRole("button", { name: "查看内容" })).toBeVisible();
+    await cardA.getByRole("button", { name: "查看内容" }).click();
+    await expect(cardA).toContainText("第二轮独立产物");
+
+    const dotFile = path.join(current.runDir, "workspace", "..report.md");
+    await writeFile(dotFile, "双点开头是合法文件名", "utf8");
+    const response = await request.get(`/api/runs/${current.runId}/files`, {
+      params: { path: path.relative(path.join(process.cwd(), "data"), dotFile) },
+    });
+    expect(response.status()).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      name: "..report.md",
+      content: "双点开头是合法文件名",
+    });
   });
 });

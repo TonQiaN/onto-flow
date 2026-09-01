@@ -56,7 +56,12 @@ export async function GET(
       return jsonError(404, "文件不存在（工作区可能已被清理）");
     }
     const within = path.relative(realRoot, real);
-    if (within === "" || within.startsWith("..") || path.isAbsolute(within)) {
+    if (
+      within === "" ||
+      within === ".." ||
+      within.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(within)
+    ) {
       return jsonError(400, "路径不在该运行的目录内");
     }
 
