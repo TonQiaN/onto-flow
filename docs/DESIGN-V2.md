@@ -16,6 +16,7 @@ v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 监控页。本
 - `run_nodes` 新增：`snapshot`（运行快照 JSON）、六个用量字段（inputTokens / outputTokens /
   reasoningTokens / cacheReadTokens / cacheWriteTokens / cost）、状态多一个 `cancelled`。
 - `runs` 新增：`workflowName`（冗余快照）、状态多一个 `cancelled`。
+- `run_results`：专用调用入口经完成门禁核验后的精确业务结果；以 runId 为主键并随 runs 级联删除，工作区/事件清理不动。
 - `node_usage`：逐 step 的用量明细，`messageId` 取 `turn:step`，`(sessionId, messageId)` 唯一。
 
 ## 一、通用列表查询契约（五个库的 GET 列表统一支持）

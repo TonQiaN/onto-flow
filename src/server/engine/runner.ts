@@ -15,7 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
-import { db, runNodes, runs } from "@/db";
+import { db, runNodes, runResults, runs } from "@/db";
 import {
   classifyEdges,
   downstreamOf,
@@ -71,7 +71,11 @@ export type RunInvocationProvenance =
 export type RunCompletionGate = (
   runId: string,
 ) =>
-  | { ok: true; evidence: Record<string, unknown> }
+  | {
+      ok: true;
+      evidence: Record<string, unknown>;
+      result?: { kind: string; content: string; sha256: string };
+    }
   | { ok: false; error: string };
 
 /**
@@ -818,15 +822,32 @@ async function executeRun(
           .where(eq(runs.id, runId))
           .get();
         if (!row) throw new Error("运行记录不存在");
-        db.update(runs)
-          .set({
-            imports: {
-              ...(row.imports ?? {}),
-              completion: completion.evidence,
-            },
-          })
-          .where(eq(runs.id, runId))
-          .run();
+        db.transaction((tx) => {
+          if (completion.result) {
+            const digest = createHash("sha256")
+              .update(completion.result.content, "utf8")
+              .digest("hex");
+            if (
+              completion.result.kind === "" ||
+              !/^[0-9a-f]{64}$/.test(completion.result.sha256) ||
+              digest !== completion.result.sha256
+            ) {
+              throw new Error("持久业务结果的内容摘要无效");
+            }
+            tx.insert(runResults)
+              .values({ runId, ...completion.result })
+              .run();
+          }
+          tx.update(runs)
+            .set({
+              imports: {
+                ...(row.imports ?? {}),
+                completion: completion.evidence,
+              },
+            })
+            .where(eq(runs.id, runId))
+            .run();
+        });
       }
     } catch (error) {
       firstError = `运行完成校验失败：${error instanceof Error ? error.message : String(error)}`;

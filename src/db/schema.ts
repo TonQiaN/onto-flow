@@ -314,6 +314,23 @@ export const runs = sqliteTable("runs", {
   finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
 });
 
+/**
+ * 专用工作流调用入口的持久业务结果。它已经通过入口的完成门禁，因此独立于可清理的
+ * 运行工作区；删除 runs 行时级联删除，结果保留期与运行历史一致。
+ */
+export const runResults = sqliteTable("run_results", {
+  runId: text("run_id")
+    .primaryKey()
+    .references(() => runs.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(),
+  /** 保留完成门禁核对过的精确 UTF-8 文本，不重新序列化 JSON 改变摘要。 */
+  content: text("content").notNull(),
+  sha256: text("sha256").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp_ms" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
 export const runNodes = sqliteTable(
   "run_nodes",
   {

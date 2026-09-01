@@ -183,7 +183,7 @@ function cleanEvents(
 // ---------------- runs ----------------
 
 /**
- * 删 N 天前的运行整条记录：run_nodes / run_events / node_usage 由外键级联清除
+ * 删 N 天前的运行整条记录：run_nodes / run_events / node_usage / run_results 由外键级联清除
  * （db/index.ts 开了 foreign_keys=ON），另外一并删掉它们的工作区目录。
  */
 function cleanRuns(
@@ -213,7 +213,12 @@ function cleanRuns(
   }
 
   // 影响面按 eligible CTE 一次聚合；不能随历史规模退化成每个 run 三次同步 count。
-  const detailStat = db.get<{ nodes: number; events: number; usage: number }>(sql`
+  const detailStat = db.get<{
+    nodes: number;
+    events: number;
+    usage: number;
+    results: number;
+  }>(sql`
     with eligible as (
       select r.id
       from runs r
@@ -223,8 +228,9 @@ function cleanRuns(
     select
       (select count(*) from run_nodes n where n.run_id in (select id from eligible)) as nodes,
       (select count(*) from run_events e where e.run_id in (select id from eligible)) as events,
-      (select count(*) from node_usage u where u.run_id in (select id from eligible)) as usage
-  `) ?? { nodes: 0, events: 0, usage: 0 };
+      (select count(*) from node_usage u where u.run_id in (select id from eligible)) as usage,
+      (select count(*) from run_results x where x.run_id in (select id from eligible)) as results
+  `) ?? { nodes: 0, events: 0, usage: 0, results: 0 };
 
   const bytes = [...targets.values()].reduce(
     (sum, target) => sum + dirStat(target.absolutePath).bytes,
@@ -249,7 +255,8 @@ function cleanRuns(
 
   const detail =
     `${beforeDays} 天前的运行 ${count} 次（级联 ${detailStat?.nodes ?? 0} 个节点、` +
-    `${detailStat?.events ?? 0} 条事件、${detailStat?.usage ?? 0} 条用量明细，` +
+    `${detailStat?.events ?? 0} 条事件、${detailStat?.usage ?? 0} 条用量明细、` +
+    `${detailStat?.results ?? 0} 份持久结果，` +
     `含工作区约 ${formatBytes(bytes)}）；不可恢复，运行历史与成本统计都会少掉这些数据`;
 
   return { target: "runs", affected: { count, bytes }, deleted: !dryRun, detail };
@@ -258,7 +265,7 @@ function cleanRuns(
 // ---------------- 单个运行 ----------------
 
 /**
- * 删除单个已结束的运行：runs 行（run_nodes / run_events / node_usage 外键级联）
+ * 删除单个已结束的运行：runs 行（run_nodes / run_events / node_usage / run_results 外键级联）
  * 加工作区目录。对外暴露运行 API 后，调用方要能清理自己发起的运行，e2e 也靠它
  * 收走测试运行。与 cleanRuns 同属本模块这条破坏性路径，纪律一致：
  * 执行器仍持有的运行永不动、目录先收敛进 data/runs 再删。

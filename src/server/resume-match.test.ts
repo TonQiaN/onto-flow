@@ -75,6 +75,10 @@ CREATE TABLE runs (
   workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
   started_at INTEGER NOT NULL, finished_at INTEGER
 );
+CREATE TABLE run_results (
+  run_id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
+  sha256 TEXT NOT NULL, created_at INTEGER NOT NULL
+);
 CREATE TABLE run_nodes (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL,
   label TEXT NOT NULL, status TEXT NOT NULL, snapshot TEXT,
@@ -423,7 +427,7 @@ function resolved(
 
 beforeEach(() => {
   sqlite.exec(
-    "DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM runs; DELETE FROM revisions; DELETE FROM action_tools; DELETE FROM tools; DELETE FROM settings; DELETE FROM workflow_nodes; DELETE FROM object_types; DELETE FROM workflows;",
+    "DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM run_results; DELETE FROM runs; DELETE FROM revisions; DELETE FROM action_tools; DELETE FROM tools; DELETE FROM settings; DELETE FROM workflow_nodes; DELETE FROM object_types; DELETE FROM workflows;",
   );
   fs.rmSync(tempRoot, { recursive: true, force: true });
   fs.mkdirSync(tempRoot, { recursive: true });
@@ -709,7 +713,7 @@ describe("简历匹配运行结果", () => {
     expect(readResumeMatchRun("run-1")).toEqual({
       ok: false,
       status: 500,
-      error: `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 对当前结果的持久完成证据`,
+      error: "成功运行缺少持久 JSON 评分结果",
     });
 
     const resultSha256 = createHash("sha256")
@@ -743,6 +747,16 @@ describe("简历匹配运行结果", () => {
     expect(completion.ok).toBe(true);
     if (!completion.ok) return;
     sqlite
+      .prepare(
+        "insert into run_results (run_id, kind, content, sha256, created_at) values ('run-1', ?, ?, ?, 101)",
+      )
+      .run(completion.result.kind, completion.result.content, completion.result.sha256);
+    expect(readResumeMatchRun("run-1")).toEqual({
+      ok: false,
+      status: 500,
+      error: `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 对当前结果的持久完成证据`,
+    });
+    sqlite
       .prepare("update runs set imports = ? where id = 'run-1'")
       .run(
         JSON.stringify({
@@ -751,6 +765,7 @@ describe("简历匹配运行结果", () => {
         }),
       );
     sqlite.prepare("delete from run_events where run_id = 'run-1'").run();
+    fs.rmSync(tempRoot, { recursive: true, force: true });
 
     expect(readResumeMatchRun("run-1")).toMatchObject({
       ok: true,
@@ -759,6 +774,16 @@ describe("简历匹配运行结果", () => {
   });
 
   it("按受理时持久节点 id 读取，不受同毫秒新修订与同名 Action 影响", () => {
+    const admittedResult = validResult();
+    const admittedContent = JSON.stringify(admittedResult);
+    const admittedPath = path.join(tempRoot, "admitted-result.json");
+    const replacementContent = JSON.stringify({
+      ...admittedResult,
+      summary: "同毫秒新修订的另一份结果",
+    });
+    const replacementPath = path.join(tempRoot, "replacement-result.json");
+    fs.writeFileSync(admittedPath, admittedContent, "utf8");
+    fs.writeFileSync(replacementPath, replacementContent, "utf8");
     sqlite
       .prepare(
         "insert into revisions (id, entity_kind, entity_id, version_no, payload, created_at) values (?, 'workflow', ?, ?, ?, ?)",
@@ -845,7 +870,7 @@ describe("简历匹配运行结果", () => {
           value: {
             kind: "file",
             file: {
-              path: path.join(tempRoot, "missing-match-result.json"),
+              path: admittedPath,
               name: "match-result.json",
               mime: "application/json",
             },
@@ -854,19 +879,64 @@ describe("简历匹配运行结果", () => {
       );
     sqlite
       .prepare(
-        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('replacement-row', 'run-1', 'replacement-output', '评分结果', 'success', '{}')",
+        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('replacement-row', 'run-1', 'replacement-output', '评分结果', 'success', ?)",
       )
-      .run();
+      .run(
+        JSON.stringify({
+          value: {
+            kind: "file",
+            file: {
+              path: replacementPath,
+              name: "match-result.json",
+              mime: "application/json",
+            },
+          },
+        }),
+      );
     sqlite
       .prepare(
         "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('replacement-validator-row', 'run-1', 'replacement-validator', '新汇总', 'success', '{}')",
       )
       .run();
+    sqlite
+      .prepare(
+        "insert into run_events (run_id, node_id, ts, type, payload) values ('run-1', 'same-label-action', 100, 'tool', ?)",
+      )
+      .run(
+        JSON.stringify({
+          tool: RESUME_MATCH_VALIDATOR_TOOL_NAME,
+          status: "ok",
+          output: JSON.stringify({
+            valid: true,
+            errors: [],
+            resultSha256: createHash("sha256").update(admittedContent).digest("hex"),
+          }),
+        }),
+      );
+    sqlite
+      .prepare(
+        "insert into run_events (run_id, node_id, ts, type, payload) values ('run-1', 'replacement-validator', 100, 'tool', ?)",
+      )
+      .run(
+        JSON.stringify({
+          tool: RESUME_MATCH_VALIDATOR_TOOL_NAME,
+          status: "ok",
+          output: JSON.stringify({
+            valid: true,
+            errors: [],
+            resultSha256: createHash("sha256").update(replacementContent).digest("hex"),
+          }),
+        }),
+      );
 
-    expect(readResumeMatchRun("run-1")).toEqual({
-      ok: false,
-      status: 500,
-      error: "评分结果文件不存在或不可读",
+    expect(
+      captureResumeMatchCompletion("run-1", {
+        outputNodeId: "result-output",
+        validatorNodeId: "same-label-action",
+      }),
+    ).toMatchObject({
+      ok: true,
+      result: { kind: "resume-match", content: admittedContent },
     });
   });
 });

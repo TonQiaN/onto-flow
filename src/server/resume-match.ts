@@ -7,6 +7,7 @@ import {
   db,
   runEvents,
   runNodes,
+  runResults,
   runs,
   workflows,
 } from "@/db";
@@ -422,7 +423,13 @@ function resumeMatchInvocation(
 export function captureResumeMatchCompletion(
   runId: string,
   resultNodes: ResumeMatchResultNodes,
-): { ok: true; evidence: Record<string, unknown> } | { ok: false; error: string } {
+):
+  | {
+      ok: true;
+      evidence: Record<string, unknown>;
+      result: { kind: string; content: string; sha256: string };
+    }
+  | { ok: false; error: string } {
   const receiptHash = db
     .select({ payload: runEvents.payload })
     .from(runEvents)
@@ -472,6 +479,11 @@ export function captureResumeMatchCompletion(
       contractVersion: 1,
       validatorTool: RESUME_MATCH_VALIDATOR_TOOL_NAME,
       resultSha256,
+    },
+    result: {
+      kind: "resume-match",
+      content: artifact.content,
+      sha256: resultSha256,
     },
   };
 }
@@ -545,33 +557,27 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
   };
   if (run.status !== "success") return writeOk({ ...base, result: null });
 
-  const resultNodes = invocation.resultNodes;
-
-  // 展示名不是节点身份：Action 也可以叫「评分结果」。节点 id 已在受理时随来源
-  // 证明持久化，权威结果只以 (runId, nodeId) 精确读取，不能按 label 或时间猜测。
-  const outputNode = db
+  // 结果节点身份已在受理时持久化，并在完成门禁里用于精确读取该节点产物；GET
+  // 只读门禁留下的持久业务结果，工作区按保留策略清理后不改变成功调用的响应。
+  const storedResult = db
     .select()
-    .from(runNodes)
-    .where(
-      and(
-        eq(runNodes.runId, run.id),
-        eq(runNodes.nodeId, resultNodes.outputNodeId),
-      ),
-    )
+    .from(runResults)
+    .where(eq(runResults.runId, run.id))
     .get();
-  const output = outputFile(outputNode?.outputs?.value);
-  if (!output) {
-    return writeFail(500, "成功运行没有可读取的 JSON 评分结果");
+  if (!storedResult || storedResult.kind !== "resume-match") {
+    return writeFail(500, "成功运行缺少持久 JSON 评分结果");
   }
-  const artifact = readResultArtifact(run.runDir, output);
-  if (!artifact.ok) return writeFail(500, artifact.error);
-  const parsed = parseResumeMatchResult(artifact.content);
+  const parsed = parseResumeMatchResult(storedResult.content);
   if (!parsed.ok) {
     return writeFail(500, "工作流产出的 JSON 未通过结果契约", parsed.errors);
   }
   const completionHash = completionResultHash(run.imports);
-  const resultSha256 = createHash("sha256").update(artifact.content, "utf8").digest("hex");
-  if (!completionHash || completionHash !== resultSha256) {
+  const resultSha256 = createHash("sha256").update(storedResult.content, "utf8").digest("hex");
+  if (
+    !completionHash ||
+    storedResult.sha256 !== resultSha256 ||
+    completionHash !== resultSha256
+  ) {
     return writeFail(
       500,
       `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 对当前结果的持久完成证据`,

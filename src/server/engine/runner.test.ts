@@ -4,6 +4,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -81,6 +82,10 @@ CREATE TABLE runs (
   id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
   workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
   started_at INTEGER NOT NULL, finished_at INTEGER
+);
+CREATE TABLE run_results (
+  run_id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
+  sha256 TEXT NOT NULL, created_at INTEGER NOT NULL
 );
 CREATE TABLE run_nodes (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, label TEXT NOT NULL,
@@ -455,6 +460,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  sqlite.exec("DELETE FROM run_results;");
   controls.launchRun.mockReset();
   controls.launchRun.mockResolvedValue({
     dispose: controls.dispose,
@@ -485,9 +491,12 @@ describe("运行输入物化", () => {
       outputs: { 结果: { kind: "text", text: "完成" } },
       selectedExit: null,
     });
+    const resultContent = '{"ok":true}';
+    const resultSha256 = createHash("sha256").update(resultContent).digest("hex");
     const completionGate = vi.fn(() => ({
       ok: true as const,
       evidence: { kind: "test-contract", digest: "abc123" },
+      result: { kind: "test-result", content: resultContent, sha256: resultSha256 },
     }));
 
     const startedRun = await startResolvedRun(
@@ -520,6 +529,13 @@ describe("运行输入物化", () => {
       });
     });
     expect(completionGate).toHaveBeenCalledWith(startedRun.runId);
+    expect(
+      sqlite
+        .prepare(
+          "select kind, content, sha256 from run_results where run_id = ?",
+        )
+        .get(startedRun.runId),
+    ).toEqual({ kind: "test-result", content: resultContent, sha256: resultSha256 });
   });
 
   it("专用入口完成证据缺失时收束为 failed 而不是留下不可读 success", async () => {
