@@ -6,7 +6,8 @@
  * `formatDateTime` / `formatClock` / `formatDuration`，无需再过 `toMillis`。
  * 例外只有显式带 `ISO` 后缀的分桶键（`hourISO` / `dayISO`），那是给图表当 x 轴标签用的。
  *
- * token 口径与运行历史页一致：五类 token（input/output/reasoning/cacheRead/cacheWrite）全部计入。
+ * token 口径与运行历史页一致：output 已含 reasoning，总量只加
+ * input/output/cacheRead/cacheWrite；reasoning 仅作为 output 的拆分明细展示。
  */
 import type { NodeStatus, RunStatus } from "@/app/runs/lib";
 

@@ -209,13 +209,12 @@ export function durationText(startedAt: unknown, finishedAt: unknown): string {
   return formatDuration(end - start);
 }
 
-/** 用量合计：五类 token 全部计入「总 token」 */
+/** outputTokens 已含 reasoning；推理 token 只作拆分展示，不能再次计入总量。 */
 export function sumTokens(usage: Partial<NodeUsage> | null | undefined): number {
   if (!usage) return 0;
   return (
     (usage.inputTokens ?? 0) +
     (usage.outputTokens ?? 0) +
-    (usage.reasoningTokens ?? 0) +
     (usage.cacheReadTokens ?? 0) +
     (usage.cacheWriteTokens ?? 0)
   );

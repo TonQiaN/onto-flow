@@ -91,6 +91,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - **事件、轨迹与用量**：`session.event` 通知到达时立刻归一为 text / reasoning / tool /
   session.idle / session.error 并落库。每个 step 的 usage chunk 是不累积值，按
   `(sessionId, turn:step)` 唯一化后求和；完整原始会话另存 `<run>/sessions/**/session.jsonl`。
+  DeepSeek 的 `outputTokens` 已含 reasoning；运行详情、历史 API、画布运行条、轨迹与监控汇总
+  均只把 input/output/cacheRead/cacheWrite 计入总 token，reasoning 只保留为拆分明细。
   运行详情展开某个 Action 时，从数据库记录的 `runDir` 枚举 `nodeId` 与 `nodeId#N` 会话，使用
   dsh 公共 codec 解包 chunk 行，再按回合与步骤折叠、按 `callId` 配对 Tool 调用与结果。界面只
   返回有长度边界且物理路径脱敏的折叠记录，输入 / 模型 / 工具三泳道和选中记录详情由同一投影

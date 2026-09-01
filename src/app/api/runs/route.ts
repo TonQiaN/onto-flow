@@ -43,8 +43,7 @@ export async function GET(request: Request) {
         finishedAt: runs.finishedAt,
         totalTokens: sql<number>`coalesce(sum(
           ${runNodes.inputTokens} + ${runNodes.outputTokens} +
-          ${runNodes.reasoningTokens} + ${runNodes.cacheReadTokens} +
-          ${runNodes.cacheWriteTokens}
+          ${runNodes.cacheReadTokens} + ${runNodes.cacheWriteTokens}
         ), 0)`,
         totalCost: sql<number>`coalesce(sum(${runNodes.cost}), 0)`,
         // 进度：导航「运行中」面板与列表都要展示 N/M 个节点，避免逐运行再打详情接口

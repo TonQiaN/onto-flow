@@ -29,7 +29,7 @@ import {
   type ReactNode,
 } from "react";
 import { useReactFlow, type Edge } from "@xyflow/react";
-import { formatDuration, toMillis } from "@/app/runs/lib";
+import { formatDuration, sumTokens, toMillis } from "@/app/runs/lib";
 import type { FlowNode, RunNodeStatus } from "./types";
 
 /** run_nodes.status 的全集（含阶段一新增的 cancelled）。与 types.ts 同一套，避免两处漂移 */
@@ -254,12 +254,13 @@ function parseSnapshot(raw: string): SnapshotPatch {
           : null,
       inputTokens,
       outputTokens,
-      totalTokens:
-        inputTokens +
-        outputTokens +
-        num(r.reasoningTokens) +
-        num(r.cacheReadTokens) +
-        num(r.cacheWriteTokens),
+      totalTokens: sumTokens({
+        inputTokens,
+        outputTokens,
+        reasoningTokens: num(r.reasoningTokens),
+        cacheReadTokens: num(r.cacheReadTokens),
+        cacheWriteTokens: num(r.cacheWriteTokens),
+      }),
       cost: num(r.cost),
       error: str(r.error),
     };

@@ -198,7 +198,7 @@ export default function MonitorOverviewPage() {
           label="今日 token"
           value={formatTokens(today?.tokens ?? 0)}
           tone="sky"
-          hint="五类 token 合计"
+          hint="input/output/cache 合计；推理已含在 output"
           loading={loading}
         />
         <MetricCard

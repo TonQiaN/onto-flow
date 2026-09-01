@@ -5,6 +5,7 @@ import {
   formatClock,
   formatDuration,
   formatTokens,
+  sumTokens,
   type AgentTrajectoryResponse,
   type NodeStatus,
   type TrajectoryDetail,
@@ -70,17 +71,10 @@ function recordDuration(record: TrajectoryRecord): string {
 }
 
 function sessionTokens(session: TrajectorySession): number {
-  return session.records.reduce((total, record) => {
-    if (!record.usage) return total;
-    return (
-      total +
-      record.usage.inputTokens +
-      record.usage.outputTokens +
-      record.usage.reasoningTokens +
-      record.usage.cacheReadTokens +
-      record.usage.cacheWriteTokens
-    );
-  }, 0);
+  return session.records.reduce(
+    (total, record) => total + sumTokens(record.usage),
+    0,
+  );
 }
 
 function TrajectoryTimeline({
