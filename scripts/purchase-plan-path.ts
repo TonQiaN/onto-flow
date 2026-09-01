@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 
 /** plan_no 只参与文件名，不改变数据库里的业务编号。 */
@@ -41,11 +42,34 @@ export function purchasePlanBackupLocation(
   };
 }
 
+/** 数据库尚未接管备份路径时，失败分支必须删除临时归档；ENOENT 视为已经清理。 */
+export function removeUnownedBackup(
+  fsModule: Pick<typeof fs, "unlinkSync">,
+  absolutePath: string | null,
+): string | null {
+  if (absolutePath === null) return null;
+  try {
+    fsModule.unlinkSync(absolutePath);
+    return null;
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return null;
+    }
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
 /** Tool 被物化到运行目录，故把同一份已测试函数源码嵌进插件而不是复制一套实现。 */
 export const PURCHASE_PLAN_PATH_HELPERS_SOURCE = [
   safePlanNoPathSegment,
   resolveWithinData,
   purchasePlanBackupLocation,
+  removeUnownedBackup,
 ]
   .map((fn) => fn.toString())
   .join("\n\n");

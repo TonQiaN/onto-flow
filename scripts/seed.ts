@@ -237,6 +237,7 @@ export function apply(ctx: Context): void {
       }
       const createdAt = new Date().toISOString();
       const db = new DatabaseSync(dbPath);
+      let unownedBackupPath: string | null = null;
       try {
         // 与 Next 进程共用同一个库文件，写入前先给足等待窗口。
         db.exec("PRAGMA busy_timeout = 5000;");
@@ -247,6 +248,7 @@ export function apply(ctx: Context): void {
           "-" +
           randomUUID();
         const backup = purchasePlanBackupLocation(path, dataDir, args.plan_no, stamp);
+        unownedBackupPath = backup.absolutePath;
         fs.mkdirSync(path.dirname(backup.absolutePath), { recursive: true });
         fs.writeFileSync(backup.absolutePath, args.plan_content, "utf8");
         db.prepare(INSERT).run(
@@ -267,6 +269,8 @@ export function apply(ctx: Context): void {
           backup.relativePath,
           createdAt,
         );
+        // upsert 成功后数据库行正式接管这份备份；后续读取回执失败也不能删它。
+        unownedBackupPath = null;
         const row = db
           .prepare("SELECT id FROM purchase_plans WHERE plan_no = ?")
           .get(args.plan_no) as { id: number } | undefined;
@@ -277,9 +281,12 @@ export function apply(ctx: Context): void {
           backupPath: backup.relativePath,
         });
       } catch (err) {
+        const cleanupError = removeUnownedBackup(fs, unownedBackupPath);
         return Promise.resolve({
           ok: false,
-          error: err instanceof Error ? err.message : String(err),
+          error:
+            (err instanceof Error ? err.message : String(err)) +
+            (cleanupError ? \`；失败备份清理失败：\${cleanupError}\` : ""),
         });
       } finally {
         db.close();

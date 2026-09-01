@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   PURCHASE_PLAN_PATH_HELPERS_SOURCE,
   purchasePlanBackupLocation,
+  removeUnownedBackup,
 } from "./purchase-plan-path";
 
 const seedSource = fs.readFileSync(new URL("./seed.ts", import.meta.url), "utf8");
@@ -48,5 +49,25 @@ describe("集采计划归档路径", () => {
     expect(seedSource).toContain('import { randomUUID } from "node:crypto";');
     expect(seedSource).toContain("randomUUID();");
     expect(seedSource).not.toContain("Math.random().toString(16).slice(2, 6)");
+  });
+
+  it("数据库未接管的备份在失败时被删除", () => {
+    const root = fs.mkdtempSync(path.join("/tmp", "ontoflow-purchase-backup-"));
+    const backup = path.join(root, "failed.md");
+    try {
+      fs.writeFileSync(backup, "unowned");
+      expect(removeUnownedBackup(fs, backup)).toBeNull();
+      expect(fs.existsSync(backup)).toBe(false);
+      expect(removeUnownedBackup(fs, backup)).toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("生成插件嵌入失败备份清理函数", () => {
+    expect(PURCHASE_PLAN_PATH_HELPERS_SOURCE).toContain("removeUnownedBackup");
+    expect(seedSource).toContain("let unownedBackupPath: string | null = null;");
+    expect(seedSource).toContain("unownedBackupPath = null;");
+    expect(seedSource).toContain("removeUnownedBackup(fs, unownedBackupPath)");
   });
 });

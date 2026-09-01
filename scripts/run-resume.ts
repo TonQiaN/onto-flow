@@ -11,6 +11,7 @@ import { eq } from "drizzle-orm";
 import { db, runNodes, runs, workflowNodes, workflows } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import { DATA_DIR, resolveWithinData } from "../src/server/fs-safety";
+import { inspectPdfPages, readPdfPageCount } from "./resume-pdf-inspection";
 
 function fileInput(dataRelativePath: string) {
   const abs = resolveWithinData(dataRelativePath);
@@ -101,16 +102,16 @@ async function main(): Promise<void> {
       bytes: absolutePath !== "" && fs.existsSync(absolutePath) ? fs.statSync(absolutePath).size : 0,
     };
   });
-  const pageImages = ws && fs.existsSync(path.join(ws, "inputs"))
-    ? fs
-        .readdirSync(path.join(ws, "inputs"), { recursive: true })
-        .filter(
-          (entry) =>
-            typeof entry === "string" &&
-            /(?:^|\/)page-\d+\.png$/.test(entry.replaceAll("\\", "/")),
-        )
-        .length
-    : 0;
+  const pdfPages = ws
+    ? [
+        { label: "岗位JD", nodeId: jd.id, inputPath: jdPath },
+        { label: "简历", nodeId: resume.id, inputPath: resumePath },
+      ].flatMap(({ label, nodeId, inputPath }) => {
+        if (path.extname(inputPath).toLowerCase() !== ".pdf") return [];
+        const expectedPages = readPdfPageCount(resolveWithinData(inputPath));
+        return [{ label, ...inspectPdfPages(ws, nodeId, expectedPages) }];
+      })
+    : [];
   console.log(
     JSON.stringify(
       {
@@ -124,7 +125,7 @@ async function main(): Promise<void> {
         },
         totalTokens,
         totalCost,
-        pdfPageImages: pageImages,
+        pdfPages,
         artifacts,
       },
       null,
@@ -133,18 +134,18 @@ async function main(): Promise<void> {
   );
 
   const invalidArtifacts = artifacts.filter((artifact) => !artifact.present || artifact.bytes === 0);
-  const requiresPageImages = [jdPath, resumePath].some(
-    (inputPath) => path.extname(inputPath).toLowerCase() === ".pdf",
-  );
+  const incompletePdfs = pdfPages.filter((inspection) => !inspection.complete);
   if (
     row!.status !== "success" ||
     invalidArtifacts.length > 0 ||
-    (requiresPageImages && pageImages === 0)
+    incompletePdfs.length > 0
   ) {
     throw new Error(
       `验收未通过：status=${row!.status} invalidArtifacts=${invalidArtifacts
         .map((artifact) => artifact.path)
-        .join(",") || "none"} pdfPageImages=${pageImages}`,
+        .join(",") || "none"} incompletePdfPages=${incompletePdfs
+        .map((inspection) => `${inspection.label}:${inspection.missingPages.join("/")}`)
+        .join(",") || "none"}`,
     );
   }
 }
