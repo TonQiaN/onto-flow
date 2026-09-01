@@ -1,9 +1,12 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   PURCHASE_PLAN_PATH_HELPERS_SOURCE,
   purchasePlanBackupLocation,
 } from "./purchase-plan-path";
+
+const seedSource = fs.readFileSync(new URL("./seed.ts", import.meta.url), "utf8");
 
 describe("集采计划归档路径", () => {
   it("../../escape 只能生成 data/documents 内的净化文件名", () => {
@@ -39,5 +42,11 @@ describe("集采计划归档路径", () => {
     expect(invoke(path, "/tmp/ontoflow-data", "../../escape", "20260826").relativePath).toBe(
       "documents/escape-20260826.md",
     );
+  });
+
+  it("归档 Tool 用完整 UUID 区分同秒并行备份", () => {
+    expect(seedSource).toContain('import { randomUUID } from "node:crypto";');
+    expect(seedSource).toContain("randomUUID();");
+    expect(seedSource).not.toContain("Math.random().toString(16).slice(2, 6)");
   });
 });

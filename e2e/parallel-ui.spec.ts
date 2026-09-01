@@ -158,10 +158,20 @@ test.describe("多路并行界面", () => {
       await expect(switcher).toBeVisible({ timeout: 10_000 });
       await expect(switcher.locator("option")).toHaveCount(2);
       await expect(switcher).toHaveValue(runA);
-      await switcher.selectOption(runB);
+
+      // 画布保持挂载时再点同工作流的另一条导航深链：只有 query string 改变，
+      // 仍必须切换 SSE 与取消目标，不能停留在上一条运行。
+      const itemB = page
+        .getByTestId("nav-running-run")
+        .filter({ hasText: runB.slice(0, 8) });
+      await itemB.click();
+      await page.waitForURL(`/workflows/${workflowId}?runId=${runB}`);
       await expect(switcher).toHaveValue(runB);
-      await expect(page).toHaveURL(new RegExp(`runId=${runB}`));
       await expect(page.getByText("运行中", { exact: true })).toBeVisible();
+
+      await switcher.selectOption(runA);
+      await expect(switcher).toHaveValue(runA);
+      await expect(page).toHaveURL(new RegExp(`runId=${runA}`));
 
       // 两路都收束：运行条转成结果条，导航面板收起。
       finishSyntheticRuns([runA, runB]);

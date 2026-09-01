@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Background,
   BackgroundVariant,
@@ -120,7 +121,8 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   const [runSpecs, setRunSpecs] = useState<RunInputSpec[] | null>(null);
   const [submittingRun, setSubmittingRun] = useState(false);
   /** 运行态（SSE 订阅、五态视觉、自动跟随、取消）统一由该 hook 提供 */
-  const { visuals, subscribe: subscribeRun } = useRunVisuals();
+  const { visuals, subscribe: subscribeRun, reset: resetRun } = useRunVisuals();
+  const routeRunId = useSearchParams().get("runId");
   /** 本工作流当前进行中的全部运行：喂给运行条的并行切换器 */
   const [runsInFlight, setRunsInFlight] = useState<
     Array<{ id: string; startedAt: string | number }>
@@ -128,8 +130,6 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   /** 轮询闭包读运行态要走 ref，否则依赖会让 interval 每拍重建 */
   const visualsRef = useRef(visuals);
   visualsRef.current = visuals;
-  /** ?runId= 深链只在首拍消费一次，此后不抢用户手动选择的运行 */
-  const deepLinkHandledRef = useRef(false);
 
   // 画布交互态
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
@@ -729,9 +729,7 @@ function EditorInner({ workflowId }: { workflowId: string }) {
 
   // 进行中运行清单：驱动运行条的并行切换器，也承担挂载时重连——
   // SSE snapshot 会全量回放状态，动画/跟随/运行条整套恢复。
-  // 首拍优先跟 ?runId= 深链（来自导航「运行中」面板或运行详情，已结束的也照样
-  // 回放成结果条）；没有深链就跟最新一条；此后只在画面上没有活运行时自动补跟，
-  // 不抢用户已选择的运行。
+  // 没有深链时跟最新一条；此后只在画面上没有活运行时自动补跟，不抢用户选择。
   useEffect(() => {
     let disposed = false;
     const load = async () => {
@@ -744,38 +742,10 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         const rows = (await res.json()) as Array<{ id: string; startedAt: string | number }>;
         if (disposed || !Array.isArray(rows)) return;
         setRunsInFlight(rows.map((row) => ({ id: row.id, startedAt: row.startedAt })));
-        if (!deepLinkHandledRef.current) {
-          deepLinkHandledRef.current = true;
-          const wanted = new URLSearchParams(window.location.search).get("runId");
-          if (wanted) {
-            let belongsToWorkflow = rows.some((row) => row.id === wanted);
-            if (!belongsToWorkflow) {
-              const detailRes = await fetch(
-                `/api/runs/${encodeURIComponent(wanted)}`,
-                { cache: "no-store" },
-              );
-              if (detailRes.ok) {
-                const detail = (await detailRes.json()) as {
-                  run?: { workflowId?: string };
-                };
-                belongsToWorkflow = detail.run?.workflowId === workflowId;
-              }
-            }
-            if (disposed) return;
-            if (belongsToWorkflow) {
-              subscribeRun(wanted);
-              return;
-            }
-            const url = new URL(window.location.href);
-            url.searchParams.delete("runId");
-            window.history.replaceState(null, "", url);
-            setBanner("链接中的运行不存在或不属于当前工作流，已停止跟随");
-          }
-        }
         const current = visualsRef.current;
         const followedLive =
           current.runId !== null && (current.runStatus === "running" || current.visible);
-        if (!followedLive && rows[0]?.id && rows[0].id !== current.runId) {
+        if (!routeRunId && !followedLive && rows[0]?.id && rows[0].id !== current.runId) {
           subscribeRun(rows[0].id);
         }
       } catch {
@@ -788,7 +758,42 @@ function EditorInner({ workflowId }: { workflowId: string }) {
       disposed = true;
       clearInterval(timer);
     };
-  }, [workflowId, subscribeRun]);
+  }, [workflowId, routeRunId, subscribeRun]);
+
+  // 同一个画布内从导航切换运行时只有 query string 变化，组件不会重挂载。
+  // 直接观察 useSearchParams，让每个新的 runId 都重新做归属校验并切换 SSE。
+  useEffect(() => {
+    if (!routeRunId) return;
+    let disposed = false;
+    const followDeepLink = async () => {
+      try {
+        const detailRes = await fetch(`/api/runs/${encodeURIComponent(routeRunId)}`, {
+          cache: "no-store",
+        });
+        let belongsToWorkflow = false;
+        if (detailRes.ok) {
+          const detail = (await detailRes.json()) as { run?: { workflowId?: string } };
+          belongsToWorkflow = detail.run?.workflowId === workflowId;
+        }
+        if (disposed) return;
+        if (belongsToWorkflow) {
+          subscribeRun(routeRunId);
+          return;
+        }
+        resetRun();
+        const url = new URL(window.location.href);
+        url.searchParams.delete("runId");
+        window.history.replaceState(null, "", url);
+        setBanner("链接中的运行不存在或不属于当前工作流，已停止跟随");
+      } catch {
+        // 短暂网络错误不改 URL；导航或下一次参数变化仍可重新校验。
+      }
+    };
+    void followDeepLink();
+    return () => {
+      disposed = true;
+    };
+  }, [workflowId, routeRunId, subscribeRun, resetRun]);
 
   // ---------- 键盘 ----------
   useEffect(() => {

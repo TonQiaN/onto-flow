@@ -124,6 +124,7 @@ const SAVE_PURCHASE_PLAN_CODE = `/**
  *
  * 与 Next 进程共用同一个数据库文件，因此设 busy_timeout 并保持写入轻量。
  */
+import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
@@ -239,12 +240,12 @@ export function apply(ctx: Context): void {
       try {
         // 与 Next 进程共用同一个库文件，写入前先给足等待窗口。
         db.exec("PRAGMA busy_timeout = 5000;");
-        // 备份文件名带时刻与随机后缀：并行运行归档同一 plan_no 时各写各的文件，
+        // 备份文件名带时刻与完整 UUID：并行运行归档同一 plan_no 时各写各的文件，
         // 不共享确定性路径；文件先落盘，行再指向它。
         const stamp =
           createdAt.replace(/[-:]/g, "").replace(/\\..*$/, "").replace("T", "-") +
           "-" +
-          Math.random().toString(16).slice(2, 6);
+          randomUUID();
         const backup = purchasePlanBackupLocation(path, dataDir, args.plan_no, stamp);
         fs.mkdirSync(path.dirname(backup.absolutePath), { recursive: true });
         fs.writeFileSync(backup.absolutePath, args.plan_content, "utf8");
