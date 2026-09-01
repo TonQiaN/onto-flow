@@ -212,7 +212,7 @@ function resolvedWorkflow(): ResolvedWorkflow {
   };
 }
 
-function materializationWorkflow(): ResolvedWorkflow {
+function materializationWorkflow(textInputLabel = "完整题目"): ResolvedWorkflow {
   const workflow = {
     id: "workflow-materialization",
     name: "输入物化测试",
@@ -242,7 +242,7 @@ function materializationWorkflow(): ResolvedWorkflow {
       {
         id: "text-input",
         kind: "input",
-        label: "完整题目",
+        label: textInputLabel,
         inputs: [],
         outputs: [port("value", "type-text", "文本", "text")],
       },
@@ -481,6 +481,46 @@ describe("运行输入物化", () => {
     expect(fs.readFileSync(path.resolve(dataRoot, textValue.file.path), "utf8")).toBe(fullText);
     expect(fs.readFileSync(path.resolve(dataRoot, jsonValue.file.path), "utf8")).toBe(
       `${JSON.stringify(json, null, 2)}\n`,
+    );
+  });
+
+  it("超长中文节点名收敛为文件系统可接受的稳定文件名", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+    controls.resolveWorkflow.mockResolvedValue(materializationWorkflow("超长输入节点".repeat(80)));
+
+    let capturedInputs: Record<string, PortValue[]> | undefined;
+    controls.runActionNode.mockImplementation(
+      async (ctx: { inputs: Record<string, PortValue[]> }) => {
+        capturedInputs = ctx.inputs;
+        return {
+          outputs: { 结果: { kind: "text", text: "完成" } },
+          selectedExit: null,
+        };
+      },
+    );
+
+    const startedRun = await startRun("workflow-materialization", {
+      "text-input": { kind: "text", text: "正文" },
+      "json-input": { kind: "json", json: { ok: true } },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("success");
+      expect(run.error).toBeNull();
+    });
+
+    const value = capturedInputs?.题目?.[0];
+    expect(value?.kind).toBe("file");
+    if (value?.kind !== "file") return;
+    expect(Buffer.byteLength(value.file.name, "utf8")).toBeLessThanOrEqual(240);
+    expect(value.file.name).toMatch(/-[0-9a-f]{12}\.md$/);
+    expect(fs.readFileSync(path.resolve(process.cwd(), "data", value.file.path), "utf8")).toBe(
+      "正文",
     );
   });
 });

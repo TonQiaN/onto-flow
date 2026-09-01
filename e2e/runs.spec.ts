@@ -239,8 +239,16 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
   const now = Date.now() - 10_000;
   const workflowName = `${PREFIX}${workflowId.slice(0, 8)}`;
   const fixture = { workflowId, workflowName, runId, runDir, nodeA, nodeB };
+  const dataRoot = path.join(process.cwd(), "data");
+  const artifactA = path.join(runDir, "workspace", "trajectory-a.md");
+  const artifactB = path.join(runDir, "workspace", "trajectory-b.md");
 
   try {
+    await mkdir(path.dirname(artifactA), { recursive: true });
+    await Promise.all([
+      writeFile(artifactA, "合成轨迹产物 A", "utf8"),
+      writeFile(artifactB, "合成轨迹产物 B", "utf8"),
+    ]);
     await writeSession(runDir, nodeA, eventLog(nodeA, now, "A_ROUND_1", true));
     await writeSession(
       runDir,
@@ -298,7 +306,16 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
           nodeA,
           "e2e-Agent甲",
           snapshot,
-          JSON.stringify({ 结果: { kind: "text", text: "合成轨迹产物 A" } }),
+          JSON.stringify({
+            结果: {
+              kind: "file",
+              file: {
+                path: path.relative(dataRoot, artifactA),
+                name: path.basename(artifactA),
+                mime: "text/markdown",
+              },
+            },
+          }),
           `${nodeA}#2`,
           now,
           now + 136,
@@ -309,7 +326,16 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
           nodeB,
           "e2e-Agent乙",
           snapshot,
-          JSON.stringify({ 结果: { kind: "text", text: "合成轨迹产物 B" } }),
+          JSON.stringify({
+            结果: {
+              kind: "file",
+              file: {
+                path: path.relative(dataRoot, artifactB),
+                name: path.basename(artifactB),
+                mime: "text/markdown",
+              },
+            },
+          }),
           nodeB,
           now + 200,
           now + 236,
@@ -478,8 +504,11 @@ test.describe("运行历史", () => {
     await expect(cardA).toContainText("e2e-Agent甲");
     await expect(cardB).toContainText("e2e-Agent乙");
     await expect(cardA).toContainText("输出");
+    await expect(cardA).toContainText("trajectory-a.md");
+    await cardA.getByRole("button", { name: "查看内容" }).click();
     await expect(cardA).toContainText("合成轨迹产物 A");
     await expect(cardB).toContainText("输出");
+    await expect(cardB).toContainText("trajectory-b.md");
     expect(trajectoryRequests).toHaveLength(0);
 
     const toggleA = cardA.getByTestId("agent-trajectory-toggle");

@@ -129,11 +129,7 @@ function FileValue({
   );
 }
 
-/**
- * PortValue 展示：text → 可折叠 pre；json → 格式化 JSON pre（两者仅出现在
- * ADR-0012 之前的历史运行记录里）；file → 文件名徽章 + 按需正文预览；
- * 非法形态兜底为原始 JSON。
- */
+/** PortValue 展示：ADR-0012 后只接受文件引用，不保留旧内联值的兼容渲染。 */
 export function PortValueView({ value, runId }: { value: unknown; runId?: string }) {
   // 输入端口的值恒是 PortValue[]（一个口可接多条入线的汇总），逐项渲染，
   // 否则数组落到 JSON dump、文件值的预览入口在输入区永远不出现。
@@ -150,28 +146,19 @@ export function PortValueView({ value, runId }: { value: unknown; runId?: string
     );
   }
   const pv = asPortValue(value);
-  if (!pv) {
-    return <pre className={PRE_CLS}>{JSON.stringify(value, null, 2)}</pre>;
+  if (!pv || pv.kind !== "file") {
+    return <span className="text-xs text-red-700">非文件值不符合当前运行契约</span>;
   }
-  switch (pv.kind) {
-    case "text":
-      return <CollapsibleText text={pv.text} />;
-    case "json":
-      return (
-        <pre className={PRE_CLS}>{JSON.stringify(pv.json, null, 2)}</pre>
-      );
-    case "file":
-      if (runId) return <FileValue runId={runId} file={pv.file} />;
-      return (
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            title={pv.file.mime || undefined}
-            className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-1 text-xs text-zinc-700"
-          >
-            <span className="text-zinc-400">文件</span>
-            <span className="font-medium">{pv.file.name}</span>
-          </span>
-        </div>
-      );
-  }
+  if (runId) return <FileValue runId={runId} file={pv.file} />;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span
+        title={pv.file.mime || undefined}
+        className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-zinc-100 px-2.5 py-1 text-xs text-zinc-700"
+      >
+        <span className="text-zinc-400">文件</span>
+        <span className="font-medium">{pv.file.name}</span>
+      </span>
+    </div>
+  );
 }

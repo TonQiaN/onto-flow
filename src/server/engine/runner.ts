@@ -13,6 +13,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, runNodes, runs } from "@/db";
 import {
@@ -127,6 +128,34 @@ function scheduleUsageSettlementRetry(runId: string): Promise<void> {
   })();
   pendingUsageSettlements.set(runId, task);
   return task;
+}
+
+/** 留出文件系统实现差异余量，避免贴着常见的 255-byte 单组件上限写入。 */
+const INPUT_FILENAME_MAX_BYTES = 240;
+
+/**
+ * 保留可辨认前缀与短扩展名，超长部分用内容散列稳定收敛；按 UTF-8 字节而非
+ * JS 字符数计，中文标签不会在 writeFileSync 时才以 ENAMETOOLONG 异步失败。
+ */
+function boundedInputFilename(candidate: string): string {
+  const basename = safeBasename(candidate);
+  if (Buffer.byteLength(basename, "utf8") <= INPUT_FILENAME_MAX_BYTES) return basename;
+
+  const candidateExtension = path.extname(basename);
+  const extension =
+    Buffer.byteLength(candidateExtension, "utf8") <= 16 ? candidateExtension : "";
+  const stem = extension ? basename.slice(0, -extension.length) : basename;
+  const suffix = `-${createHash("sha256").update(basename).digest("hex").slice(0, 12)}${extension}`;
+  const prefixBudget = INPUT_FILENAME_MAX_BYTES - Buffer.byteLength(suffix, "utf8");
+  let prefix = "";
+  let used = 0;
+  for (const character of stem) {
+    const bytes = Buffer.byteLength(character, "utf8");
+    if (used + bytes > prefixBudget) break;
+    prefix += character;
+    used += bytes;
+  }
+  return `${prefix || "input"}${suffix}`;
 }
 
 export function isRunCancelled(runId: string): boolean {
@@ -921,7 +950,7 @@ function materializeRunInputs(
     fs.mkdirSync(destDir, { recursive: true });
 
     if (value.kind === "file") {
-      const name = safeBasename(value.file.name || value.file.path);
+      const name = boundedInputFilename(value.file.name || value.file.path);
       const dest = path.join(destDir, name);
       const source = resolveWithinData(value.file.path);
       if (fs.statSync(source).size > MAX_FILE_INPUT_BYTES) {
@@ -939,7 +968,7 @@ function materializeRunInputs(
     // 模型和事后翻工作区的人都能一眼认出这是什么。文字一字不差落盘，不加不减。
     const label = nodes.find((node) => node.id === nodeId)?.label.trim() ?? "";
     const stem = safeBasename(label || "value");
-    const name = value.kind === "text" ? `${stem}.md` : `${stem}.json`;
+    const name = boundedInputFilename(value.kind === "text" ? `${stem}.md` : `${stem}.json`);
     const content =
       value.kind === "text" ? value.text : `${JSON.stringify(value.json, null, 2)}\n`;
     if (Buffer.byteLength(content, "utf8") > MAX_FILE_INPUT_BYTES) {
