@@ -134,11 +134,11 @@ function scheduleUsageSettlementRetry(runId: string): Promise<void> {
 const INPUT_FILENAME_MAX_BYTES = 240;
 
 /**
- * 保留可辨认前缀与短扩展名，超长部分用内容散列稳定收敛；按 UTF-8 字节而非
- * JS 字符数计，中文标签不会在 writeFileSync 时才以 ENAMETOOLONG 异步失败。
+ * 保留可辨认前缀与短扩展名，超长部分用内容散列稳定收敛；NUL 在进入文件系统
+ * 前替换，长度按 UTF-8 字节而非 JS 字符数计，非法名称不会在运行受理后异步失败。
  */
 function boundedInputFilename(candidate: string): string {
-  const basename = safeBasename(candidate);
+  const basename = safeBasename(candidate.replaceAll("\0", "_"));
   if (Buffer.byteLength(basename, "utf8") <= INPUT_FILENAME_MAX_BYTES) return basename;
 
   const candidateExtension = path.extname(basename);

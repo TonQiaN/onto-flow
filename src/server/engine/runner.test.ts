@@ -523,6 +523,45 @@ describe("运行输入物化", () => {
       "正文",
     );
   });
+
+  it("节点名中的 NUL 在写文件前稳定替换", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+    controls.resolveWorkflow.mockResolvedValue(materializationWorkflow("题目\0危险字符"));
+
+    let capturedInputs: Record<string, PortValue[]> | undefined;
+    controls.runActionNode.mockImplementation(
+      async (ctx: { inputs: Record<string, PortValue[]> }) => {
+        capturedInputs = ctx.inputs;
+        return {
+          outputs: { 结果: { kind: "text", text: "完成" } },
+          selectedExit: null,
+        };
+      },
+    );
+
+    const startedRun = await startRun("workflow-materialization", {
+      "text-input": { kind: "text", text: "正文" },
+      "json-input": { kind: "json", json: { ok: true } },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("success");
+      expect(run.error).toBeNull();
+    });
+
+    const value = capturedInputs?.题目?.[0];
+    expect(value?.kind).toBe("file");
+    if (value?.kind !== "file") return;
+    expect(value.file.name).toBe("题目_危险字符.md");
+    expect(fs.readFileSync(path.resolve(process.cwd(), "data", value.file.path), "utf8")).toBe(
+      "正文",
+    );
+  });
 });
 
 describe("回边重入", () => {
