@@ -55,10 +55,13 @@ import {
 import type { WriteResult } from "../src/server/writers/types";
 import {
   RESUME_MATCH_CRITIC_ACTION_NAMES,
+  RESUME_MATCH_CRITIC_ARTIFACTS,
   RESUME_MATCH_CRITIC_RESULT_PORT,
   RESUME_MATCH_JOB_INPUT_LABEL,
   RESUME_MATCH_OUTPUT_LABEL,
+  RESUME_MATCH_PARSED_JOB_ARTIFACT,
   RESUME_MATCH_PARSED_JOB_PORT,
+  RESUME_MATCH_PARSED_RESUME_ARTIFACT,
   RESUME_MATCH_PARSED_RESUME_PORT,
   RESUME_MATCH_PARSE_ACTION_NAME,
   RESUME_MATCH_REPORT_ACTION_NAME,
@@ -432,8 +435,16 @@ const parse = upsertAction({
     { name: "简历文件", objectTypeId: tResumeFile },
   ],
   outputs: [
-    { name: RESUME_MATCH_PARSED_JOB_PORT, objectTypeId: tJdMd, artifactPath: "job.md" },
-    { name: RESUME_MATCH_PARSED_RESUME_PORT, objectTypeId: tResumeMd, artifactPath: "resume.md" },
+    {
+      name: RESUME_MATCH_PARSED_JOB_PORT,
+      objectTypeId: tJdMd,
+      artifactPath: RESUME_MATCH_PARSED_JOB_ARTIFACT,
+    },
+    {
+      name: RESUME_MATCH_PARSED_RESUME_PORT,
+      objectTypeId: tResumeMd,
+      artifactPath: RESUME_MATCH_PARSED_RESUME_ARTIFACT,
+    },
   ],
 });
 
@@ -499,7 +510,7 @@ const CRITICS: Array<{ key: string; name: string; focus: string; scoring: string
   },
 ];
 
-const criticIds = CRITICS.map((critic) =>
+const criticIds = CRITICS.map((critic, index) =>
   upsertAction({
     name: critic.name,
     description: `简历评分的一个评委：${critic.focus.slice(0, 24)}…`,
@@ -528,7 +539,7 @@ const criticIds = CRITICS.map((critic) =>
       {
         name: RESUME_MATCH_CRITIC_RESULT_PORT,
         objectTypeId: tVerdict,
-        artifactPath: `scores/${critic.key}.md`,
+        artifactPath: RESUME_MATCH_CRITIC_ARTIFACTS[index],
       },
     ],
   }),

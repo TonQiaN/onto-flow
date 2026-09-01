@@ -11,17 +11,25 @@ import {
   runs,
   workflows,
 } from "@/db";
-import { classifyEdges, downstreamOf, type ValidationIssue } from "@/lib/graph";
+import {
+  classifyEdges,
+  downstreamOf,
+  type ResolvedPort,
+  type ValidationIssue,
+} from "@/lib/graph";
 import {
   parseResumeMatchResult,
   RESUME_MATCH_CRITIC_ACTION_NAMES,
+  RESUME_MATCH_CRITIC_ARTIFACTS,
   RESUME_MATCH_CRITIC_RESULT_PORT,
   RESUME_MATCH_JOB_INPUT_LABEL,
   RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
   RESUME_MATCH_JOB_PARSE_PORT,
   RESUME_MATCH_OUTPUT_LABEL,
   RESUME_MATCH_PARSE_ACTION_NAME,
+  RESUME_MATCH_PARSED_JOB_ARTIFACT,
   RESUME_MATCH_PARSED_JOB_PORT,
+  RESUME_MATCH_PARSED_RESUME_ARTIFACT,
   RESUME_MATCH_PARSED_RESUME_PORT,
   RESUME_MATCH_REPORT_ACTION_NAME,
   RESUME_MATCH_REPORT_CRITICS_PORT,
@@ -152,6 +160,40 @@ function sameResultSchema(schema: string | null): boolean {
   }
 }
 
+type PortContract = Pick<ResolvedPort, "name" | "kind" | "objectTypeId"> & {
+  artifactPath: string | null;
+  exitName: string | null;
+};
+
+function portContract(
+  name: string,
+  kind: ResolvedPort["kind"],
+  objectTypeId: string,
+  artifactPath: string | null = null,
+): PortContract {
+  return { name, kind, objectTypeId, artifactPath, exitName: null };
+}
+
+function exactPorts(
+  actual: readonly ResolvedPort[],
+  expected: readonly PortContract[],
+): boolean {
+  const key = (port: ResolvedPort | PortContract) =>
+    JSON.stringify([
+      port.name,
+      port.kind,
+      port.objectTypeId,
+      port.artifactPath ?? null,
+      port.exitName ?? null,
+    ]);
+  const actualKeys = actual.map(key).sort();
+  const expectedKeys = expected.map(key).sort();
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((value, index) => value === expectedKeys[index])
+  );
+}
+
 /**
  * 内部 API 是付费入口，必须在 startRun 前验证它依赖的完整外部契约。
  * 输入标签、输出标签、JSON Schema 与最终产物路径任一被网页编辑破坏，都直接拒绝。
@@ -271,6 +313,83 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
   );
   if (resultActionCanReenter) {
     return `「${RESUME_MATCH_OUTPUT_LABEL}」的上游 Action 不能位于回边重入范围内`;
+  }
+
+  // 未连线的端口不会出现在固定边集合里，但输出仍会要求 Agent 落盘。专用付费入口
+  // 因此同时锁定八个 Action 的完整端口集合，不能让额外产物在模型运行后才暴露冲突。
+  const parsedJobPort = parseActionNode.outputs.find(
+    (port) => port.name === RESUME_MATCH_PARSED_JOB_PORT,
+  );
+  const parsedResumePort = parseActionNode.outputs.find(
+    (port) => port.name === RESUME_MATCH_PARSED_RESUME_PORT,
+  );
+  const criticReportPort = reportActionNode.inputs.find(
+    (port) => port.name === RESUME_MATCH_REPORT_CRITICS_PORT,
+  );
+  const exactActionPorts =
+    parsedJobPort !== undefined &&
+    parsedResumePort !== undefined &&
+    criticReportPort !== undefined &&
+    exactPorts(parseActionNode.inputs, [
+      portContract(RESUME_MATCH_JOB_PARSE_PORT, "file", jobPort.objectTypeId),
+      portContract(RESUME_MATCH_RESUME_PARSE_PORT, "file", resumePort.objectTypeId),
+    ]) &&
+    exactPorts(parseActionNode.outputs, [
+      portContract(
+        RESUME_MATCH_PARSED_JOB_PORT,
+        "file",
+        parsedJobPort.objectTypeId,
+        RESUME_MATCH_PARSED_JOB_ARTIFACT,
+      ),
+      portContract(
+        RESUME_MATCH_PARSED_RESUME_PORT,
+        "file",
+        parsedResumePort.objectTypeId,
+        RESUME_MATCH_PARSED_RESUME_ARTIFACT,
+      ),
+    ]) &&
+    criticNodes.every(
+      (critic, index) =>
+        exactPorts(critic.inputs, [
+          portContract(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobPort.objectTypeId),
+          portContract(
+            RESUME_MATCH_PARSED_RESUME_PORT,
+            "file",
+            parsedResumePort.objectTypeId,
+          ),
+        ]) &&
+        exactPorts(critic.outputs, [
+          portContract(
+            RESUME_MATCH_CRITIC_RESULT_PORT,
+            "file",
+            criticReportPort.objectTypeId,
+            RESUME_MATCH_CRITIC_ARTIFACTS[index],
+          ),
+        ]),
+    ) &&
+    exactPorts(reportActionNode.inputs, [
+      portContract(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobPort.objectTypeId),
+      portContract(
+        RESUME_MATCH_PARSED_RESUME_PORT,
+        "file",
+        parsedResumePort.objectTypeId,
+      ),
+      portContract(
+        RESUME_MATCH_REPORT_CRITICS_PORT,
+        "file",
+        criticReportPort.objectTypeId,
+      ),
+    ]) &&
+    exactPorts(reportActionNode.outputs, [
+      portContract(
+        RESUME_MATCH_REPORT_RESULT_PORT,
+        "json",
+        outputPort.objectTypeId,
+        RESUME_MATCH_RESULT_ARTIFACT,
+      ),
+    ]);
+  if (!exactActionPorts) {
+    return "简历匹配工作流八个固定 Action 的输入输出端口必须保持完整契约";
   }
 
   // 专用入口不是任意图的通用执行器：六位评审缺一、重复一位，或只断开其中

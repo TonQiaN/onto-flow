@@ -15,7 +15,17 @@ export const RESUME_MATCH_JOB_PARSE_PORT = "岗位文件";
 export const RESUME_MATCH_RESUME_PARSE_PORT = "简历文件";
 export const RESUME_MATCH_PARSED_JOB_PORT = "岗位要求";
 export const RESUME_MATCH_PARSED_RESUME_PORT = "简历";
+export const RESUME_MATCH_PARSED_JOB_ARTIFACT = "job.md";
+export const RESUME_MATCH_PARSED_RESUME_ARTIFACT = "resume.md";
 export const RESUME_MATCH_CRITIC_RESULT_PORT = "结论";
+export const RESUME_MATCH_CRITIC_ARTIFACTS = [
+  "scores/must-have.md",
+  "scores/skill-match.md",
+  "scores/experience-depth.md",
+  "scores/domain-fit.md",
+  "scores/stability.md",
+  "scores/red-flag.md",
+] as const;
 export const RESUME_MATCH_REPORT_CRITICS_PORT = "评委结论";
 export const RESUME_MATCH_REPORT_RESULT_PORT = "结果";
 export const RESUME_MATCH_REPORT_ACTION_NAME = "简历评分·汇总";

@@ -10,10 +10,13 @@ import * as schema from "../db/schema";
 import { validateGraph } from "../lib/graph";
 import {
   RESUME_MATCH_CRITIC_ACTION_NAMES,
+  RESUME_MATCH_CRITIC_ARTIFACTS,
   RESUME_MATCH_CRITIC_RESULT_PORT,
   RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
   RESUME_MATCH_JOB_PARSE_PORT,
+  RESUME_MATCH_PARSED_JOB_ARTIFACT,
   RESUME_MATCH_PARSED_JOB_PORT,
+  RESUME_MATCH_PARSED_RESUME_ARTIFACT,
   RESUME_MATCH_PARSED_RESUME_PORT,
   RESUME_MATCH_PARSE_ACTION_NAME,
   RESUME_MATCH_REPORT_ACTION_NAME,
@@ -313,8 +316,18 @@ function resolved(
     port(RESUME_MATCH_RESUME_PARSE_PORT, "file", resumeTypeId),
   ];
   const parseOutputs = [
-    port(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobTypeId, "job.md"),
-    port(RESUME_MATCH_PARSED_RESUME_PORT, "file", parsedResumeTypeId, "resume.md"),
+    port(
+      RESUME_MATCH_PARSED_JOB_PORT,
+      "file",
+      parsedJobTypeId,
+      RESUME_MATCH_PARSED_JOB_ARTIFACT,
+    ),
+    port(
+      RESUME_MATCH_PARSED_RESUME_PORT,
+      "file",
+      parsedResumeTypeId,
+      RESUME_MATCH_PARSED_RESUME_ARTIFACT,
+    ),
   ];
   const criticInputs = [
     port(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobTypeId),
@@ -325,7 +338,7 @@ function resolved(
       RESUME_MATCH_CRITIC_RESULT_PORT,
       "file",
       verdictTypeId,
-      `scores/critic-${index}.md`,
+      RESUME_MATCH_CRITIC_ARTIFACTS[index],
     ),
   ]);
   const reportInputs = [
@@ -652,6 +665,25 @@ describe("简历匹配工作流预检", () => {
       ok: false,
       status: 500,
       error: "简历匹配工作流必须保持解析、六位评审与汇总之间的完整固定编排",
+    });
+    expect(controls.startResolvedRun).not.toHaveBeenCalled();
+  });
+
+  it("固定 Action 出现未连线额外输出时在运行受理前失败", async () => {
+    const graph = resolved();
+    const reportNode = graph.nodes.find((node) => node.id === "report-action");
+    if (!reportNode) throw new Error("测试图缺少汇总 Action");
+    reportNode.outputs.push({
+      ...reportNode.outputs[0],
+      name: "额外结果",
+      artifactPath: `${RESUME_MATCH_RESULT_ARTIFACT}/extra.json`,
+    });
+    controls.resolveWorkflow.mockResolvedValue(graph);
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: "简历匹配工作流八个固定 Action 的输入输出端口必须保持完整契约",
     });
     expect(controls.startResolvedRun).not.toHaveBeenCalled();
   });
