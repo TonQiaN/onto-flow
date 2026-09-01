@@ -16,7 +16,7 @@
 | Action | prompt + rule + 引用 skills/tools + 模型 + 思考强度 + 类型化输入输出端口 |
 | Skill | 带名字与描述的指令包，运行时投影到工作区，由模型按描述决定是否加载 |
 | Tool | cordis 插件（TS）；运行时按整图并集物化，再把每个 Action 会话收窄到它声明的 Tool |
-| Object Type | 产物契约类型；同类型端口才能连线，输入节点还可声明 PDF 等预处理 |
+| Object Type | 产物契约类型；同类型端口才能连线 |
 | Workflow | Action + 输入/输出节点组成的有向图，保存图定义，运行全程留痕 |
 
 五个库共用同一套治理能力（面向长期积累设计）：
@@ -56,8 +56,8 @@
 | 系统健康 | harness runner、凭据引用、在跑子进程、库表行数、磁盘占用、孤儿检测、**手动清理** |
 
 本版**不做自动清理**：三项清理（运行工作区 / 事件明细 / 旧运行记录）都需人工触发，
-且必须先「预览影响」看到条目数与释放空间，执行时二次确认。运行保留输入、PDF 页面图、
-会话 JSONL、日志与产物，长期使用仍会持续占用磁盘，应定期查看系统健康页。
+且必须先「预览影响」看到条目数与释放空间，执行时二次确认。运行保留输入、会话 JSONL、
+日志与全部工作区产物，长期使用仍会持续占用磁盘，应定期查看系统健康页。
 
 ## 运行前提
 
@@ -65,7 +65,8 @@
   harness 子进程。
 - 把 `DEEPSEEK_API_KEY` 写入 gitignored 的 `.env.local`。`npm run dev` 会在启动时读取它；直接运行
   `scripts/run-*.ts` / `scripts/smoke-*.ts` 这类付费脚本前，还要把同名变量导出到当前 shell。
-- 使用 PDF 输入预处理时本机需安装 Poppler，并能直接运行 `pdfinfo`、`pdftotext`、`pdftoppm`。
+- Action 会话自带 `bash` 工具；要处理 PDF 输入的工作流依赖本机已安装 Poppler（`pdfinfo`、
+  `pdftotext`、`pdftoppm` 在 `PATH` 上可直接运行），由会话里的模型自行调用。
 
 ## 启动
 
@@ -79,12 +80,13 @@ npm run dev
 打开 http://localhost:3592 ，进入「工作流 → 采购集采计划生成」，点「运行」并上传
 `data/samples/采购需求示例.txt`，即可看到四个 Action 依次真实执行：
 需求整理 → 集采计划生成 → 集采计划审核（结构化 JSON 评价）→ 集采计划归档
-（经 `save_purchase_plan` 工具写入 `purchase_plans` 表 + 备份 Markdown 到 `data/documents/`）。
+（经 `save_purchase_plan` 工具写入 `purchase_plans` 表 + 备份 Markdown 到 `data/documents/`；
+同一计划编号再次归档会替换数据库行并清理上一份备份）。
 
 第二个案例先执行 `npx tsx scripts/seed-resume.ts`，再进入「工作流 → 简历匹配评分」。岗位与
-简历都可上传 PDF、Markdown 或纯文本；PDF 会在输入节点保留原件、受限抽取文本层并逐页生成页面图，
-「简历评分·解析」使用 DeepSeek V4 Flash Vision 对每页执行视觉核对，六个评委与汇总继续使用
-文本模型。最终汇总会回看岗位与简历原文，自动裁决评委分歧、证据缺口和分数不自洽，并把明确的
+简历都可上传 PDF、Markdown 或纯文本；文件以原件进入工作区，「简历评分·解析」使用
+DeepSeek V4 Flash Vision，自己用 bash 调 Poppler 抽取文本层、逐页栅格化并对每页执行视觉核对，
+六个评委与汇总继续使用文本模型。最终汇总会回看岗位与简历原文，自动裁决评委分歧、证据缺口和分数不自洽，并把明确的
 推荐判断、依据、证据充分度及所有改分记录写进 `report.md`，不留下未裁决项。命令行付费验收可运行：
 
 ```bash

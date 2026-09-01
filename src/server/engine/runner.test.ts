@@ -4,7 +4,7 @@
  */
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
 import type { PortValue } from "../../lib/values";
 import type { ResolvedWorkflow } from "../resolve";
@@ -12,8 +12,10 @@ import type { ResolvedWorkflow } from "../resolve";
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
   runActionNode: vi.fn(),
+  launchRun: vi.fn(),
   dispose: vi.fn(async () => {}),
   cancel: vi.fn(async () => {}),
+  finalizeUnsettledActionUsage: vi.fn(),
 }));
 
 vi.mock("@/server/resolve", () => ({
@@ -42,12 +44,19 @@ vi.mock("@/server/harness/workspace", () => ({
     imports: { instructionsDigest: "test", items: [] },
   }),
 }));
-vi.mock("@/server/harness/launch", () => ({
-  launchRun: async () => ({
-    dispose: controls.dispose,
-    cancel: controls.cancel,
-  }),
-}));
+vi.mock("@/server/harness/launch", () => {
+  class UnsettledRunLaunchError extends Error {
+    constructor(
+      readonly runProcess: unknown,
+      readonly initializationError: unknown,
+      readonly disposalError: unknown,
+    ) {
+      super("harness 初始化失败且子进程无法确认已退出");
+      this.name = "UnsettledRunLaunchError";
+    }
+  }
+  return { launchRun: controls.launchRun, UnsettledRunLaunchError };
+});
 vi.mock("./capabilities", () => ({
   collectCapabilities: () => ({
     skills: [],
@@ -58,7 +67,11 @@ vi.mock("./capabilities", () => ({
   toolFilterForAction: () => undefined,
 }));
 vi.mock("./events", () => ({ recordSessionEvent: vi.fn() }));
-vi.mock("./action", () => ({ runActionNode: controls.runActionNode }));
+vi.mock("./action", () => ({
+  runActionNode: controls.runActionNode,
+  refreshUnsettledActionUsage: vi.fn(),
+  finalizeUnsettledActionUsage: controls.finalizeUnsettledActionUsage,
+}));
 
 const sqlite = new Database(":memory:");
 sqlite.exec(`
@@ -80,18 +93,30 @@ CREATE TABLE run_nodes (
   ontoflowDb?: unknown;
   ontoflowCancelledRuns?: Set<string>;
   ontoflowRunProcesses?: Map<string, unknown>;
-  ontoflowInputControllers?: Map<string, AbortController>;
+  ontoflowActiveRuns?: Set<string>;
+  ontoflowRunDisposalFailures?: Set<string>;
+  ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
 }).ontoflowDb = drizzle(sqlite, { schema });
 (globalThis as unknown as { ontoflowCancelledRuns?: Set<string> }).ontoflowCancelledRuns =
   new Set();
+const runProcesses = new Map<string, unknown>();
 (globalThis as unknown as { ontoflowRunProcesses?: Map<string, unknown> }).ontoflowRunProcesses =
-  new Map();
+  runProcesses;
+const activeRuns = new Set<string>();
+(globalThis as unknown as { ontoflowActiveRuns?: Set<string> }).ontoflowActiveRuns = activeRuns;
+const disposalFailures = new Set<string>();
+(globalThis as unknown as { ontoflowRunDisposalFailures?: Set<string> })
+  .ontoflowRunDisposalFailures = disposalFailures;
+const pendingUsageSettlements = new Map<string, Promise<void>>();
 (globalThis as unknown as {
-  ontoflowInputControllers?: Map<string, AbortController>;
-}).ontoflowInputControllers = new Map();
+  ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
+}).ontoflowPendingUsageSettlements = pendingUsageSettlements;
 
 let startRun: typeof import("./runner").startRun;
 let cancelRun: typeof import("./runner").cancelRun;
+let isRunExecutionActive: typeof import("./runner").isRunExecutionActive;
+let deleteRun: typeof import("../monitor/cleanup").deleteRun;
+let UnsettledRunLaunchError: typeof import("../harness/launch").UnsettledRunLaunchError;
 
 function resolvedWorkflow(): ResolvedWorkflow {
   const workflow = {
@@ -184,11 +209,214 @@ function resolvedWorkflow(): ResolvedWorkflow {
   };
 }
 
+/**
+ * 回边重入图：输入同时喂环内两个节点（写码与测试），测试节点具名出口，
+ * 不通过时经回边把写码节点连同环体拉回下一轮。
+ */
+function loopWorkflow(): ResolvedWorkflow {
+  const workflow = {
+    id: "workflow-loop",
+    name: "回边重入测试",
+    description: "",
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+  const port = (name: string) => ({
+    name,
+    objectTypeId: "text-type",
+    objectTypeName: "文本",
+    kind: "text" as const,
+  });
+  const writerRow = {
+    id: "writer-node",
+    workflowId: workflow.id,
+    kind: "action" as const,
+    actionId: "action-writer",
+    objectTypeId: null,
+    label: "写码",
+    x: 0,
+    y: 0,
+  };
+  const testerRow = {
+    id: "tester-node",
+    workflowId: workflow.id,
+    kind: "action" as const,
+    actionId: "action-tester",
+    objectTypeId: null,
+    label: "测试",
+    x: 0,
+    y: 0,
+  };
+  return {
+    workflow,
+    nodes: [
+      { id: "input-node", kind: "input", label: "题目", inputs: [], outputs: [port("value")] },
+      {
+        id: "writer-node",
+        kind: "action",
+        label: "写码",
+        inputs: [port("题目"), port("意见")],
+        outputs: [port("脚本")],
+        maxReentries: 2,
+        onExhausted: "fail",
+      },
+      {
+        id: "tester-node",
+        kind: "action",
+        label: "测试",
+        inputs: [port("题目"), port("脚本")],
+        outputs: [
+          { ...port("定稿"), exitName: "通过" },
+          { ...port("意见"), exitName: "不通过" },
+        ],
+      },
+      { id: "output-node", kind: "output", label: "产出", inputs: [port("value")], outputs: [] },
+    ],
+    edges: [
+      {
+        id: "e1-题目到写码",
+        sourceNodeId: "input-node",
+        sourcePort: "value",
+        targetNodeId: "writer-node",
+        targetPort: "题目",
+      },
+      {
+        id: "e2-题目到测试",
+        sourceNodeId: "input-node",
+        sourcePort: "value",
+        targetNodeId: "tester-node",
+        targetPort: "题目",
+      },
+      {
+        id: "e3-脚本",
+        sourceNodeId: "writer-node",
+        sourcePort: "脚本",
+        targetNodeId: "tester-node",
+        targetPort: "脚本",
+      },
+      {
+        id: "e4-回边意见",
+        sourceNodeId: "tester-node",
+        sourcePort: "意见",
+        targetNodeId: "writer-node",
+        targetPort: "意见",
+      },
+      {
+        id: "e5-定稿",
+        sourceNodeId: "tester-node",
+        sourcePort: "定稿",
+        targetNodeId: "output-node",
+        targetPort: "value",
+      },
+    ],
+    nodeRows: new Map([
+      [writerRow.id, writerRow],
+      [testerRow.id, testerRow],
+    ]),
+  };
+}
+
 beforeAll(async () => {
-  ({ startRun, cancelRun } = await import("./runner"));
+  ({ startRun, cancelRun, isRunExecutionActive } = await import("./runner"));
+  ({ deleteRun } = await import("../monitor/cleanup"));
+  ({ UnsettledRunLaunchError } = await import("../harness/launch"));
+});
+
+beforeEach(() => {
+  controls.launchRun.mockReset();
+  controls.launchRun.mockResolvedValue({
+    dispose: controls.dispose,
+    cancel: controls.cancel,
+  });
+  controls.dispose.mockReset();
+  controls.dispose.mockResolvedValue(undefined);
+  controls.cancel.mockClear();
+  controls.runActionNode.mockReset();
+  controls.finalizeUnsettledActionUsage.mockReset();
+  controls.finalizeUnsettledActionUsage.mockImplementation(() => undefined);
+  activeRuns.clear();
+  disposalFailures.clear();
+  pendingUsageSettlements.clear();
+  runProcesses.clear();
+});
+
+describe("回边重入", () => {
+  it("环外输入喂环内多个节点时，回流后下一轮仍能等齐并收束成功", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(loopWorkflow());
+
+    const rounds: Array<{ node: string; round: number }> = [];
+    controls.runActionNode.mockImplementation(
+      async (ctx: { node: { id: string }; round: number }) => {
+        rounds.push({ node: ctx.node.id, round: ctx.round });
+        if (ctx.node.id === "writer-node") {
+          return {
+            outputs: { 脚本: { kind: "text", text: `第${ctx.round + 1}版脚本` } },
+            selectedExit: null,
+          };
+        }
+        // 测试节点：第一轮不通过（走回边），第二轮通过（走定稿）。
+        return ctx.round === 0
+          ? {
+              outputs: { 意见: { kind: "text", text: "有用例失败" } },
+              selectedExit: "不通过",
+            }
+          : {
+              outputs: { 定稿: { kind: "text", text: "验收通过的脚本" } },
+              selectedExit: "通过",
+            };
+      },
+    );
+
+    const startedRun = await startRun("workflow-loop", {
+      "input-node": { kind: "text", text: "两数之和" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("success");
+      expect(run.error).toBeNull();
+    });
+
+    // 两个环内节点各跑两轮，轮次成对推进。
+    expect(rounds).toEqual([
+      { node: "writer-node", round: 0 },
+      { node: "tester-node", round: 0 },
+      { node: "writer-node", round: 1 },
+      { node: "tester-node", round: 1 },
+    ]);
+    const output = sqlite
+      .prepare("SELECT status, outputs FROM run_nodes WHERE run_id = ? AND node_id = 'output-node'")
+      .get(startedRun.runId) as { status: string; outputs: string };
+    expect(output.status).toBe("success");
+    expect(output.outputs).toContain("验收通过的脚本");
+  });
 });
 
 describe("运行取消终态", () => {
+  it("cancelled 但仍在收尾的执行器继续占用并发名额", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    for (let index = 0; index < 16; index += 1) {
+      activeRuns.add(`settling-${index}`);
+    }
+
+    await expect(
+      startRun("workflow-1", {
+        "input-node": { kind: "text", text: "测试" },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 429,
+      error: "并行运行已达上限 16，请等待现有运行结束后重试",
+    });
+    expect(sqlite.prepare("SELECT count(*) AS count FROM runs").get()).toEqual({ count: 0 });
+  });
+
   it("Action 在取消后才返回成功时仍保持 cancelled", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
@@ -218,6 +446,12 @@ describe("运行取消终态", () => {
 
     await started;
     await expect(cancelRun(startedRun.runId)).resolves.toEqual({ ok: true });
+    expect(isRunExecutionActive(startedRun.runId)).toBe(true);
+    expect(deleteRun(startedRun.runId)).toEqual({
+      ok: false,
+      status: 409,
+      error: "运行执行尚未完全收束，不能删除",
+    });
     releaseAction?.();
 
     await vi.waitFor(() => {
@@ -230,6 +464,122 @@ describe("运行取消终态", () => {
       expect(run.status).toBe("cancelled");
       expect(action.status).toBe("cancelled");
       expect(controls.dispose).toHaveBeenCalledOnce();
+      expect(isRunExecutionActive(startedRun.runId)).toBe(false);
+    });
+    sqlite.prepare("UPDATE runs SET run_dir = NULL WHERE id = ?").run(startedRun.runId);
+    expect(deleteRun(startedRun.runId)).toEqual({ ok: true });
+  });
+
+  it("子进程退出后的用量结算瞬时失败时持续占用并自动重试", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    controls.runActionNode.mockResolvedValue({
+      outputs: { result: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    let canSettle = false;
+    controls.finalizeUnsettledActionUsage.mockImplementation(() => {
+      if (!canSettle) throw new Error("database is locked");
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const startedRun = await startRun("workflow-1", {
+        "input-node": { kind: "text", text: "测试" },
+      });
+      expect(startedRun.ok).toBe(true);
+      if (!startedRun.ok) return;
+
+      await vi.waitFor(() => {
+        const run = sqlite
+          .prepare("SELECT status, error FROM runs WHERE id = ?")
+          .get(startedRun.runId) as { status: string; error: string | null };
+        expect(run.status).toBe("failed");
+        expect(run.error).toContain("运行子进程退出后的用量结算失败");
+        expect(isRunExecutionActive(startedRun.runId)).toBe(true);
+        expect(runProcesses.has(startedRun.runId)).toBe(true);
+      });
+
+      canSettle = true;
+      await vi.waitFor(
+        () => {
+          expect(controls.finalizeUnsettledActionUsage.mock.calls.length).toBeGreaterThan(1);
+          expect(isRunExecutionActive(startedRun.runId)).toBe(false);
+          expect(runProcesses.has(startedRun.runId)).toBe(false);
+          expect(pendingUsageSettlements.has(startedRun.runId)).toBe(false);
+        },
+        { timeout: 2_000 },
+      );
+    } finally {
+      canSettle = true;
+      log.mockRestore();
+    }
+  });
+
+  it("子进程无法确认退出时保持活动所有权并拒绝清理", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    controls.runActionNode.mockResolvedValue({
+      outputs: { result: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    controls.dispose.mockRejectedValueOnce(new Error("SIGKILL 后仍未退出"));
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("failed");
+      expect(run.error).toContain("运行子进程无法确认已退出");
+    });
+    expect(isRunExecutionActive(startedRun.runId)).toBe(true);
+    expect(deleteRun(startedRun.runId)).toEqual({
+      ok: false,
+      status: 409,
+      error: "运行执行尚未完全收束，不能删除",
+    });
+  });
+
+  it("初始化失败后的收束不明也保留进程句柄与活动所有权", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    const strandedProcess = {
+      dispose: controls.dispose,
+      cancel: controls.cancel,
+    };
+    controls.launchRun.mockRejectedValueOnce(
+      new UnsettledRunLaunchError(
+        strandedProcess as never,
+        new Error("initialize 请求超时"),
+        new Error("SIGKILL 后仍未退出"),
+      ),
+    );
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("failed");
+      expect(run.error).toContain("harness 初始化失败且子进程无法确认已退出");
+    });
+    expect(runProcesses.get(startedRun.runId)).toBe(strandedProcess);
+    expect(isRunExecutionActive(startedRun.runId)).toBe(true);
+    expect(deleteRun(startedRun.runId)).toEqual({
+      ok: false,
+      status: 409,
+      error: "运行执行尚未完全收束，不能删除",
     });
   });
 });

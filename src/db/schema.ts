@@ -8,7 +8,6 @@ import {
   uniqueIndex,
   type AnySQLiteColumn,
 } from "drizzle-orm/sqlite-core";
-import { FILE_PREPROCESSORS } from "@/lib/object-types";
 
 const id = () =>
   text("id")
@@ -115,11 +114,6 @@ export const objectTypes = sqliteTable("object_types", {
   description: text("description").notNull().default(""),
   /** kind=json 时可选的 JSON Schema（序列化字符串），同时用作结构化输出 schema */
   jsonSchema: text("json_schema"),
-  /**
-   * kind=file 时可选的输入预处理器。pdf 会保留原文件、抽取文本层并逐页栅格化；
-   * 非 PDF 文件仍原样进入工作区。对象类型在输入节点上才触发这项行为。
-   */
-  filePreprocessor: text("file_preprocessor", { enum: FILE_PREPROCESSORS }),
   /** 内置类型（text/file/json 兜底）不可删除 */
   builtin: integer("builtin", { mode: "boolean" }).notNull().default(false),
   ...timestamps,
@@ -347,6 +341,7 @@ export const runNodes = sqliteTable(
     reasoningTokens: integer("reasoning_tokens").notNull().default(0),
     cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
     cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    /** 人民币；节点各轮会话费用的累计，口径同 node_usage.cost。 */
     cost: real("cost").notNull().default(0),
     /** PortValue 映射的 JSON：{ [portName]: PortValue } */
     inputs: text("inputs", { mode: "json" }).$type<Record<string, unknown>>(),
@@ -359,16 +354,24 @@ export const runNodes = sqliteTable(
   (t) => [uniqueIndex("run_nodes_unique").on(t.runId, t.nodeId)],
 );
 
-export const runEvents = sqliteTable("run_events", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  runId: text("run_id")
-    .notNull()
-    .references(() => runs.id, { onDelete: "cascade" }),
-  nodeId: text("node_id"),
-  ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
-  type: text("type").notNull(),
-  payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(),
-});
+export const runEvents = sqliteTable(
+  "run_events",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    nodeId: text("node_id"),
+    ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
+    type: text("type").notNull(),
+    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(),
+  },
+  (t) => [
+    // SSE 轮询（run_id=? and id>?）、tool/result 的 call 关联查询与删除运行时的
+    // 外键级联都按运行过滤；没有它们全是整表扫描，并行运行的交错写入把扫描越推越深。
+    index("run_events_by_run").on(t.runId, t.id),
+  ],
+);
 
 /**
  * 逐 step 的用量明细，由 dsh usage chunk 到达时实时捕获落库。
@@ -392,13 +395,18 @@ export const nodeUsage = sqliteTable(
     reasoningTokens: integer("reasoning_tokens").notNull().default(0),
     cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
     cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    /** 人民币；按该条 usage 到达时刻的官方峰谷单价计算（src/server/pricing.ts）。 */
     cost: real("cost").notNull().default(0),
     finish: text("finish"),
     ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [
-    uniqueIndex("node_usage_message").on(t.sessionId, t.messageId),
-    index("node_usage_by_run").on(t.runId),
+    // 唯一键必须带 runId：会话 id 取的是画布节点 id、messageId 每会话从头计数，
+    // 同一工作流并行或先后运行会撞出相同 (sessionId, messageId)，缺 runId 时
+    // 后到运行的整份用量明细被 onConflictDoNothing 静默丢弃，成本统计系统性少记
+    //（实测同一工作流第三次运行 node_usage 一行都没落）。
+    // runId 前缀同时服务按运行的查询，原 node_usage_by_run 并入此索引。
+    uniqueIndex("node_usage_message").on(t.runId, t.sessionId, t.messageId),
   ],
 );
 

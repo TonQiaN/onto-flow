@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
     "@deepseek-ai/dsh-fs-local",
     "@deepseek-ai/dsh-session-persistence-jsonl",
     "@deepseek-ai/dsh-subprocess",
+    "@deepseek-ai/dsh-subprocess-local",
     "@deepseek-ai/dsh-sdk-protocol",
     "@deepseek-ai/cordis",
   ],

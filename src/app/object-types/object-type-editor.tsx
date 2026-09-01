@@ -13,7 +13,6 @@ import {
   ReferencesPanel,
   RevisionPanel,
 } from "@/components/library";
-import type { FilePreprocessor } from "@/lib/object-types";
 
 export type Kind = "text" | "file" | "json";
 
@@ -23,7 +22,6 @@ export interface ObjectTypeRow {
   kind: Kind;
   description: string;
   jsonSchema: string | null;
-  filePreprocessor: FilePreprocessor | null;
   builtin: boolean;
   createdAt: string;
   updatedAt: string;
@@ -72,9 +70,6 @@ export function ObjectTypeEditor({
   const [kind, setKind] = useState<Kind>(initial?.kind ?? "text");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [jsonSchema, setJsonSchema] = useState(initial?.jsonSchema ?? "");
-  const [filePreprocessor, setFilePreprocessor] = useState<FilePreprocessor | "">(
-    initial?.filePreprocessor ?? "",
-  );
   const [folder, setFolder] = useState<FolderRef | null>(initialFolder);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,7 +87,6 @@ export function ObjectTypeEditor({
       setKind(row.kind);
       setDescription(row.description);
       setJsonSchema(row.jsonSchema ?? "");
-      setFilePreprocessor(row.filePreprocessor ?? "");
     } catch {
       // 拉取失败保持当前表单
     }
@@ -125,7 +119,6 @@ export function ObjectTypeEditor({
             description,
             jsonSchema:
               kind === "json" && jsonSchema.trim() ? jsonSchema : null,
-            filePreprocessor: kind === "file" && filePreprocessor ? filePreprocessor : null,
           }),
         },
       );
@@ -268,26 +261,6 @@ export function ObjectTypeEditor({
                     placeholder='{"type":"object","properties":{...},"required":[...]}'
                     className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
                   />
-                </label>
-              )}
-              {kind === "file" && (
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-zinc-700">
-                    输入预处理
-                  </span>
-                  <select
-                    value={filePreprocessor}
-                    onChange={(e) =>
-                      setFilePreprocessor(e.target.value as FilePreprocessor | "")
-                    }
-                    className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
-                  >
-                    <option value="">不预处理</option>
-                    <option value="pdf">PDF：抽取文本层并逐页生成页面图</option>
-                  </select>
-                  <p className="mt-1 text-xs leading-5 text-zinc-400">
-                    只处理实际内容为 PDF 的输入；Markdown、纯文本等其它文件仍原样进入工作区。
-                  </p>
                 </label>
               )}
             </>

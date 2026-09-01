@@ -34,8 +34,8 @@ async function expectMetricHasValue(page: Page, label: string): Promise<string> 
   await expect(value).not.toHaveText("—", { timeout: 15_000 });
   const text = (await value.innerText()).trim();
   expect(text.length, `指标卡「${label}」应有数值`).toBeGreaterThan(0);
-  // 数字 / 千分位 / $0.0283 / <$0.0001 / 0
-  expect(text, `指标卡「${label}」的值应是数值`).toMatch(/^(<?\$)?[\d,.]+/);
+  // 数字 / 千分位 / ¥0.5180 / <¥0.0001 / 0（费用以人民币计价，ADR-0011 的 pricing）
+  expect(text, `指标卡「${label}」的值应是数值`).toMatch(/^(<?[¥$])?[\d,.]+/);
   return text;
 }
 
@@ -304,7 +304,7 @@ test.describe("监控台 · 成本分析", () => {
     await expectMetricHasValue(page, "assistant 消息");
     await expectMetricHasValue(page, "日均费用");
 
-    expect(cost, "总费用应是美元金额").toMatch(/^(<?\$)/);
+    expect(cost, "总费用应是人民币金额").toMatch(/^(<?¥)/);
     expect(
       Number(tokens.replace(/[^\d]/g, "")),
       "近 7 天应有 token 消耗",
@@ -325,8 +325,8 @@ test.describe("监控台 · 成本分析", () => {
     expect(await rows.count()).toBeGreaterThanOrEqual(1);
     await expect(panel).toContainText("deepseek");
 
-    // 行里带 token 与费用（不是空表头）
-    await expect(rows.first()).toContainText(/\$\d|<\$/);
+    // 行里带 token 与费用（不是空表头）；费用以人民币计价
+    await expect(rows.first()).toContainText(/[¥$]\d|<[¥$]/);
   });
 });
 

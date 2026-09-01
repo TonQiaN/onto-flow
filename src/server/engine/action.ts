@@ -17,7 +17,9 @@ import {
   actions,
   db,
   models,
+  nodeUsage,
   objectTypes,
+  runEvents,
   runNodes,
   skills,
 } from "@/db";
@@ -28,7 +30,11 @@ import type { NodeToolFilter } from "@/server/harness/rpc/types";
 import type { RunProcess } from "@/server/harness/runtime";
 import type { RunWorkspace } from "@/server/harness/workspace";
 import type { NodeExit } from "@/lib/graph";
-import type { EventSinkContext } from "./events";
+import {
+  clearUnpersistedUsageForSession,
+  unpersistedUsageForSession,
+  type EventSinkContext,
+} from "./events";
 // 循环依赖（runner → action → runner）在 ESM 下安全：isRunCancelled 是函数声明，
 // 且只在 runActionNode 执行期调用，那时 runner 模块体早已求值完毕。
 import { isRunCancelled } from "./runner";
@@ -93,6 +99,38 @@ const NODE_TURN_TIMEOUT_MS = 900_000;
  * 一个开始空转的 agent 能烧掉整整十五分钟的 token 才被拦下。
  */
 const NODE_MAX_STEPS = 40;
+
+interface UsageAmounts {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+}
+
+interface UnsettledUsageRollup {
+  runId: string;
+  nodeId: string;
+  sessionId: string;
+  modelId: string;
+  /** 本会话开始前节点已经结算的历史轮次；后续刷新都从这个固定基线重算。 */
+  base: UsageAmounts;
+  lastSession?: UsageAmounts & { chunks: number };
+  detailPersistenceFailures: number;
+  eventId?: number;
+  eventDirty: boolean;
+  /** true 仅表示双重 teardown 失败后仍可能继续收到 usage。 */
+  unsettledProcess: boolean;
+}
+
+const actionUsageStore = globalThis as typeof globalThis & {
+  ontoflowUnsettledUsageRollups?: Map<string, UnsettledUsageRollup>;
+};
+const unsettledUsageRollups =
+  actionUsageStore.ontoflowUnsettledUsageRollups ??
+  new Map<string, UnsettledUsageRollup>();
+actionUsageStore.ontoflowUnsettledUsageRollups = unsettledUsageRollups;
 
 export async function runActionNode(
   ctx: ActionNodeContext,
@@ -178,23 +216,58 @@ export async function runActionNode(
     .run();
   assertNotCancelled(ctx.runId);
 
-  await ctx.proc.runTurn(
-    sessionId,
-    [{ type: "text", text: renderedPrompt }],
-    {
-      agentOptions: { provider: model.providerId, model: model.modelId },
-      nodeOptions: {
-        outputSchema: buildOutputSchema(exits, branching),
-        reasoningEffort: action.reasoningEffort,
-        maxSteps: NODE_MAX_STEPS,
-        ...(ctx.toolFilter === undefined ? {} : { toolFilter: ctx.toolFilter }),
+  let usageMayContinue = false;
+
+  try {
+    await ctx.proc.runTurn(
+      sessionId,
+      [{ type: "text", text: renderedPrompt }],
+      {
+        agentOptions: { provider: model.providerId, model: model.modelId },
+        nodeOptions: {
+          outputSchema: buildOutputSchema(exits, branching),
+          reasoningEffort: action.reasoningEffort,
+          maxSteps: NODE_MAX_STEPS,
+          ...(ctx.toolFilter === undefined ? {} : { toolFilter: ctx.toolFilter }),
+        },
+        timeoutMs: NODE_TURN_TIMEOUT_MS,
       },
-      timeoutMs: NODE_TURN_TIMEOUT_MS,
-    },
-  );
+    );
+  } catch (turnError) {
+    // runTurn 的墙钟超时只会停止 Next 侧等待，不会自动停止 agent。先关闭并等待
+    // 该会话真正静止，之后 finally 才能做最终用量汇总；否则并行兄弟节点仍在跑时，
+    // 这个超时会话还能继续产生费用，却再也没有第二次汇总机会。
+    try {
+      await ctx.proc.closeSession(sessionId);
+    } catch (closeError) {
+      // 单会话无法收束时只能收走本运行独占的整个子进程；这会让并行兄弟失败，
+      // 但能保证用量结算后不再有后台会话继续计费。
+      try {
+        await ctx.proc.dispose();
+      } catch (disposeError) {
+        usageMayContinue = true;
+        throw new AggregateError(
+          [turnError, closeError, disposeError],
+          `会话 ${sessionId} 失败后无法收束运行子进程`,
+        );
+      }
+      throw new AggregateError(
+        [turnError, closeError],
+        `会话 ${sessionId} 失败后只能关闭运行子进程`,
+      );
+    }
+    throw turnError;
+  } finally {
+    if (usageMayContinue) {
+      // 子进程仍可能继续发 usage：用固定基线重算并保持实时刷新，不能在这里假装最终结算。
+      beginUnsettledUsageRollup(ctx, sessionId, model);
+    } else {
+      // 失败分支已先把会话或进程收束到静止；此处求和之后不会再有迟到 usage。
+      recordUsage(ctx, sessionId, model);
+    }
+  }
 
   assertNotCancelled(ctx.runId);
-  recordUsage(ctx, sessionId);
 
   const captured = await ctx.proc.sessionOutput(sessionId);
   if (!captured.captured) {
@@ -405,23 +478,19 @@ function buildPrompt(
   return sections.join("\n\n");
 }
 
-/** 一个入端口的取用说明：文件说路径，字面值直接给。 */
+/**
+ * 一个入端口的取用说明：文件说路径，字面值直接给。
+ * 文件一律是原件——平台不做任何格式预处理，转换（抽文本、栅格化、OCR 等）
+ * 是模型在会话里用 bash 自己的工作（ADR-0011）。
+ */
 function describeInput(value: PortValue | undefined): string {
   if (!value) return "（上游未提供）";
   switch (value.kind) {
     case "file":
-      if (value.file.preprocessed?.kind === "pdf") {
-        const pdf = value.file.preprocessed;
-        const pages = pdf.pageImagePaths
-          .map((page, index) => `第 ${index + 1} 页 \`${workspaceRelative(page)}\``)
-          .join("、");
-        return (
-          `PDF 已预处理：先读文本层 \`${workspaceRelative(pdf.textPath)}\`，` +
-          `再逐页调用 read_image 核对页面图（共 ${pdf.pageCount} 页：${pages}）；` +
-          `原文件在 \`${workspaceRelative(value.file.path)}\``
-        );
-      }
-      return `读文件 \`${workspaceRelative(value.file.path)}\``;
+      return (
+        `读文件 \`${workspaceRelative(value.file.path)}\`（原件，未经预处理；` +
+        `直接读不动的格式就用 bash 自行转换成能读的形态）`
+      );
     case "text":
       return value.text.length > 200 ? `${value.text.slice(0, 200)}…` : value.text;
     case "json":
@@ -522,35 +591,245 @@ function guessMime(filePath: string): string {
   return "application/octet-stream";
 }
 
-/**
- * 会话用量汇总写回 run_nodes。上游每个 step 发一条 usage chunk 且不累积，
- * 直接求和即可——这里没有 opencode 那种同一条消息重复上报的坑。
- */
-function recordUsage(ctx: ActionNodeContext, sessionId: string): void {
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let reasoningTokens = 0;
-  let cacheReadTokens = 0;
-  for (const event of ctx.proc.eventsOf(sessionId)) {
-    const data = (event as { data?: { chunk?: { type?: string; usage?: Record<string, number> } } })
-      .data;
-    const chunk = data?.chunk;
-    if (chunk?.type !== "usage" || !chunk.usage) continue;
-    inputTokens += chunk.usage.inputTokens ?? 0;
-    outputTokens += chunk.usage.outputTokens ?? 0;
-    reasoningTokens += chunk.usage.reasoningTokens ?? 0;
-    cacheReadTokens += chunk.usage.cacheReadTokens ?? 0;
-  }
-  db.update(runNodes)
-    // 每一轮是独立会话，但 run_nodes 是节点级汇总。原值必须保留，否则回边重入
-    // 会把前几轮用量覆盖掉，运行总费用与监控统计都会少算（ADR-0009）。
-    .set({
-      inputTokens: sql`${runNodes.inputTokens} + ${inputTokens}`,
-      outputTokens: sql`${runNodes.outputTokens} + ${outputTokens}`,
-      reasoningTokens: sql`${runNodes.reasoningTokens} + ${reasoningTokens}`,
-      cacheReadTokens: sql`${runNodes.cacheReadTokens} + ${cacheReadTokens}`,
-      sessionId,
+function usageRollupKey(runId: string, sessionId: string): string {
+  return `${runId}\u0000${sessionId}`;
+}
+
+function zeroUsage(): UsageAmounts {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cost: 0,
+  };
+}
+
+function readNodeUsage(runId: string, nodeId: string): UsageAmounts {
+  return (
+    db
+      .select({
+        inputTokens: runNodes.inputTokens,
+        outputTokens: runNodes.outputTokens,
+        reasoningTokens: runNodes.reasoningTokens,
+        cacheReadTokens: runNodes.cacheReadTokens,
+        cacheWriteTokens: runNodes.cacheWriteTokens,
+        cost: runNodes.cost,
+      })
+      .from(runNodes)
+      .where(and(eq(runNodes.runId, runId), eq(runNodes.nodeId, nodeId)))
+      .get() ?? zeroUsage()
+  );
+}
+
+function readSessionUsage(key: {
+  runId: string;
+  nodeId: string;
+  sessionId: string;
+}): { total: UsageAmounts & { chunks: number }; fallbackChunks: number } {
+  const persisted = db
+    .select({
+      inputTokens: sql<number>`coalesce(sum(${nodeUsage.inputTokens}), 0)`,
+      outputTokens: sql<number>`coalesce(sum(${nodeUsage.outputTokens}), 0)`,
+      reasoningTokens: sql<number>`coalesce(sum(${nodeUsage.reasoningTokens}), 0)`,
+      cacheReadTokens: sql<number>`coalesce(sum(${nodeUsage.cacheReadTokens}), 0)`,
+      cacheWriteTokens: sql<number>`coalesce(sum(${nodeUsage.cacheWriteTokens}), 0)`,
+      cost: sql<number>`coalesce(sum(${nodeUsage.cost}), 0)`,
+      chunks: sql<number>`count(*)`,
     })
-    .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
-    .run();
+    .from(nodeUsage)
+    .where(
+      and(
+        eq(nodeUsage.runId, key.runId),
+        eq(nodeUsage.nodeId, key.nodeId),
+        eq(nodeUsage.sessionId, key.sessionId),
+      ),
+    )
+    .get();
+  const fallback = unpersistedUsageForSession(key);
+  return {
+    total: {
+      inputTokens: (persisted?.inputTokens ?? 0) + fallback.inputTokens,
+      outputTokens: (persisted?.outputTokens ?? 0) + fallback.outputTokens,
+      reasoningTokens: (persisted?.reasoningTokens ?? 0) + fallback.reasoningTokens,
+      cacheReadTokens: (persisted?.cacheReadTokens ?? 0) + fallback.cacheReadTokens,
+      cacheWriteTokens: (persisted?.cacheWriteTokens ?? 0) + fallback.cacheWriteTokens,
+      cost: (persisted?.cost ?? 0) + fallback.cost,
+      chunks: (persisted?.chunks ?? 0) + fallback.chunks,
+    },
+    fallbackChunks: fallback.chunks,
+  };
+}
+
+function sameUsage(
+  left: UsageAmounts & { chunks: number },
+  right: UsageAmounts & { chunks: number },
+): boolean {
+  return (
+    left.inputTokens === right.inputTokens &&
+    left.outputTokens === right.outputTokens &&
+    left.reasoningTokens === right.reasoningTokens &&
+    left.cacheReadTokens === right.cacheReadTokens &&
+    left.cacheWriteTokens === right.cacheWriteTokens &&
+    left.cost === right.cost &&
+    left.chunks === right.chunks
+  );
+}
+
+function usageEventPayload(
+  state: UnsettledUsageRollup,
+  usage: UsageAmounts,
+): Record<string, unknown> {
+  return {
+    sessionId: state.sessionId,
+    model: state.modelId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    reasoningTokens: usage.reasoningTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+    detailPersistenceFailures: state.detailPersistenceFailures,
+    ...(state.unsettledProcess ? { unsettledProcess: true } : {}),
+    costCny: Math.round(usage.cost * 1e6) / 1e6,
+  };
+}
+
+function refreshUnsettledUsageRollup(state: UnsettledUsageRollup): void {
+  const observed = readSessionUsage(state);
+  state.detailPersistenceFailures = Math.max(
+    state.detailPersistenceFailures,
+    observed.fallbackChunks,
+  );
+  const unchanged = state.lastSession && sameUsage(state.lastSession, observed.total);
+  if (!unchanged) {
+    db.update(runNodes)
+      // 不能用增量叠加：失败明细稍后成功重放时会从内存兜底移到 node_usage。
+      // 固定历史基线 + 当前两处事实的并集才能让正常与隔离会话的重试都幂等。
+      .set({
+        inputTokens: state.base.inputTokens + observed.total.inputTokens,
+        outputTokens: state.base.outputTokens + observed.total.outputTokens,
+        reasoningTokens: state.base.reasoningTokens + observed.total.reasoningTokens,
+        cacheReadTokens: state.base.cacheReadTokens + observed.total.cacheReadTokens,
+        cacheWriteTokens: state.base.cacheWriteTokens + observed.total.cacheWriteTokens,
+        cost: state.base.cost + observed.total.cost,
+        sessionId: state.sessionId,
+      })
+      .where(and(eq(runNodes.runId, state.runId), eq(runNodes.nodeId, state.nodeId)))
+      .run();
+    state.lastSession = observed.total;
+    state.eventDirty = true;
+  }
+  if (!state.eventDirty && state.eventId !== undefined) return;
+  try {
+    const payload = usageEventPayload(state, observed.total);
+    if (state.eventId === undefined) {
+      const inserted = db
+        .insert(runEvents)
+        .values({
+          runId: state.runId,
+          nodeId: state.nodeId,
+          ts: new Date(),
+          type: "usage",
+          payload,
+        })
+        .returning({ id: runEvents.id })
+        .get();
+      state.eventId = inserted.id;
+    } else {
+      db.update(runEvents)
+        .set({ payload })
+        .where(eq(runEvents.id, state.eventId))
+        .run();
+    }
+    state.eventDirty = false;
+  } catch (err) {
+    state.eventDirty = true;
+    console.error("[engine] 会话用量事件落库失败", state.runId, state.nodeId, err);
+  }
+}
+
+function usageRollupState(
+  ctx: ActionNodeContext,
+  sessionId: string,
+  model: { modelId: string },
+  unsettledProcess: boolean,
+): { key: string; state: UnsettledUsageRollup } {
+  const key = usageRollupKey(ctx.runId, sessionId);
+  const state =
+    unsettledUsageRollups.get(key) ??
+    ({
+      runId: ctx.runId,
+      nodeId: ctx.node.id,
+      sessionId,
+      modelId: model.modelId,
+      base: readNodeUsage(ctx.runId, ctx.node.id),
+      detailPersistenceFailures: 0,
+      eventDirty: true,
+      unsettledProcess,
+    } satisfies UnsettledUsageRollup);
+  if (unsettledProcess) state.unsettledProcess = true;
+  unsettledUsageRollups.set(key, state);
+  return { key, state };
+}
+
+function finishUsageRollup(key: string, state: UnsettledUsageRollup): void {
+  refreshUnsettledUsageRollup(state);
+  // refresh 对事件写入采取“记录并保留”的策略，不能据此误判整次结算成功。
+  // 子进程退出后没有新事件可触发刷新；脏事件必须让 runner 持有运行并继续重试。
+  if (state.eventDirty || state.eventId === undefined) {
+    throw new Error(`会话 ${state.sessionId} 的用量事件尚未持久化`);
+  }
+  clearUnpersistedUsageForSession(state);
+  unsettledUsageRollups.delete(key);
+}
+
+function beginUnsettledUsageRollup(
+  ctx: ActionNodeContext,
+  sessionId: string,
+  model: { modelId: string },
+): void {
+  const { state } = usageRollupState(ctx, sessionId, model, true);
+  refreshUnsettledUsageRollup(state);
+}
+
+/** 子进程隔离期间每次事件落库后刷新；非隔离会话只做一次 Map 查询。 */
+export function refreshUnsettledActionUsage(runId: string, sessionId: string): void {
+  const state = unsettledUsageRollups.get(usageRollupKey(runId, sessionId));
+  if (state) refreshUnsettledUsageRollup(state);
+}
+
+/** 子进程已确认退出后做最后一次刷新并释放兜底；此后不可能再有迟到 usage。 */
+export function finalizeUnsettledActionUsage(runId: string): void {
+  const failures: unknown[] = [];
+  for (const [key, state] of unsettledUsageRollups) {
+    if (state.runId !== runId) continue;
+    try {
+      finishUsageRollup(key, state);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, `运行 ${runId} 的未静止会话用量结算失败`);
+  }
+}
+
+/**
+ * 会话用量以固定节点基线幂等写回 run_nodes，并落一条结算事件。逐条明细（含按每条 usage
+ * 到达时刻计的峰谷费用）由 events.ts 在 chunk 到达当下写进 node_usage——
+ * 跨过峰谷边界的会话不能整段按收束时刻计价。这里从 node_usage 按会话求和，
+ * 再补入明细写入失败时 events.ts 留下的紧凑兜底；兜底只留失败的 usage chunk，
+ * 不驻留原始流式事件，也不会在并行运行下把 Next 堆推到 GB 级。
+ */
+function recordUsage(
+  ctx: ActionNodeContext,
+  sessionId: string,
+  model: { modelId: string },
+): void {
+  // 正常会话也先登记可重试状态。若 usage 事件瞬时写失败，本次 Action 响亮失败，
+  // runner 在子进程退出后沿同一最终结算链持续重试，不能只留下 run_nodes 数字。
+  const { key, state } = usageRollupState(ctx, sessionId, model, false);
+  finishUsageRollup(key, state);
 }

@@ -114,7 +114,6 @@ test.describe("工作流画布", () => {
         kind: "file",
         description: "E2E 分支标签类型",
         jsonSchema: null,
-        filePreprocessor: null,
       },
     });
     expect(typeResponse.ok()).toBeTruthy();
@@ -434,7 +433,7 @@ test.describe("工作流画布", () => {
     await expectLabels("通过");
   });
 
-  test("PDF 预处理输入可上传，取消对话框不会发起运行", async ({
+  test("文件输入可上传，取消对话框不会发起运行", async ({
     page,
     request,
   }) => {
@@ -447,7 +446,6 @@ test.describe("工作流画布", () => {
         kind: "file",
         description: "E2E PDF 输入",
         jsonSchema: null,
-        filePreprocessor: "pdf",
       },
     });
     expect(typeResponse.ok()).toBeTruthy();
@@ -508,7 +506,6 @@ test.describe("工作流画布", () => {
     await page.getByRole("button", { name: "运行", exact: true }).click();
 
     const fileInput = page.getByLabel("简历文件");
-    await expect(fileInput).toHaveAttribute("accept", /application\/pdf/);
     const uploadResponse = page.waitForResponse(
       (response) => response.url().endsWith("/api/uploads") && response.request().method() === "POST",
     );
@@ -525,7 +522,6 @@ test.describe("工作流画布", () => {
     expect(path.relative(uploadsRoot, absoluteUpload)).not.toMatch(/^\.\.|^\//);
     uploadedDirs.add(path.dirname(absoluteUpload));
     await expect(page.getByText("已上传：e2e-resume.pdf")).toBeVisible();
-    await expect(page.getByText(/PDF 会抽取文本层并逐页交给多模态模型核对/)).toBeVisible();
 
     await page.getByRole("button", { name: "取消", exact: true }).click();
     await expect(page.getByRole("heading", { name: "运行工作流" })).toBeHidden();

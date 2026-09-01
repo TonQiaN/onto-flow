@@ -67,23 +67,22 @@ test.describe("对象类型", () => {
     await expect(row).toHaveCount(0);
   });
 
-  test("文件类型可保存并回显 PDF 输入预处理", async ({ page }) => {
-    const name = `${PREFIX}PDF-${Date.now()}`;
+  test("文件类型可保存并回显基础形态", async ({ page }) => {
+    const name = `${PREFIX}文件-${Date.now()}`;
     await page.goto("/object-types");
 
     await page.getByRole("button", { name: "新建类型" }).click();
     await page.getByPlaceholder("如：需求文件、集采计划").fill(name);
     await page.getByLabel("基础形态").selectOption("file");
-    await page.getByLabel("输入预处理").selectOption("pdf");
     await page.getByRole("button", { name: "保存", exact: true }).click();
 
     const row = page
       .locator("li")
       .filter({ has: page.getByRole("heading", { name, exact: true }) });
-    await expect(row.getByText("PDF 预处理", { exact: true })).toBeVisible();
+    await expect(row).toHaveCount(1);
 
     await row.getByRole("button", { name: "编辑" }).click();
-    await expect(page.getByLabel("输入预处理")).toHaveValue("pdf");
+    await expect(page.getByLabel("基础形态")).toHaveValue("file");
     await page.getByRole("button", { name: "取消", exact: true }).click();
   });
 

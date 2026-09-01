@@ -7,9 +7,12 @@
  * 事件词汇沿用既有的五种：text / reasoning / tool / session.idle / session.error；
  * 上游 dsh 的事件种类远多于这些，只有能落到这五种上的才记，其余丢弃——
  * 完整的会话记录本来就在运行目录的 sessions/*.jsonl 里，这里只是给人看的摘要。
+ * 另有一种引擎自产的 usage 结算事件：节点收束时由 action.ts 的 recordUsage 写入，
+ * 载荷是该会话的 token 汇总与人民币费用，让事件日志里能看到每个 Action 花了多少钱。
  */
 import { sql } from "drizzle-orm";
 import { db, nodeUsage, runEvents } from "@/db";
+import { usageCostCny } from "@/server/pricing";
 
 /** 上游 SessionEvent 的结构在 wire 上是开放的，这里只narrow 出用得上的形状。 */
 interface RawEvent {
@@ -30,6 +33,70 @@ export interface EventSinkContext {
   providerId: string;
   modelId: string;
   reasoningEffort: string;
+}
+
+export interface UsageSessionKey {
+  runId: string;
+  nodeId: string;
+  sessionId: string;
+}
+
+export interface UsageTotals {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+  chunks: number;
+}
+
+interface UnpersistedUsage extends UsageSessionKey, UsageTotals {
+  messageId: string;
+}
+
+// 明细写入偶发失败时不能把已经发生的付费用量一起丢掉。这里只保留失败条目，
+// 成功落库仍以 node_usage 为事实源；挂在 globalThis 上避免 HMR 丢失待结算条目。
+const usageStore = globalThis as typeof globalThis & {
+  ontoflowUnpersistedUsage?: Map<string, UnpersistedUsage>;
+};
+const unpersistedUsage =
+  usageStore.ontoflowUnpersistedUsage ?? new Map<string, UnpersistedUsage>();
+usageStore.ontoflowUnpersistedUsage = unpersistedUsage;
+
+/** 返回本会话没有写进 node_usage 的紧凑汇总，供 Action 最终结算补入。 */
+export function unpersistedUsageForSession(key: UsageSessionKey): UsageTotals {
+  const total = emptyUsageTotals();
+  for (const usage of unpersistedUsage.values()) {
+    if (
+      usage.runId !== key.runId ||
+      usage.nodeId !== key.nodeId ||
+      usage.sessionId !== key.sessionId
+    ) {
+      continue;
+    }
+    total.inputTokens += usage.inputTokens;
+    total.outputTokens += usage.outputTokens;
+    total.reasoningTokens += usage.reasoningTokens;
+    total.cacheReadTokens += usage.cacheReadTokens;
+    total.cacheWriteTokens += usage.cacheWriteTokens;
+    total.cost += usage.cost;
+    total.chunks += 1;
+  }
+  return total;
+}
+
+/** run_nodes 已成功吸收兜底用量后释放内存；失败则保留，不能提前销账。 */
+export function clearUnpersistedUsageForSession(key: UsageSessionKey): void {
+  for (const [id, usage] of unpersistedUsage) {
+    if (
+      usage.runId === key.runId &&
+      usage.nodeId === key.nodeId &&
+      usage.sessionId === key.sessionId
+    ) {
+      unpersistedUsage.delete(id);
+    }
+  }
 }
 
 /** 把一条 dsh 会话事件落成 run_events（可能零行、可能多行）与 node_usage。 */
@@ -148,7 +215,9 @@ function insert(
 
 /**
  * 每个 step 一条用量明细。上游一个 step 只发一条 usage chunk 且不累积，
- * 所以直接按 (sessionId, turn:step) 唯一化即可——不存在同一条消息重复上报。
+ * 按 (runId, sessionId, turn:step) 唯一化去重——会话 id 是画布节点 id，
+ * 同一工作流的多次运行会撞出相同 (sessionId, messageId)，必须由 runId 区分。
+ * 冲突目标显式声明，只吞同键重放，不吞其他约束错误。
  */
 function recordUsage(
   ctx: EventSinkContext,
@@ -157,6 +226,29 @@ function recordUsage(
   usage: Record<string, number>,
 ): void {
   const messageId = `turn${num(data.turn)}-step${num(data.step)}`;
+  const key = usageKey(ctx, messageId);
+  const sample: UnpersistedUsage = {
+    runId: ctx.runId,
+    nodeId: ctx.nodeId,
+    sessionId: ctx.sessionId,
+    messageId,
+    inputTokens: usage.inputTokens ?? 0,
+    outputTokens: usage.outputTokens ?? 0,
+    reasoningTokens: usage.reasoningTokens ?? 0,
+    cacheReadTokens: usage.cacheReadTokens ?? 0,
+    cacheWriteTokens: usage.cacheWriteTokens ?? 0,
+    cost: usageCostCny(
+      ctx.providerId,
+      ctx.modelId,
+      {
+        inputTokens: usage.inputTokens ?? 0,
+        outputTokens: usage.outputTokens ?? 0,
+        cacheReadTokens: usage.cacheReadTokens ?? 0,
+      },
+      ts,
+    ),
+    chunks: 1,
+  };
   try {
     db.insert(nodeUsage)
       .values({
@@ -167,17 +259,40 @@ function recordUsage(
         providerId: ctx.providerId,
         modelId: ctx.modelId,
         variant: ctx.reasoningEffort,
-        inputTokens: usage.inputTokens ?? 0,
-        outputTokens: usage.outputTokens ?? 0,
-        reasoningTokens: usage.reasoningTokens ?? 0,
-        cacheReadTokens: usage.cacheReadTokens ?? 0,
+        inputTokens: sample.inputTokens,
+        outputTokens: sample.outputTokens,
+        reasoningTokens: sample.reasoningTokens,
+        cacheReadTokens: sample.cacheReadTokens,
+        cacheWriteTokens: sample.cacheWriteTokens,
+        cost: sample.cost,
         ts,
       })
-      .onConflictDoNothing()
+      .onConflictDoNothing({
+        target: [nodeUsage.runId, nodeUsage.sessionId, nodeUsage.messageId],
+      })
       .run();
+    // 写入成功或同键已经存在都说明持久层拥有这条明细，清除先前失败的重放副本。
+    unpersistedUsage.delete(key);
   } catch (err) {
+    unpersistedUsage.set(key, sample);
     console.error("[engine] 用量落库失败", ctx.runId, ctx.nodeId, err);
   }
+}
+
+function usageKey(ctx: UsageSessionKey, messageId: string): string {
+  return `${ctx.runId}\u0000${ctx.nodeId}\u0000${ctx.sessionId}\u0000${messageId}`;
+}
+
+function emptyUsageTotals(): UsageTotals {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    cost: 0,
+    chunks: 0,
+  };
 }
 
 function str(value: unknown): string {

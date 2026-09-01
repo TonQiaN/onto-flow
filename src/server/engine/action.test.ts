@@ -40,14 +40,36 @@ CREATE TABLE run_nodes (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, snapshot TEXT,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  session_id TEXT
+  cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0, session_id TEXT
+);
+CREATE TABLE run_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT,
+  ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
+);
+CREATE TABLE node_usage (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL,
+  session_id TEXT NOT NULL, message_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL DEFAULT '', model_id TEXT NOT NULL DEFAULT '',
+  variant TEXT, input_tokens INTEGER NOT NULL DEFAULT 0,
+  output_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+  cost REAL NOT NULL DEFAULT 0, finish TEXT, ts INTEGER NOT NULL
 );
 `);
 (globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, {
   schema,
 });
 
-const { runActionNode } = await import("./action");
+const {
+  finalizeUnsettledActionUsage,
+  refreshUnsettledActionUsage,
+  runActionNode,
+} = await import("./action");
+const {
+  clearUnpersistedUsageForSession,
+  recordSessionEvent,
+  unpersistedUsageForSession,
+} = await import("./events");
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-action-test-"));
 
 function resolvedNode(exitName: string | null = null): ResolvedNode {
@@ -81,6 +103,9 @@ function context(options?: {
   runTurn?: (
     ...args: Parameters<ActionNodeContext["proc"]["runTurn"]>
   ) => Promise<void>;
+  runTurnError?: Error;
+  closeSession?: (sessionId: string) => Promise<void>;
+  dispose?: () => Promise<void>;
   usage?: Record<string, number>;
   inputs?: ActionNodeContext["inputs"];
 }): ActionNodeContext {
@@ -89,19 +114,35 @@ function context(options?: {
   const proc = {
     runTurn: async (...args: Parameters<ActionNodeContext["proc"]["runTurn"]>) => {
       await options?.runTurn?.(...args);
+      // 真实链路里用量由 events.ts 在 usage chunk 到达当下写进 node_usage；
+      // 这里在回合收束前落一行等价明细，recordUsage 从库里求和。
+      if (options?.usage) {
+        sqlite
+          .prepare(
+            "insert into node_usage (id, run_id, node_id, session_id, message_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cost, ts) values (?, 'run-1', 'node-1', ?, 'turn1-step1', ?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            `usage-${sessionId}`,
+            sessionId,
+            options.usage.inputTokens ?? 0,
+            options.usage.outputTokens ?? 0,
+            options.usage.reasoningTokens ?? 0,
+            options.usage.cacheReadTokens ?? 0,
+            options.usage.cost ?? 0,
+            Date.now(),
+          );
+      }
+      if (options?.runTurnError) throw options.runTurnError;
       return sessionId;
     },
-    eventsOf: (id: string) =>
-      id === sessionId && options?.usage
-        ? [
-            {
-              type: "assistant/chunk",
-              data: { chunk: { type: "usage", usage: options.usage } },
-            },
-          ]
-        : [],
     sessionOutput: async () => ({ captured: true, value: { result: "result.md" } }),
-    closeSession: async () => {},
+    closeSession: async (targetSessionId: string) => {
+      await options?.closeSession?.(targetSessionId);
+    },
+    dispose: async () => {
+      await options?.dispose?.();
+      return { code: 0, signal: null, expected: true };
+    },
   };
   return {
     runId: "run-1",
@@ -127,14 +168,17 @@ function context(options?: {
 }
 
 beforeEach(() => {
+  finalizeUnsettledActionUsage("run-1");
   sqlite.exec(`
     DELETE FROM run_nodes;
+    DELETE FROM node_usage;
+    DELETE FROM run_events;
     DELETE FROM action_skills;
     DELETE FROM action_ports;
     DELETE FROM actions;
     DELETE FROM object_types;
     DELETE FROM models;
-    INSERT INTO models VALUES ('model-1', 'deepseek-official', 'test-model', '测试模型');
+    INSERT INTO models VALUES ('model-1', 'deepseek-official', 'deepseek-v4-flash', '测试模型');
     INSERT INTO object_types VALUES ('type-1', '测试报告', 'file');
     INSERT INTO object_types VALUES ('type-input', 'PDF 输入', 'file');
     INSERT INTO actions VALUES (
@@ -146,8 +190,10 @@ beforeEach(() => {
     INSERT INTO action_ports VALUES (
       'port-1', 'action-1', 'output', 'result', 'type-1', 0, 'result.md', NULL
     );
-    INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, NULL);
+    INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);
   `);
+  clearUnpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1" });
+  clearUnpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1#2" });
   fs.rmSync(path.join(workspaceRoot, "result.md"), { force: true });
   fs.rmSync(path.join(workspaceRoot, "rounds"), { recursive: true, force: true });
 });
@@ -225,7 +271,360 @@ describe("Action 执行时边界", () => {
     });
   });
 
-  it("PDF 派生输入在真实会话提示中逐页要求调用 read_image", async () => {
+  it("模型轮次超时后先关闭会话，再汇总关闭期间到达的最后用量", async () => {
+    let closed = false;
+    await expect(
+      runActionNode(
+        context({
+          usage: {
+            inputTokens: 17,
+            outputTokens: 8,
+            reasoningTokens: 3,
+            cacheReadTokens: 2,
+            cost: 0.125,
+          },
+          runTurnError: new Error("等待会话 node-1 进入 idle 超时"),
+          closeSession: async (sessionId) => {
+            closed = true;
+            sqlite
+              .prepare(
+                "insert into node_usage (id, run_id, node_id, session_id, message_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cost, ts) values ('usage-late', 'run-1', 'node-1', ?, 'turn1-step2', 5, 2, 1, 1, 0.025, ?)",
+              )
+              .run(sessionId, Date.now());
+          },
+        }),
+      ),
+    ).rejects.toThrow("等待会话 node-1 进入 idle 超时");
+
+    expect(closed).toBe(true);
+    expect(
+      sqlite
+        .prepare(
+          "select input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens, cost from run_nodes",
+        )
+        .get(),
+    ).toEqual({
+      inputTokens: 22,
+      outputTokens: 10,
+      reasoningTokens: 4,
+      cacheReadTokens: 3,
+      cost: 0.15,
+    });
+    expect(
+      sqlite
+        .prepare("select type, payload from run_events where type = 'usage'")
+        .get(),
+    ).toMatchObject({ type: "usage" });
+  });
+
+  it("正常会话的 usage 事件瞬时写入失败时进入最终结算重试链", async () => {
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+    sqlite.exec(`
+      CREATE TRIGGER fail_normal_usage_event_insert
+      BEFORE INSERT ON run_events
+      BEGIN SELECT RAISE(ABORT, 'forced normal usage event failure'); END;
+    `);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await expect(
+        runActionNode(
+          context({
+            usage: {
+              inputTokens: 10,
+              outputTokens: 4,
+              reasoningTokens: 2,
+              cacheReadTokens: 1,
+              cost: 0.1,
+            },
+          }),
+        ),
+      ).rejects.toThrow("会话 node-1 的用量事件尚未持久化");
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({ inputTokens: 10, outputTokens: 4 });
+      expect(sqlite.prepare("select count(*) as count from run_events").get()).toEqual({
+        count: 0,
+      });
+
+      sqlite.exec("DROP TRIGGER fail_normal_usage_event_insert;");
+      expect(() => finalizeUnsettledActionUsage("run-1")).not.toThrow();
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({ inputTokens: 10, outputTokens: 4 });
+      const payload = JSON.parse(
+        (
+          sqlite.prepare("select payload from run_events where type = 'usage'").get() as {
+            payload: string;
+          }
+        ).payload,
+      ) as Record<string, unknown>;
+      expect(payload).toMatchObject({ inputTokens: 10, outputTokens: 4 });
+      expect(payload.unsettledProcess).toBeUndefined();
+    } finally {
+      sqlite.exec("DROP TRIGGER IF EXISTS fail_normal_usage_event_insert;");
+      try {
+        finalizeUnsettledActionUsage("run-1");
+      } catch {
+        // 断言失败时仍尽量清掉全局测试状态；原始断言错误由 Vitest 保留。
+      }
+      log.mockRestore();
+    }
+  });
+
+  it("会话与进程均无法确认静止时持续把迟到用量刷新到节点和同一结算事件", async () => {
+    try {
+      await expect(
+        runActionNode(
+          context({
+            usage: {
+              inputTokens: 17,
+              outputTokens: 8,
+              reasoningTokens: 3,
+              cacheReadTokens: 2,
+              cost: 0.125,
+            },
+            runTurnError: new Error("等待会话 node-1 进入 idle 超时"),
+            closeSession: async () => {
+              throw new Error("会话关闭失败");
+            },
+            dispose: async () => {
+              throw new Error("SIGKILL 后仍未退出");
+            },
+          }),
+        ),
+      ).rejects.toThrow("会话 node-1 失败后无法收束运行子进程");
+
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({
+        inputTokens: 17,
+        outputTokens: 8,
+        reasoningTokens: 3,
+        cacheReadTokens: 2,
+      });
+
+      recordSessionEvent(
+        {
+          runId: "run-1",
+          nodeId: "node-1",
+          sessionId: "node-1",
+          providerId: "deepseek-official",
+          modelId: "deepseek-v4-flash",
+          reasoningEffort: "high",
+        },
+        {
+          type: "assistant/chunk",
+          time: Date.UTC(2026, 7, 31, 2),
+          data: {
+            turn: 1,
+            step: 2,
+            chunk: {
+              type: "usage",
+              usage: {
+                inputTokens: 5,
+                outputTokens: 2,
+                reasoningTokens: 1,
+                cacheReadTokens: 1,
+              },
+            },
+          },
+        },
+      );
+      refreshUnsettledActionUsage("run-1", "node-1");
+
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({
+        inputTokens: 22,
+        outputTokens: 10,
+        reasoningTokens: 4,
+        cacheReadTokens: 3,
+      });
+      const events = sqlite
+        .prepare("select payload from run_events where type = 'usage'")
+        .all() as Array<{ payload: string }>;
+      expect(events).toHaveLength(1);
+      expect(JSON.parse(events[0].payload)).toMatchObject({
+        sessionId: "node-1",
+        inputTokens: 22,
+        outputTokens: 10,
+        reasoningTokens: 4,
+        cacheReadTokens: 3,
+        unsettledProcess: true,
+      });
+    } finally {
+      finalizeUnsettledActionUsage("run-1");
+    }
+  });
+
+  it("子进程退出后的 usage 事件瞬时写入失败时保留结算状态供重试", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        runActionNode(
+          context({
+            usage: {
+              inputTokens: 10,
+              outputTokens: 4,
+              reasoningTokens: 2,
+              cacheReadTokens: 1,
+              cost: 0.1,
+            },
+            runTurnError: new Error("等待会话 node-1 进入 idle 超时"),
+            closeSession: async () => {
+              throw new Error("会话关闭失败");
+            },
+            dispose: async () => {
+              throw new Error("SIGKILL 后仍未退出");
+            },
+          }),
+        ),
+      ).rejects.toThrow("会话 node-1 失败后无法收束运行子进程");
+
+      sqlite
+        .prepare(
+          "insert into node_usage (id, run_id, node_id, session_id, message_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cost, ts) values ('usage-final-late', 'run-1', 'node-1', 'node-1', 'turn1-step2', 3, 2, 1, 1, 0.05, ?)",
+        )
+        .run(Date.now());
+      sqlite.exec(`
+        CREATE TRIGGER fail_usage_event_update
+        BEFORE UPDATE ON run_events
+        BEGIN SELECT RAISE(ABORT, 'forced usage event failure'); END;
+      `);
+
+      expect(() => finalizeUnsettledActionUsage("run-1")).toThrow(
+        "会话 node-1 的用量事件尚未持久化",
+      );
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({ inputTokens: 13, outputTokens: 6 });
+      expect(
+        JSON.parse(
+          (
+            sqlite.prepare("select payload from run_events where type = 'usage'").get() as {
+              payload: string;
+            }
+          ).payload,
+        ),
+      ).toMatchObject({ inputTokens: 10, outputTokens: 4 });
+
+      sqlite.exec("DROP TRIGGER fail_usage_event_update;");
+      expect(() => finalizeUnsettledActionUsage("run-1")).not.toThrow();
+      expect(
+        JSON.parse(
+          (
+            sqlite.prepare("select payload from run_events where type = 'usage'").get() as {
+              payload: string;
+            }
+          ).payload,
+        ),
+      ).toMatchObject({ inputTokens: 13, outputTokens: 6 });
+    } finally {
+      sqlite.exec("DROP TRIGGER IF EXISTS fail_usage_event_update;");
+      try {
+        finalizeUnsettledActionUsage("run-1");
+      } catch {
+        // 断言失败时仍尽量清掉全局测试状态；原始断言错误由 Vitest 保留。
+      }
+      log.mockRestore();
+    }
+  });
+
+  it("用量明细写入失败时仍把全部 token 与费用汇总到节点", async () => {
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      await runActionNode(
+        context({
+          runTurn: async () => {
+            sqlite.exec(`
+              CREATE TRIGGER fail_usage_insert
+              BEFORE INSERT ON node_usage
+              BEGIN SELECT RAISE(ABORT, 'forced usage failure'); END;
+            `);
+            try {
+              recordSessionEvent(
+                {
+                  runId: "run-1",
+                  nodeId: "node-1",
+                  sessionId: "node-1",
+                  providerId: "deepseek-official",
+                  modelId: "deepseek-v4-flash",
+                  reasoningEffort: "high",
+                },
+                {
+                  type: "assistant/chunk",
+                  time: Date.UTC(2026, 7, 31, 2),
+                  data: {
+                    turn: 1,
+                    step: 1,
+                    chunk: {
+                      type: "usage",
+                      usage: {
+                        inputTokens: 10,
+                        outputTokens: 20,
+                        reasoningTokens: 7,
+                        cacheReadTokens: 3,
+                        cacheWriteTokens: 4,
+                      },
+                    },
+                  },
+                },
+              );
+            } finally {
+              sqlite.exec("DROP TRIGGER fail_usage_insert;");
+            }
+          },
+        }),
+      );
+    } finally {
+      log.mockRestore();
+      sqlite.exec("DROP TRIGGER IF EXISTS fail_usage_insert;");
+    }
+
+    const row = sqlite
+      .prepare(
+        "select input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens, cache_write_tokens as cacheWriteTokens, cost from run_nodes",
+      )
+      .get() as Record<string, number>;
+    expect(row).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 20,
+      reasoningTokens: 7,
+      cacheReadTokens: 3,
+      cacheWriteTokens: 4,
+    });
+    expect(row.cost).toBeGreaterThan(0);
+    expect(sqlite.prepare("select count(*) as count from node_usage").get()).toEqual({ count: 0 });
+    expect(
+      unpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1" })
+        .chunks,
+    ).toBe(0);
+  });
+
+  it("文件输入在真实会话提示中给出原件路径并指示自行转换", async () => {
     fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
     let renderedPrompt = "";
 
@@ -236,18 +635,9 @@ describe("Action 执行时边界", () => {
             {
               kind: "file",
               file: {
-                path: "runs/workflow/run/workspace/inputs/input/source/resume.pdf",
+                path: "runs/workflow/run/workspace/inputs/input/resume.pdf",
                 name: "resume.pdf",
                 mime: "application/pdf",
-                preprocessed: {
-                  kind: "pdf",
-                  pageCount: 2,
-                  textPath: "runs/workflow/run/workspace/inputs/input/derived/text-layer.txt",
-                  pageImagePaths: [
-                    "runs/workflow/run/workspace/inputs/input/derived/pages/page-1.png",
-                    "runs/workflow/run/workspace/inputs/input/derived/pages/page-2.png",
-                  ],
-                },
               },
             },
           ],
@@ -258,9 +648,8 @@ describe("Action 执行时边界", () => {
       }),
     );
 
-    expect(renderedPrompt).toContain("逐页调用 read_image");
-    expect(renderedPrompt).toContain("inputs/input/derived/text-layer.txt");
-    expect(renderedPrompt).toContain("inputs/input/derived/pages/page-1.png");
-    expect(renderedPrompt).toContain("inputs/input/derived/pages/page-2.png");
+    expect(renderedPrompt).toContain("inputs/input/resume.pdf");
+    expect(renderedPrompt).toContain("原件，未经预处理");
+    expect(renderedPrompt).toContain("用 bash 自行转换");
   });
 });

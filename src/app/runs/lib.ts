@@ -39,6 +39,9 @@ export interface RunListItem {
   finishedAt: string | number | null;
   totalTokens: number;
   totalCost: number;
+  /** 节点总数与已收束数（success/failed/cancelled/skipped），驱动进度展示 */
+  nodesTotal: number;
+  nodesDone: number;
 }
 
 /** runs 表行（GET /api/runs/[id] 与 SSE snapshot 中的 run） */
@@ -206,13 +209,12 @@ export function durationText(startedAt: unknown, finishedAt: unknown): string {
   return formatDuration(end - start);
 }
 
-/** 用量合计：五类 token 全部计入「总 token」 */
+/** outputTokens 已含 reasoning；推理 token 只作拆分展示，不能再次计入总量。 */
 export function sumTokens(usage: Partial<NodeUsage> | null | undefined): number {
   if (!usage) return 0;
   return (
     (usage.inputTokens ?? 0) +
     (usage.outputTokens ?? 0) +
-    (usage.reasoningTokens ?? 0) +
     (usage.cacheReadTokens ?? 0) +
     (usage.cacheWriteTokens ?? 0)
   );
@@ -237,10 +239,11 @@ export function formatTokens(n: number): string {
 }
 
 /** 费用为美元，保留 4 位；极小的非零值不显示成 $0.0000 */
+/** 费用单位是人民币：按 DeepSeek 官方峰谷价在落库时计算（src/server/pricing.ts）。 */
 export function formatCost(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "$0";
-  if (n < 0.0001) return "<$0.0001";
-  return `$${n.toFixed(4)}`;
+  if (!Number.isFinite(n) || n <= 0) return "¥0";
+  if (n < 0.0001) return "<¥0.0001";
+  return `¥${n.toFixed(4)}`;
 }
 
 /** run_nodes.snapshot 的展示形态（服务端 RunSnapshot 的宽松镜像） */
@@ -327,31 +330,12 @@ export function asPortValue(value: unknown): PortValue | null {
   if (o.kind === "file" && typeof o.file === "object" && o.file !== null) {
     const f = o.file as Record<string, unknown>;
     if (typeof f.name === "string" && typeof f.path === "string") {
-      const rawPreprocessed =
-        typeof f.preprocessed === "object" && f.preprocessed !== null
-          ? (f.preprocessed as Record<string, unknown>)
-          : null;
-      const pageImagePaths = rawPreprocessed?.pageImagePaths;
-      const preprocessed =
-        rawPreprocessed?.kind === "pdf" &&
-        typeof rawPreprocessed.pageCount === "number" &&
-        typeof rawPreprocessed.textPath === "string" &&
-        Array.isArray(pageImagePaths) &&
-        pageImagePaths.every((entry) => typeof entry === "string")
-          ? {
-              kind: "pdf" as const,
-              pageCount: rawPreprocessed.pageCount,
-              textPath: rawPreprocessed.textPath,
-              pageImagePaths,
-            }
-          : undefined;
       return {
         kind: "file",
         file: {
           path: f.path,
           name: f.name,
           mime: typeof f.mime === "string" ? f.mime : "",
-          ...(preprocessed === undefined ? {} : { preprocessed }),
         },
       };
     }

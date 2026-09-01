@@ -5,7 +5,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { FolderRef } from "@/components/library";
 import type { ValidationIssue } from "@/lib/graph";
-import type { FilePreprocessor } from "@/lib/object-types";
 
 export type PortKind = "text" | "file" | "json";
 export type ReasoningEffort = "off" | "low" | "high" | "max";
@@ -74,7 +73,6 @@ export interface ObjectTypeRow {
   kind: PortKind;
   description: string;
   jsonSchema: string | null;
-  filePreprocessor: FilePreprocessor | null;
   builtin: boolean;
 }
 

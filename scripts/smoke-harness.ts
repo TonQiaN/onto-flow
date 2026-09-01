@@ -67,7 +67,7 @@ async function main(): Promise<void> {
 
     const artifact = path.join(ws.workspaceDir, "hello.md");
     console.log(`[${el()}] 产物：\n---\n${await readFile(artifact, "utf8")}---`);
-    console.log(`[${el()}] 会话事件数：${proc.eventsOf("node-1").length}`);
+    console.log(`[${el()}] 会话事件数：${proc.eventCountOf("node-1")}`);
   } finally {
     const exit = await proc.dispose();
     console.log(`[${el()}] 子进程收束：code=${String(exit.code)} expected=${String(exit.expected)}`);

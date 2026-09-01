@@ -9,8 +9,14 @@ export const dynamic = "force-dynamic";
 
 /** 推送节奏：2 秒一轮 */
 const TICK_MS = 2000;
-/** 每轮最多推的新日志条数 */
-const LOG_BATCH = 50;
+/** 单次查询的日志批大小 */
+const LOG_BATCH = 200;
+/**
+ * 一轮 tick 允许追平的日志上限。并行运行的交错写入很容易超过单批：
+ * 只推一批就停会让实时日志永久落后于写入速率，因此每拍分批追到没有新行
+ * 或触到这个上限为止；上限防止一次巨量回补把响应流和事件循环都噎住。
+ */
+const LOG_MAX_PER_TICK = 2000;
 /** 心跳（注释帧）间隔：30 秒，用来尽快发现半开连接 */
 const PING_EVERY_TICKS = 15;
 
@@ -83,10 +89,14 @@ export async function GET(request: Request) {
             send("sessions", sessions);
           }
 
-          const items = getLogsAfter(lastEventId, LOG_BATCH);
-          if (items.length > 0) {
+          let pulled = 0;
+          for (;;) {
+            const items = getLogsAfter(lastEventId, LOG_BATCH);
+            if (items.length === 0) break;
             lastEventId = items[items.length - 1].id;
             send("logs", { items });
+            pulled += items.length;
+            if (items.length < LOG_BATCH || pulled >= LOG_MAX_PER_TICK) break;
           }
 
           ticks += 1;

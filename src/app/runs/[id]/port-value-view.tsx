@@ -58,11 +58,6 @@ export function PortValueView({ value }: { value: unknown }) {
             <span className="text-zinc-400">文件</span>
             <span className="font-medium">{pv.file.name}</span>
           </span>
-          {pv.file.preprocessed?.kind === "pdf" && (
-            <span className="inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs text-blue-700">
-              PDF 已预处理 · {pv.file.preprocessed.pageCount} 页
-            </span>
-          )}
         </div>
       );
   }

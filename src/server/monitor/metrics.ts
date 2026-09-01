@@ -30,13 +30,13 @@ import type {
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
 
-/** 五类 token 全部计入（口径与运行历史页一致） */
+/** output 已含 reasoning；总量只加 input/output/cacheRead/cacheWrite。 */
 const NODE_TOKENS = sql`(
-  run_nodes.input_tokens + run_nodes.output_tokens + run_nodes.reasoning_tokens +
+  run_nodes.input_tokens + run_nodes.output_tokens +
   run_nodes.cache_read_tokens + run_nodes.cache_write_tokens
 )`;
 const USAGE_TOKENS = sql`(
-  node_usage.input_tokens + node_usage.output_tokens + node_usage.reasoning_tokens +
+  node_usage.input_tokens + node_usage.output_tokens +
   node_usage.cache_read_tokens + node_usage.cache_write_tokens
 )`;
 

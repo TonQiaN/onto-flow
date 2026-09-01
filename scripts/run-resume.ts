@@ -11,6 +11,8 @@ import { eq } from "drizzle-orm";
 import { db, runNodes, runs, workflowNodes, workflows } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import { DATA_DIR, resolveWithinData } from "../src/server/fs-safety";
+import { inspectPdfPages, readPdfPageCount } from "./resume-pdf-inspection";
+import { totalUsageTokens } from "./token-total";
 
 function fileInput(dataRelativePath: string) {
   const abs = resolveWithinData(dataRelativePath);
@@ -69,20 +71,15 @@ async function main(): Promise<void> {
   let totalCost = 0;
   const nodeRows = db.select().from(runNodes).where(eq(runNodes.runId, started.runId)).all();
   for (const n of nodeRows) {
-    const nodeTokens =
-      n.inputTokens +
-      n.outputTokens +
-      n.reasoningTokens +
-      n.cacheReadTokens +
-      n.cacheWriteTokens;
+    const nodeTokens = totalUsageTokens(n);
     totalTokens += nodeTokens;
     totalCost += n.cost;
     console.log(
       `  ${n.label.padEnd(10)} ${n.status.padEnd(8)} tokens=${nodeTokens}` +
-        `${n.error ? " error=yes" : ""}`,
+        ` cost=¥${n.cost.toFixed(4)}${n.error ? " error=yes" : ""}`,
     );
   }
-  console.log(`  合计 tokens=${totalTokens} cost=${totalCost.toFixed(6)}`);
+  console.log(`  合计 tokens=${totalTokens} cost=¥${totalCost.toFixed(4)}`);
 
   const ws = row!.runDir ? path.join(process.cwd(), row!.runDir, "workspace") : null;
   const expectedArtifacts = [
@@ -104,12 +101,16 @@ async function main(): Promise<void> {
       bytes: absolutePath !== "" && fs.existsSync(absolutePath) ? fs.statSync(absolutePath).size : 0,
     };
   });
-  const pageImages = ws && fs.existsSync(path.join(ws, "inputs"))
-    ? fs
-        .readdirSync(path.join(ws, "inputs"), { recursive: true })
-        .filter((entry) => typeof entry === "string" && /pages\/page-\d+\.png$/.test(entry))
-        .length
-    : 0;
+  const pdfPages = ws
+    ? [
+        { label: "岗位JD", nodeId: jd.id, inputPath: jdPath },
+        { label: "简历", nodeId: resume.id, inputPath: resumePath },
+      ].flatMap(({ label, nodeId, inputPath }) => {
+        if (path.extname(inputPath).toLowerCase() !== ".pdf") return [];
+        const expectedPages = readPdfPageCount(resolveWithinData(inputPath));
+        return [{ label, ...inspectPdfPages(ws, nodeId, expectedPages) }];
+      })
+    : [];
   console.log(
     JSON.stringify(
       {
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
         },
         totalTokens,
         totalCost,
-        pdfPageImages: pageImages,
+        pdfPages,
         artifacts,
       },
       null,
@@ -132,10 +133,17 @@ async function main(): Promise<void> {
   );
 
   const invalidArtifacts = artifacts.filter((artifact) => !artifact.present || artifact.bytes === 0);
-  if (row!.status !== "success" || invalidArtifacts.length > 0) {
+  const incompletePdfs = pdfPages.filter((inspection) => !inspection.complete);
+  if (
+    row!.status !== "success" ||
+    invalidArtifacts.length > 0 ||
+    incompletePdfs.length > 0
+  ) {
     throw new Error(
       `验收未通过：status=${row!.status} invalidArtifacts=${invalidArtifacts
         .map((artifact) => artifact.path)
+        .join(",") || "none"} incompletePdfPages=${incompletePdfs
+        .map((inspection) => `${inspection.label}:${inspection.missingPages.join("/")}`)
         .join(",") || "none"}`,
     );
   }

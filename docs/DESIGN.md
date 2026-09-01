@@ -28,16 +28,16 @@ src/
 
 | 路由 | 方法 | 说明 |
 |---|---|---|
-| /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建；对象类型载荷含 `filePreprocessor: "pdf" | null` |
+| /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建 |
 | /api/object-types/[id] 等同上三者 | GET, PUT, DELETE | 详情/更新/删除；被引用时 DELETE 返回 409 `{ error, usedBy }`；builtin 类型不可删改 |
 | /api/models | GET | 模型白名单 |
 | /api/actions | GET, POST | POST/PUT 载荷含 `ports: {direction,name,objectTypeId,position,artifactPath,exitName}[]`、`maxReentries`、`onExhausted`、`skillIds`、`toolIds`，整体替换；每个输出端口的 `artifactPath` 必填，输入端口两字段归一为 null |
 | /api/actions/[id] | GET, PUT, DELETE | 被 workflow 节点引用时 DELETE 409 |
 | /api/workflows | GET, POST | |
 | /api/workflows/[id] | GET, PUT, DELETE | GET 返回 nodes+edges+校验结果；PUT 保存整图（nodes+edges 整体替换，节点 id 由前端生成保持连线引用） |
-| /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；校验不通过 422 `{ issues }`；通过则建 run 异步执行，返回 `{ runId }` |
-| /api/runs?workflowId= | GET | 运行列表 |
-| /api/runs/[id] | GET | run + run_nodes 全量 |
+| /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；校验不通过 422 `{ issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
+| /api/runs?workflowId=&status= | GET | 运行列表；每行带 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用） |
+| /api/runs/[id] | GET, DELETE | GET：run + run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage 外键级联，连同运行目录），running 时 409 |
 | /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
 | /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
 | /api/uploads | POST | multipart 单文件 → 存 `data/uploads/<uuid>/<原名>`，返回 PortValue(file) |
@@ -51,6 +51,8 @@ src/
 - UI 文案全部中文；Tailwind 工具类直接写，不引组件库；整体风格与既有外壳（zinc 系工作台）一致。
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
 - 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
+- 运行之间并行且互相独立：同一个工作流可同时发起多次运行，跨运行状态一律按 runId 隔离（工作区目录、子进程、globalThis 上的取消/进程/输入表）。唯一的准入闸门在 `startRun`：同时 running 的运行数达 `MAX_CONCURRENT_RUNS`（16）即返回 429 而不排队——每个运行是一整个 node+tsx+dsh 子进程，队列归外部调用方管。仓库内付费批量脚本实行全有或全撤：任一项被拒时取消并等齐同批已经受理的运行后才报错。
+- 多路运行的界面契约：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running`），点击深链 `/workflows/<id>?runId=<runId>` 精确跟随那一路；画布运行条在同一工作流多路并行时出现切换器，「运行」按钮在运行中仍可再次发起（发起后运行条切到新的一路，旧的经切换器回看）；运行详情的「回画布看动画」同样带 runId 深链。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。文件输入物化到 `workspace/inputs/`，Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
 - 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
 
@@ -76,13 +78,24 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   两阶段提交；会话收束后未捕获、出口不合法或声明的产物文件不存在，节点都失败。
 - **模型调用**：模型行的 `providerId` 是 dsh 路由；`deepseek-official` 由
   `llm-deepseek` 提供。思考强度经会话 scope 上的 `agent/request` waterfall 无条件覆盖到调用配置；
-  每节点最多 40 步、墙钟 15 分钟。全局停用工具从会话工具面移除，晚注册工具另由 guard 兜底。
+  每节点最多 40 步、墙钟 15 分钟。图与全局设置在运行准入时冻结并传给执行器；网页保存只影响
+  下一次运行。全局停用工具从会话工具面移除，晚注册工具另由 guard 兜底。
 - **完成、取消与错误**：`session/prompt` 懒创建会话，Next 侧等待同一会话依次进入 running / idle；
   人工取消走 `session/cancel`，运行与节点进入独立的 `cancelled` 终态。节点完成后关闭会话，一次
-  运行完成后关闭子进程；崩溃、超时与无产物都写入 run / run_node 的失败事实。
+  运行完成后关闭子进程；崩溃、超时与无产物都写入 run / run_node 的失败事实。无论发生在
+  initialize 失败后的收束，还是正常执行的 finally，若 dispose 在终止升级后仍不能确认子进程
+  退出，该运行都保持 active 隔离所有权：预览、清理、删除与新准入容量 fail-closed，不能用
+  数据库终态冒充工作区已经静止。若 Action 会话与整个进程都无法确认静止，该会话的用量结算
+  保持活跃：每条迟到 usage 落明细后，以本会话前的节点历史为固定基线幂等刷新节点累计与同一
+  usage 事件；确认进程退出后再做最后一次刷新。节点累计或 usage 事件任一落库失败时，运行继续
+  占用 active 所有权并定时重试，二者都持久化后才释放进程句柄与内存兜底。
 - **事件、轨迹与用量**：`session.event` 通知到达时立刻归一为 text / reasoning / tool /
   session.idle / session.error 并落库。每个 step 的 usage chunk 是不累积值，按
   `(sessionId, turn:step)` 唯一化后求和；完整原始会话另存 `<run>/sessions/**/session.jsonl`。
+  正常会话与隔离会话都用会话前节点基线幂等结算；节点累计与 usage 事件任一写入失败，
+  都保留结算状态并在子进程退出后持续重试，不能只留数字而永久缺失事件。
+  DeepSeek 的 `outputTokens` 已含 reasoning；运行详情、历史 API、画布运行条、轨迹与监控汇总
+  均只把 input/output/cacheRead/cacheWrite 计入总 token，reasoning 只保留为拆分明细。
   运行详情展开某个 Action 时，从数据库记录的 `runDir` 枚举 `nodeId` 与 `nodeId#N` 会话，使用
   dsh 公共 codec 解包 chunk 行，再按回合与步骤折叠、按 `callId` 配对 Tool 调用与结果。界面只
   返回有长度边界且物理路径脱敏的折叠记录，输入 / 模型 / 工具三泳道和选中记录详情由同一投影
@@ -95,16 +108,19 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `data/` 内（`isWithinData` 在 startRun 入口 422 拦截，`resolveWithinData` 在 runner.ts
   物化时纵深兜底），`file.name` 用 `safeBasename` 只取 basename——防目录穿越读任意文件外泄、
   或覆盖工作区目标目录之外的文件。
-- **PDF 预处理由对象类型声明**：`object_types.file_preprocessor = "pdf"` 的输入节点在工作区
-  保留原文件，调用 Poppler 抽取 `text-layer.txt` 并按页生成 PNG；模型提示必须同时给出文本层、
-  页面图与原文件路径。文件签名而不是 multipart MIME/扩展名决定是否处理；声称是 PDF 但签名
-  不符直接失败。上传请求体在 multipart 解析前流式限流；单份 PDF 上限 32 MiB / 20 页，文本层
-  上限 16 MiB、全部派生文件合计上限 128 MiB。Poppler 通过可取消的异步子进程逐项执行，失败
-  或取消删除半成品；页面图不齐时不得启动模型。非 PDF 文件原样物化。
+- **文件输入原样物化，平台不做任何预处理（ADR-0011）**：所有文件输入原样拷贝为
+  `inputs/<节点id>/<文件名>`；格式转换（抽文本、栅格化、逐页 `read_image`）是 Action 会话里
+  模型用 `bash` 自己的工作。上传请求体在 multipart 解析前流式限流，单文件上限 32 MiB。
+- **每个会话都有 `bash`，写入被沙箱圈定**：`bash` 与 `read`/`write`/`edit`/`read_image`/`skill`
+  同为基础工具面，对所有 Action 可见。bash 与 write/edit 共用一份 `workspace-write` 沙箱策略，
+  写入只放行运行工作区与系统临时目录，但两族的围栏强度不同：bash 的命令经 Seatbelt
+  （`sandbox-exec`）内核围栏执行，runner 不可用时 fail-closed 拒绝执行命令；write/edit 走
+  `dsh-fs-sandbox` 的进程内路径检查，上游明言它是策略围栏而非内核边界，也不经 runner。
+  read 与网络两族都不受限；模型请求的沙箱升级因 `approval policy: "never"` 一律拒绝。
 - **孤儿运行对账**：`src/instrumentation.ts` 启动钩子调用 `reconcileOrphanRuns`，把上次进程
   遗留的 `running` run 及其 running/pending 节点失败化——否则 SSE 结束条件永假、无限轮询。
 - **模型输出用作文件名前先净化**：`save_purchase_plan` 里 `plan_no` 由模型产出，拼进备份
-  文件名前先取 basename、做 NFKC 归一与字符白名单净化；最终绝对路径再约束在 `data/` 内，
+  文件名前先取 basename、做 NFKC 归一与字符白名单净化；最终绝对路径再约束在 `data/documents/` 内，
   防止穿越写出 `documents/` 之外。
 - **HMR 下的运行所有权**：取消标记与在跑子进程句柄挂在 `globalThis`，使开发期 HMR 不会丢失
   对现存运行的取消和收束能力；运行结束必须删除对应句柄与取消标记。
@@ -117,7 +133,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - Skills：集采计划编制规范、集采计划审核要点（全文见 erp-seed.json）。
 - Tool：save_purchase_plan——物化为 cordis 插件并在本运行的 harness 子进程执行，用 `node:sqlite` 打开
   `process.env.ONTOFLOW_DB_PATH` 写 purchase_plans（17 字段见 schema.ts），备份 Markdown 写
-  `ONTOFLOW_DATA_DIR/documents/<safePlanNo>-<日期>.md`，返回 { id, planNo, backupPath }。
+  `ONTOFLOW_DATA_DIR/documents/<safePlanNo>-<日期>-<UUID>.md`；同一 `plan_no` 的并发 upsert 以
+  `BEGIN IMMEDIATE` 排定顺序，提交新指针后删除被替换的旧备份，返回 { id, planNo, backupPath }。
 - Actions（prompt/rule 全文见 erp-seed.json）：需求整理(deepseek, low)、集采计划生成(deepseek, high)、
   集采计划审核(deepseek, high；输出 审核评价+集采计划透传)、集采计划归档(deepseek, low；引用 save_purchase_plan)。
 - Workflow「采购集采计划生成」：输入节点(需求文件) → 需求整理 → 集采计划生成 → 集采计划审核 →
@@ -128,10 +145,11 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 
 - 工作流「简历匹配评分」是两个文件输入 → 一个解析 Action → 六个评委扇出 → 一个汇总 →
   一个输出的 11 节点图。
-- `岗位JD文件` 与 `简历文件` 的 `filePreprocessor` 都是 `pdf`：PDF 生成文本层与逐页 PNG，
-  Markdown/纯文本原样物化。
-- 只有「简历评分·解析」使用 `deepseek-v4-flash-vision-exp`。它必须把输入当不可信数据，先读
-  文本层、再逐页调用 `read_image`；扫描件文本层为空也不得跳页，页面与文本冲突时以可见页面为准。
+- `岗位JD文件` 与 `简历文件` 都以原件进入工作区，PDF、Markdown、纯文本一视同仁。
+- 只有「简历评分·解析」使用 `deepseek-v4-flash-vision-exp`。它必须把输入当不可信数据，自己用
+  bash 处理 PDF：`pdfinfo` 确认页数、`pdftotext` 抽文本层、`pdftoppm` 逐页栅格化后逐页调用
+  `read_image` 核对，需要时写脚本裁剪放大局部；扫描件文本层为空也不得跳页，页面与文本冲突时
+  以可见页面为准。
 - 六个评委与汇总使用 `deepseek-v4-flash`。评委只经 `job.md` / `resume.md` 读解析结果；汇总等
   六份 `scores/*.md` 全部结算后，再回看 `job.md` / `resume.md`，自动裁决评委分歧、证据缺口、
   分数不自洽与不允许的评分依据。最终 `report.md` 必须给出推荐判断、最终分、证据充分度、否决

@@ -4,13 +4,17 @@
  * 危险操作纪律：
  * - `dryRun: true` 必须能算出与真删完全一致的影响面（前端先预览、再二次确认）；
  * - 一切删除路径先经 `resolveWithinData` 收敛在 data/ 内，目录名来自 readdir/DB 也照查不误；
- * - 正在跑（status='running'）的运行永远不动——它的工作区和事件还在被写；
+ * - 执行器仍持有的运行永远不动——cancelled 已落库时，子进程和工作区仍可能在收尾；
  * - beforeDays 必须是正整数，没有「删全部」的入口。
  */
 import fs from "node:fs";
 import path from "node:path";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
+import {
+  activeRunExecutionIds,
+  isRunExecutionActive,
+} from "@/server/engine/runner";
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
 import { dirStat, formatBytes } from "./disk";
 import type { CleanupRequest, CleanupResult, CleanupTarget } from "./types";
@@ -85,7 +89,7 @@ function cleanWorkspaces(
     if (!target) continue;
     knownTargets.set(target.absolutePath, target);
     if (!isDirectory(target.absolutePath)) continue;
-    if (run.status === "running") {
+    if (run.status === "running" || isRunExecutionActive(run.id)) {
       skippedRunning += 1;
       continue;
     }
@@ -131,22 +135,35 @@ function cleanEvents(
   beforeDays: number,
   dryRun: boolean,
 ): CleanupResult {
-  const stat = db.get<{ c: number; bytes: number }>(sql`
-    select count(*) as c,
-      coalesce(sum(length(cast(coalesce(payload, '') as blob))), 0) as bytes
-    from run_events
-    where ts < ${cutoff}
-      and run_id not in (select id from runs where status = 'running')
-  `);
-  const count = stat?.c ?? 0;
+  const activeIds = activeRunExecutionIds();
+  const activeFilter =
+    activeIds.length === 0
+      ? sql``
+      : sql`and e.run_id not in (${sql.join(
+          activeIds.map((id) => sql`${id}`),
+          sql`, `,
+        )})`;
+  const stat = db.get<{ count: number; bytes: number }>(sql`
+      select count(*) as count,
+        coalesce(sum(length(cast(coalesce(e.payload, '') as blob))), 0) as bytes
+      from run_events e
+      join runs r on r.id = e.run_id
+      where e.ts < ${cutoff} and r.status <> 'running'
+        ${activeFilter}
+    `);
+  const count = stat?.count ?? 0;
   const bytes = stat?.bytes ?? 0;
 
   let vacuumNote = "";
   if (!dryRun && count > 0) {
     db.run(sql`
-      delete from run_events
-      where ts < ${cutoff}
-        and run_id not in (select id from runs where status = 'running')
+      delete from run_events where id in (
+        select e.id
+        from run_events e
+        join runs r on r.id = e.run_id
+        where e.ts < ${cutoff} and r.status <> 'running'
+          ${activeFilter}
+      )
     `);
     try {
       db.run(sql`vacuum`);
@@ -174,9 +191,19 @@ function cleanRuns(
   beforeDays: number,
   dryRun: boolean,
 ): CleanupResult {
+  const activeIds = activeRunExecutionIds();
+  const activeFilter =
+    activeIds.length === 0
+      ? sql``
+      : sql`and r.id not in (${sql.join(
+          activeIds.map((id) => sql`${id}`),
+          sql`, `,
+        )})`;
   const rows = db.all<{ id: string; runDir: string | null }>(sql`
-    select id, run_dir as runDir
-    from runs where started_at < ${cutoff} and status <> 'running'
+    select r.id, r.run_dir as runDir
+    from runs r
+    where r.started_at < ${cutoff} and r.status <> 'running'
+      ${activeFilter}
   `);
   const count = rows.length;
   const targets = new Map<string, WorkspaceTarget>();
@@ -185,18 +212,19 @@ function cleanRuns(
     if (target) targets.set(target.absolutePath, target);
   }
 
+  // 影响面按 eligible CTE 一次聚合；不能随历史规模退化成每个 run 三次同步 count。
   const detailStat = db.get<{ nodes: number; events: number; usage: number }>(sql`
+    with eligible as (
+      select r.id
+      from runs r
+      where r.started_at < ${cutoff} and r.status <> 'running'
+        ${activeFilter}
+    )
     select
-      (select count(*) from run_nodes
-        where run_id in (select id from runs where started_at < ${cutoff} and status <> 'running')
-      ) as nodes,
-      (select count(*) from run_events
-        where run_id in (select id from runs where started_at < ${cutoff} and status <> 'running')
-      ) as events,
-      (select count(*) from node_usage
-        where run_id in (select id from runs where started_at < ${cutoff} and status <> 'running')
-      ) as usage
-  `);
+      (select count(*) from run_nodes n where n.run_id in (select id from eligible)) as nodes,
+      (select count(*) from run_events e where e.run_id in (select id from eligible)) as events,
+      (select count(*) from node_usage u where u.run_id in (select id from eligible)) as usage
+  `) ?? { nodes: 0, events: 0, usage: 0 };
 
   const bytes = [...targets.values()].reduce(
     (sum, target) => sum + dirStat(target.absolutePath).bytes,
@@ -204,10 +232,19 @@ function cleanRuns(
   );
 
   if (!dryRun && count > 0) {
-    db.run(sql`
-      delete from runs where started_at < ${cutoff} and status <> 'running'
-    `);
+    // 先确认工作区全部删除成功，才删除数据库事实。若目录删除中途失败，运行记录仍在，
+    // 调用方可以按 runId 重试；已经删掉的目录由 force 模式幂等处理。
     for (const target of targets.values()) removeDir(target);
+    // 单条 DELETE 让外键级联留在 SQLite 内完成；activeFilter 与预览共用同一快照，
+    // cancelled 但执行器尚在 finally 收尾的运行仍被排除。
+    db.run(sql`
+      delete from runs where id in (
+        select r.id
+        from runs r
+        where r.started_at < ${cutoff} and r.status <> 'running'
+          ${activeFilter}
+      )
+    `);
   }
 
   const detail =
@@ -216,6 +253,32 @@ function cleanRuns(
     `含工作区约 ${formatBytes(bytes)}）；不可恢复，运行历史与成本统计都会少掉这些数据`;
 
   return { target: "runs", affected: { count, bytes }, deleted: !dryRun, detail };
+}
+
+// ---------------- 单个运行 ----------------
+
+/**
+ * 删除单个已结束的运行：runs 行（run_nodes / run_events / node_usage 外键级联）
+ * 加工作区目录。对外暴露运行 API 后，调用方要能清理自己发起的运行，e2e 也靠它
+ * 收走测试运行。与 cleanRuns 同属本模块这条破坏性路径，纪律一致：
+ * 执行器仍持有的运行永不动、目录先收敛进 data/runs 再删。
+ */
+export function deleteRun(
+  runId: string,
+): { ok: true } | { ok: false; status: 404 | 409; error: string } {
+  const row = db.get<{ status: string; runDir: string | null }>(
+    sql`select status, run_dir as runDir from runs where id = ${runId}`,
+  );
+  if (!row) return { ok: false, status: 404, error: "运行不存在" };
+  if (row.status === "running" || isRunExecutionActive(runId)) {
+    return { ok: false, status: 409, error: "运行执行尚未完全收束，不能删除" };
+  }
+  // 越界的 run_dir 由 targetFromStoredRunDir 抛 CleanupError，路由层映射为 400。
+  const target = targetFromStoredRunDir(row.runDir);
+  // 工作区删不掉时保留运行记录，调用方才能继续按 runId 定位和重试清理。
+  if (target) removeDir(target);
+  db.run(sql`delete from runs where id = ${runId} and status <> 'running'`);
+  return { ok: true };
 }
 
 // ---------------- helpers ----------------
@@ -304,11 +367,7 @@ function isDirectory(dir: string): boolean {
 
 /** target 在预览前已收敛；真删前再验证同一相对路径仍解析回同一绝对目标。 */
 function removeDir(target: WorkspaceTarget): void {
-  try {
-    const abs = resolveWithinData(target.relativePath);
-    if (abs !== target.absolutePath) throw new Error("运行目录在预览后发生变化");
-    fs.rmSync(abs, { recursive: true, force: true });
-  } catch (err) {
-    console.error("[monitor] 删除目录失败", target.relativePath, err);
-  }
+  const abs = resolveWithinData(target.relativePath);
+  if (abs !== target.absolutePath) throw new Error("运行目录在预览后发生变化，已拒绝删除");
+  fs.rmSync(abs, { recursive: true, force: true });
 }

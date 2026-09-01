@@ -57,13 +57,40 @@ export function runCompositionEntries(
     },
     { id: "system-prompt", name: "@deepseek-ai/dsh-system-prompt", config: { persona: "" } },
     { id: "tools", name: "@deepseek-ai/dsh-tools" },
-    { id: "fs-local", name: "@deepseek-ai/dsh-fs-local" },
+    // 命令执行与文件写入共用这一份沙箱策略：workspace-write 把 bash 与 write/edit
+    // 的文件写入效应圈在运行工作区（外加系统临时目录）；read 在上游任何模式下都
+    // 不受限，这是上游的设计决定——工作区目录本就只定义协作范围，不是安全边界
+    // （ADR-0011）。围栏根按会话 cwd 解析，workspaceRoot 只是无会话时的兜底。
+    {
+      id: "sandbox-policy",
+      name: "@deepseek-ai/dsh-sandbox-policy",
+      config: { mode: "workspace-write", workspaceRoot: workspace.workspaceDir },
+    },
+    // macOS 上用 sandbox-exec（Seatbelt）包 argv；runner 不可用时 fail-closed，命令不裸跑。
+    { id: "sandbox", name: "@deepseek-ai/dsh-sandbox-local" },
+    // 无人值守：模型请求的沙箱升级一律拒绝。不挂 approval 升级同样失败，
+    // 但报错语义是「没有审批服务」而不是明确的拒绝。
+    { id: "approval", name: "@deepseek-ai/dsh-user-approval", config: { policy: "never" } },
+    // subprocess / shell-env / bash 是 tool-bash 的 Provider，必须排在它之前
+    // （类比 attachment-local 之于 tool-fs）。bash 的 cwd 显式钉进工作区：
+    // executor 的兜底是 process.cwd()，与 skill-filesystem 钉根是同类坑（ADR-0007）。
+    { id: "subprocess", name: "@deepseek-ai/dsh-subprocess-local" },
+    { id: "shell-env", name: "@deepseek-ai/dsh-shell-env", config: { dshHome: workspace.homeDir } },
+    {
+      id: "bash",
+      name: "@deepseek-ai/dsh-bash-sandbox",
+      config: { cwd: workspace.workspaceDir, timeoutMs: 120_000 },
+    },
+    // fs-sandbox 原地换掉 fs-local：write/edit 走上面那份策略，read 原样直通。
+    { id: "fs-sandbox", name: "@deepseek-ai/dsh-fs-sandbox" },
     { id: "fs-observation-policy", name: "@deepseek-ai/dsh-fs-observation-policy" },
     // attachments 必须在 tool-fs 之前可解析：read_image 注册在
     // ctx.inject(["attachments"], …) 内，没有存储时该工具根本不存在，
     // 视觉输入会静默地无路可走。不传 dshHome，跟随子进程的 DSH_HOME。
     { id: "attachment-local", name: "@deepseek-ai/dsh-attachment-local" },
     { id: "tool-fs", name: "@deepseek-ai/dsh-tool-fs" },
+    // 后台任务通道（dsh-jobs）没挂，先关 run_in_background，免得模型走进注定报错的分支。
+    { id: "tool-bash", name: "@deepseek-ai/dsh-tool-bash", config: { enableRunInBackground: false } },
     {
       id: "agent-instructions",
       name: "@deepseek-ai/dsh-agent-instructions",

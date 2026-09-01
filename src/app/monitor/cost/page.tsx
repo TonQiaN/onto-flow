@@ -187,7 +187,7 @@ function CostConsole() {
           value={formatTokens(totals.tokens)}
           tone="sky"
           loading={loading}
-          hint="五类 token 合计"
+          hint="input/output/cache 合计；推理已含在 output"
         />
         <MetricCard
           label="assistant 消息"

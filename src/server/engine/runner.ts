@@ -24,9 +24,11 @@ import {
 } from "@/lib/graph";
 import { MAX_FILE_INPUT_BYTES, type PortValue } from "@/lib/values";
 import { DATA_DIR, isWithinData, resolveWithinData, safeBasename } from "@/server/fs-safety";
-import { claimsPdf, hasPdfSignature, preprocessPdfInput } from "@/server/pdf-input";
 import { assertSafeId } from "@/server/harness/ids";
-import { launchRun } from "@/server/harness/launch";
+import {
+  launchRun,
+  UnsettledRunLaunchError,
+} from "@/server/harness/launch";
 import type { RunProcess } from "@/server/harness/runtime";
 import {
   createRunWorkspace,
@@ -34,8 +36,12 @@ import {
   type RunWorkspace,
 } from "@/server/harness/workspace";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
-import { readSettings } from "@/server/settings";
-import { runActionNode } from "./action";
+import { readSettings, type SettingsDocument } from "@/server/settings";
+import {
+  finalizeUnsettledActionUsage,
+  refreshUnsettledActionUsage,
+  runActionNode,
+} from "./action";
 import {
   collectCapabilities,
   materializeToolPlugins,
@@ -45,7 +51,7 @@ import { recordSessionEvent, type EventSinkContext } from "./events";
 
 export type StartRunResult =
   | { ok: true; runId: string }
-  | { ok: false; status: 404; error: string }
+  | { ok: false; status: 404 | 429; error: string }
   | { ok: false; status: 422; error: string; issues: ValidationIssue[] };
 
 export type CancelRunResult =
@@ -59,7 +65,9 @@ export type CancelRunResult =
 interface RunnerGlobals {
   ontoflowCancelledRuns?: Set<string>;
   ontoflowRunProcesses?: Map<string, RunProcess>;
-  ontoflowInputControllers?: Map<string, AbortController>;
+  ontoflowActiveRuns?: Set<string>;
+  ontoflowRunDisposalFailures?: Set<string>;
+  ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
 }
 const g = globalThis as RunnerGlobals;
 const cancelledRuns: Set<string> = g.ontoflowCancelledRuns ?? new Set();
@@ -67,13 +75,71 @@ g.ontoflowCancelledRuns = cancelledRuns;
 /** 在跑运行的子进程句柄；cancelRun 要拿它去取消会话（挂 globalThis 以免 HMR 丢失）。 */
 const runProcesses: Map<string, RunProcess> = g.ontoflowRunProcesses ?? new Map();
 g.ontoflowRunProcesses = runProcesses;
-/** 输入物化阶段的取消句柄；这时 harness 还没启动，cancelRun 要直接终止 Poppler。 */
-const inputControllers: Map<string, AbortController> =
-  g.ontoflowInputControllers ?? new Map();
-g.ontoflowInputControllers = inputControllers;
+/**
+ * 从 executeRun 接管到其全部 finally/终态写入收束为止的运行。它比 runs.status
+ * 更精确：cancelRun 会先把状态写成 cancelled，此时子进程和工作区仍可能在收尾。
+ * 清理模块据此拒绝删除仍被执行器持有的目录或数据库记录。
+ */
+const activeRuns: Set<string> = g.ontoflowActiveRuns ?? new Set();
+g.ontoflowActiveRuns = activeRuns;
+/**
+ * dispose 报错意味着无法证明子进程已退出；这类运行继续留在 activeRuns，文件预览、
+ * 清理和新运行准入全部 fail-closed，直到 Next 进程重启收走其子进程树。
+ */
+const disposalFailures: Set<string> = g.ontoflowRunDisposalFailures ?? new Set();
+g.ontoflowRunDisposalFailures = disposalFailures;
+/**
+ * 子进程已退出但最终用量尚未完整落库的运行。任务会持续重试；Map 与 activeRuns
+ * 一起挂在 globalThis，HMR 不能让清理路径失去这份隔离所有权。
+ */
+const pendingUsageSettlements: Map<string, Promise<void>> =
+  g.ontoflowPendingUsageSettlements ?? new Map();
+g.ontoflowPendingUsageSettlements = pendingUsageSettlements;
+
+function waitForUsageSettlementRetry(attempt: number): Promise<void> {
+  const delayMs = Math.min(100 * 2 ** Math.min(attempt, 6), 5_000);
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    // 结算重试不能独自阻止 Next 进程正常退出；进程重启时由启动对账接管终态。
+    timer.unref();
+  });
+}
+
+/** 子进程退出后没有事件源可再触发刷新，因此由执行器持续持有并定时重试。 */
+function scheduleUsageSettlementRetry(runId: string): Promise<void> {
+  const existing = pendingUsageSettlements.get(runId);
+  if (existing) return existing;
+  const task = (async () => {
+    let attempt = 0;
+    for (;;) {
+      await waitForUsageSettlementRetry(attempt);
+      try {
+        finalizeUnsettledActionUsage(runId);
+        return;
+      } catch (error) {
+        attempt += 1;
+        // 首次与随后每分钟左右留一条诊断，避免持久故障以 5 秒频率刷爆 stderr。
+        if (attempt === 1 || attempt % 12 === 0) {
+          console.error("[engine] 退出后的用量结算仍未完成，继续重试", runId, error);
+        }
+      }
+    }
+  })();
+  pendingUsageSettlements.set(runId, task);
+  return task;
+}
 
 export function isRunCancelled(runId: string): boolean {
   return cancelledRuns.has(runId);
+}
+
+export function isRunExecutionActive(runId: string): boolean {
+  return activeRuns.has(runId);
+}
+
+/** 清理与准入只读快照；不把可变 Set 暴露到执行器之外。 */
+export function activeRunExecutionIds(): string[] {
+  return [...activeRuns];
 }
 
 /** PortValue 形态校验（前端传入的运行输入不可信） */
@@ -100,7 +166,18 @@ export async function startRun(
 ): Promise<StartRunResult> {
   const resolved = await resolveWorkflow(workflowId);
   if (!resolved) return { ok: false, status: 404, error: "工作流不存在" };
+  return startResolvedRun(resolved, inputs, readSettings());
+}
 
+/**
+ * 受理已经解析并由调用方检查过的精确图快照。专用入口可把业务预检与实际执行
+ * 绑定在同一个 ResolvedWorkflow 上；设置也在受理时冻结，运行中修改只影响下一次。
+ */
+export async function startResolvedRun(
+  resolved: ResolvedWorkflow,
+  inputs: Record<string, unknown>,
+  settings: SettingsDocument = readSettings(),
+): Promise<StartRunResult> {
   const issues = validateGraph(resolved.nodes, resolved.edges);
   for (const node of resolved.nodes) {
     try {
@@ -152,33 +229,88 @@ export async function startRun(
     return { ok: false, status: 422, error: "工作流校验未通过", issues };
   }
 
+  // 全局并发准入：每个运行都是一个独立子进程，无上限的对外调用会把机器拖垮。
+  // 计数查库（含尚未 launch 的运行），且从查数到 insert 之间没有 await——
+  // better-sqlite3 同步执行，两个并发 startRun 不会同时读到同一个空位。
+  const runningIds = db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(eq(runs.status, "running"))
+    .all()
+    .map((row) => row.id);
+  // cancelRun 会先写 cancelled，再等子进程与 finally 真正收束；这段窗口仍占一份
+  // 运行时资源，不能因数据库终态提前释放准入名额。
+  const active = new Set([...runningIds, ...activeRuns]).size;
+  if (active >= MAX_CONCURRENT_RUNS) {
+    return {
+      ok: false,
+      status: 429,
+      error: `并行运行已达上限 ${MAX_CONCURRENT_RUNS}，请等待现有运行结束后重试`,
+    };
+  }
+
   const runId = crypto.randomUUID();
-  db.insert(runs)
-    .values({
-      id: runId,
-      workflowId,
-      // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
-      workflowName: resolved.workflow.name,
-      status: "running",
-      startedAt: new Date(),
-    })
-    .run();
+  try {
+    db.insert(runs)
+      .values({
+        id: runId,
+        workflowId: resolved.workflow.id,
+        // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
+        workflowName: resolved.workflow.name,
+        status: "running",
+        startedAt: new Date(),
+      })
+      .run();
+  } catch (err) {
+    // resolveWorkflow 的 await 与这次 insert 之间，工作流可能被并发 DELETE 掉
+    //（删除守卫只挡有 running 运行的工作流）。外键失败在这里就是「工作流已不存在」，
+    // 不能让对外 API 以 500 的面目报出来。
+    if (err instanceof Error && err.message.includes("FOREIGN KEY constraint failed")) {
+      return { ok: false, status: 404, error: "工作流不存在（可能刚被删除）" };
+    }
+    throw err;
+  }
   for (const node of resolved.nodes) {
     db.insert(runNodes)
       .values({ runId, nodeId: node.id, label: node.label, status: "pending" })
       .run();
   }
 
-  // 异步执行，立即返回 runId
-  void executeRun(runId, resolved, runInputs).catch((err) => {
-    failWholeRun(runId, err instanceof Error ? err.message : String(err));
-  });
+  // 异步执行，立即返回 runId。activeRuns 覆盖 executeRun 启动前到异常兜底后的
+  // 全部生命期；cancelRun 提前写下 cancelled 也不能让清理路径误判为已经静止。
+  activeRuns.add(runId);
+  void executeRun(runId, resolved, runInputs, settings)
+    .catch((err) => {
+      failWholeRun(runId, err instanceof Error ? err.message : String(err));
+    })
+    .finally(() => {
+      const settlement = pendingUsageSettlements.get(runId);
+      if (settlement) {
+        // executeRun 已写终态，但用量尚未完整落库；保留进程句柄和 activeRuns，
+        // 让预览、清理、删除与新准入继续 fail-closed，直到后台重试成功。
+        void settlement.then(() => {
+          if (pendingUsageSettlements.get(runId) !== settlement) return;
+          pendingUsageSettlements.delete(runId);
+          runProcesses.delete(runId);
+          activeRuns.delete(runId);
+        });
+      } else if (!disposalFailures.has(runId)) {
+        activeRuns.delete(runId);
+      }
+    });
 
   return { ok: true, runId };
 }
 
 /** 一次运行内同时执行的 Action 上限。扇出宽了也不会把并发无限放大。 */
 const MAX_CONCURRENT_NODES = 10;
+
+/**
+ * 同时进行的运行总数上限。运行彼此独立（各自的工作区 + 子进程），并行本身
+ * 是支持的；这个上限只是对外暴露 API 后的准入保护——超限返回 429 而不是排队，
+ * 队列由外部调用方自己管。每个子进程是一份 node+tsx+dsh，内存以百 MB 计。
+ */
+const MAX_CONCURRENT_RUNS = 16;
 
 type NodeStatus = "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
 
@@ -205,6 +337,7 @@ async function executeRun(
   runId: string,
   resolved: ResolvedWorkflow,
   rawInputs: Record<string, PortValue>,
+  globalSettings: SettingsDocument,
 ): Promise<void> {
   const { nodes, edges } = resolved;
   const { backEdgeIds } = classifyEdges(nodes, edges);
@@ -233,53 +366,51 @@ async function executeRun(
     .run();
 
   // 文件输入落进工作区：模型的 cwd 是工作区，上传目录在它之外读不到。
-  // 预处理单独登记 AbortController；此阶段尚无 harness 会话可供 cancel。
+  // 输入按原样拷贝，一切格式转换都是 Action 里模型自己的工作（ADR-0011）。
   if (isRunCancelled(runId)) {
     cancelledRuns.delete(runId);
     return;
   }
-  const inputController = new AbortController();
-  inputControllers.set(runId, inputController);
-  let runInputs: Record<string, PortValue>;
-  try {
-    runInputs = await materializeFileInputs(
-      rawInputs,
-      workspace,
-      nodes,
-      inputController.signal,
-    );
-  } finally {
-    inputControllers.delete(runId);
-  }
-  // 预处理期间取消入口仍可响应；若用户已经取消，就不要再启动本次运行的子进程。
-  if (isRunCancelled(runId)) {
-    cancelledRuns.delete(runId);
-    return;
-  }
+  const runInputs = materializeFileInputs(rawInputs, workspace);
 
   // 每个 Action 在开跑前把自己的落库上下文登记进来，事件回调据此把 dsh 事件
   // 即时写成 run_events / node_usage。
   const sinks = new Map<string, EventSinkContext>();
-  // 设置在运行启动时读一次：改设置在下一次运行生效，在跑的运行持有启动时刻的快照。
-  const globalSettings = readSettings();
-  const proc = await launchRun(workspace, {
-    credentialRefs: globalSettings.credentialRefs.map((r) => r.name),
-    composition: {
-      deepseek: {
-        apiKeyEnv: globalSettings.modelApiKeyEnv,
-        ...(globalSettings.modelBaseUrl ? { baseURL: globalSettings.modelBaseUrl } : {}),
+  // 设置已在准入时冻结：工作区创建期间发生的网页修改也只影响下一次运行。
+  let proc: RunProcess;
+  try {
+    proc = await launchRun(workspace, {
+      credentialRefs: globalSettings.credentialRefs.map((r) => r.name),
+      composition: {
+        deepseek: {
+          apiKeyEnv: globalSettings.modelApiKeyEnv,
+          ...(globalSettings.modelBaseUrl ? { baseURL: globalSettings.modelBaseUrl } : {}),
+        },
+        mcpServers: globalSettings.mcpServers,
+        toolPlugins: materializeToolPlugins(workspace, capabilities.tools),
       },
-      mcpServers: globalSettings.mcpServers,
-      toolPlugins: materializeToolPlugins(workspace, capabilities.tools),
-    },
-    onCrash: (message) => {
-      firstError ??= message;
-    },
-    onSessionEvent: (sessionId, event) => {
-      const sink = sinks.get(sessionId);
-      if (sink) recordSessionEvent(sink, event);
-    },
-  });
+      onCrash: (message) => {
+        firstError ??= message;
+      },
+      onSessionEvent: (sessionId, event) => {
+        const sink = sinks.get(sessionId);
+        if (sink) {
+          recordSessionEvent(sink, event);
+          // 双重 teardown 失败后该会话仍可能发出付费用量；其节点汇总保持实时追增量。
+          refreshUnsettledActionUsage(runId, sessionId);
+        }
+      },
+    });
+  } catch (error) {
+    if (error instanceof UnsettledRunLaunchError) {
+      // initialize 尚未返回时常规 proc 变量还不存在；异常携带的句柄是最后的
+      // 所有权通道。保留它并把运行永久隔离到进程重启，所有清理与新准入 fail-closed。
+      runProcesses.set(runId, error.runProcess);
+      disposalFailures.add(runId);
+      console.error("[engine] 初始化失败后的子进程收束失败", runId, error);
+    }
+    throw error;
+  }
   runProcesses.set(runId, proc);
 
   /**
@@ -396,8 +527,15 @@ async function executeRun(
       state.round = nextRound;
       updateRunNode(runId, id, { status: "pending", error: null, finishedAt: null });
       for (const e of edges) {
-        // 目标节点的入线要保留刚满足的那条回边，其余下游的边重新变回 pending。
-        if (affected.has(e.targetNodeId) && e.targetNodeId !== target.node.id) {
+        // 只重置环体内部的边：目标节点的入线保留刚满足的那条回边；来自环外
+        // 已完成节点的入线保持已结算——那些源不会重跑，重置它们会让环内节点
+        // 的该端口在下一轮永远等不齐（实测：题目输入同时喂环内写码与测试两个
+        // 节点的图，第一次回流即整环死锁）。
+        if (
+          affected.has(e.targetNodeId) &&
+          e.targetNodeId !== target.node.id &&
+          affected.has(e.sourceNodeId)
+        ) {
           edgeStatus.set(e.id, "pending");
         }
       }
@@ -545,26 +683,43 @@ async function executeRun(
     await Promise.allSettled(running.values());
   } finally {
     // 无论成败都把子进程收束到静止：一个运行的进程树不许活过它的运行。
-    runProcesses.delete(runId);
     try {
       await proc.dispose();
+      try {
+        finalizeUnsettledActionUsage(runId);
+        runProcesses.delete(runId);
+      } catch (usageError) {
+        firstError ??=
+          `运行子进程退出后的用量结算失败：${
+            usageError instanceof Error ? usageError.message : String(usageError)
+          }`;
+        console.error("[engine] 退出后的用量结算失败", runId, usageError);
+        scheduleUsageSettlementRetry(runId);
+      }
+      disposalFailures.delete(runId);
     } catch (err) {
+      // dispose 已含 SIGTERM→SIGKILL；它仍报错就不能再宣称工作区无人写入。
+      // 保留进程句柄与 activeRuns 所有权，所有读取/删除/新准入继续 fail-closed。
+      disposalFailures.add(runId);
+      firstError ??= `运行子进程无法确认已退出：${err instanceof Error ? err.message : String(err)}`;
       console.error("[engine] 子进程收束失败", runId, err);
     }
   }
 
   // 终态判定：cancelled 与 failed 是两个独立终态，取消不算失败、run.error 留空
-  const now = new Date();
-  if (cancelled || isRunCancelled(runId)) {
-    db.update(runNodes)
-      .set({ status: "skipped", finishedAt: now })
-      .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
-      .run();
-    db.update(runs)
-      .set({ status: "cancelled", error: null, finishedAt: now })
-      .where(eq(runs.id, runId))
-      .run();
-  } else {
+  const writeTerminalState = (): void => {
+    const now = new Date();
+    if (cancelled || isRunCancelled(runId)) {
+      db.update(runNodes)
+        .set({ status: "skipped", finishedAt: now })
+        .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
+        .run();
+      db.update(runs)
+        .set({ status: "cancelled", error: null, finishedAt: now })
+        .where(eq(runs.id, runId))
+        .run();
+      return;
+    }
     db.update(runNodes)
       .set({ status: "skipped", finishedAt: now })
       .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
@@ -585,6 +740,16 @@ async function executeRun(
       )
       .where(eq(runs.id, runId))
       .run();
+  };
+  try {
+    writeTerminalState();
+  } catch (err) {
+    // 清理面板的 VACUUM 之类长写锁可能顶穿 busy_timeout。终态绝不能因此丢——
+    // 否则 run 卡在 running：占死一个并发名额、SSE 永不结束，直到进程重启对账。
+    // 等一拍再试一次；仍失败则抛给 startRun 的兜底（failWholeRun 自身也带重试）。
+    console.error("[engine] 终态落库失败，1.5 秒后重试", runId, err);
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    writeTerminalState();
   }
   cancelledRuns.delete(runId);
 }
@@ -605,9 +770,8 @@ export async function cancelRun(runId: string): Promise<CancelRunResult> {
     return { ok: false, status: 409, error: "该运行已结束，无法取消" };
   }
 
-  // 先立标记：即使下面的 abort 慢，executeRun 也不会再启动新节点
+  // 先立标记：即使下面的会话取消慢，executeRun 也不会再启动新节点
   cancelledRuns.add(runId);
-  inputControllers.get(runId)?.abort();
 
   const running = db
     .select({ nodeId: runNodes.nodeId, sessionId: runNodes.sessionId })
@@ -654,8 +818,8 @@ function updateRunNode(
     .run();
 }
 
-/** 兜底：executeRun 自身抛出的异常也不留 running 悬挂 */
-function failWholeRun(runId: string, message: string): void {
+/** 兜底：executeRun 自身抛出的异常也不留 running 悬挂；落库失败自身有界重试 */
+function failWholeRun(runId: string, message: string, attempt = 0): void {
   try {
     const wasCancelled = cancelledRuns.has(runId);
     cancelledRuns.delete(runId);
@@ -689,6 +853,11 @@ function failWholeRun(runId: string, message: string): void {
       .run();
   } catch (err) {
     console.error("[engine] 运行失败状态落库失败", err);
+    // 这是终态的最后防线：吞掉异常就等于把 run 永久留在 running。
+    // 有界重试两次，扛过清理 VACUUM 这类秒级长写锁。
+    if (attempt < 2) {
+      setTimeout(() => failWholeRun(runId, message, attempt + 1), 2000);
+    }
   }
 }
 
@@ -704,7 +873,8 @@ function workflowInstructions(resolved: ResolvedWorkflow): string {
     "你是这个工作流里的一个 Action。本目录是本次运行的工作区，也是各 Action 之间",
     "唯一的交流场所：实质内容一律写成文件，读上游的东西也一律读文件。",
     "",
-    "- 只在本目录内读写，不要访问工作区以外的路径。",
+    "- 产物只写在本目录内；沙箱只放行工作区与系统临时目录的写入。",
+    "- 输入文件都是原件，没有做过任何预处理；读不动的格式就用 bash 自己转换。",
     "- 结构化输出只用来报告产物路径，不要往里塞长文本。",
     "- 声明了的产物必须真的写出来：文件不存在，本节点即判失败。",
   ];
@@ -717,16 +887,14 @@ function workflowInstructions(resolved: ResolvedWorkflow): string {
 /**
  * 把文件类运行输入拷进工作区的 inputs/ 并改写它的 PortValue 路径。
  * 上传目录在工作区之外，模型的 cwd 是工作区，不搬进来它根本读不到。
+ * 只拷原件不做任何转换：格式处理是 Action 里模型用 bash 自己的工作（ADR-0011）。
  */
-async function materializeFileInputs(
+function materializeFileInputs(
   inputs: Record<string, PortValue>,
   workspace: RunWorkspace,
-  nodes: readonly ResolvedNode[],
-  signal?: AbortSignal,
-): Promise<Record<string, PortValue>> {
+): Record<string, PortValue> {
   const out: Record<string, PortValue> = {};
   for (const [nodeId, value] of Object.entries(inputs)) {
-    if (signal?.aborted) throw new Error("运行已取消");
     if (value.kind !== "file") {
       out[nodeId] = value;
       continue;
@@ -735,41 +903,19 @@ async function materializeFileInputs(
     assertSafeId("输入节点 id", nodeId);
     const name = safeBasename(value.file.name || value.file.path);
     const destDir = path.join(workspace.workspaceDir, WORKSPACE_INPUTS_SUBDIR, nodeId);
-    const sourceDir = path.join(destDir, "source");
-    fs.mkdirSync(sourceDir, { recursive: true });
-    const dest = path.join(sourceDir, name);
+    fs.mkdirSync(destDir, { recursive: true });
+    const dest = path.join(destDir, name);
     const source = resolveWithinData(value.file.path);
     if (fs.statSync(source).size > MAX_FILE_INPUT_BYTES) {
       throw new Error(`输入节点「${nodeId}」的文件超过 32 MiB`);
     }
     fs.copyFileSync(source, dest);
-    const node = nodes.find((candidate) => candidate.id === nodeId);
-    const filePreprocessor = node?.kind === "input" ? node.outputs[0]?.filePreprocessor : null;
-    let preprocessed: Extract<PortValue, { kind: "file" }>["file"]["preprocessed"];
-    if (filePreprocessor === "pdf") {
-      const pdf = hasPdfSignature(dest);
-      if (!pdf && claimsPdf(name, value.file.mime)) {
-        throw new Error(`输入节点「${node?.label ?? nodeId}」收到的文件不是合法 PDF`);
-      }
-      if (pdf) {
-        const derived = await preprocessPdfInput(dest, path.join(destDir, "derived"), {
-          signal,
-        });
-        preprocessed = {
-          kind: "pdf",
-          pageCount: derived.pageCount,
-          textPath: path.relative(DATA_DIR, derived.textPath),
-          pageImagePaths: derived.pageImagePaths.map((page) => path.relative(DATA_DIR, page)),
-        };
-      }
-    }
     out[nodeId] = {
       kind: "file",
       file: {
         path: path.relative(DATA_DIR, dest),
         name,
         mime: value.file.mime,
-        ...(preprocessed === undefined ? {} : { preprocessed }),
       },
     };
   }

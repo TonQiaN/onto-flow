@@ -14,6 +14,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Background,
   BackgroundVariant,
@@ -120,7 +121,15 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   const [runSpecs, setRunSpecs] = useState<RunInputSpec[] | null>(null);
   const [submittingRun, setSubmittingRun] = useState(false);
   /** 运行态（SSE 订阅、五态视觉、自动跟随、取消）统一由该 hook 提供 */
-  const { visuals, subscribe: subscribeRun } = useRunVisuals();
+  const { visuals, subscribe: subscribeRun, reset: resetRun } = useRunVisuals();
+  const routeRunId = useSearchParams().get("runId");
+  /** 本工作流当前进行中的全部运行：喂给运行条的并行切换器 */
+  const [runsInFlight, setRunsInFlight] = useState<
+    Array<{ id: string; startedAt: string | number }>
+  >([]);
+  /** 轮询闭包读运行态要走 ref，否则依赖会让 interval 每拍重建 */
+  const visualsRef = useRef(visuals);
+  visualsRef.current = visuals;
 
   // 画布交互态
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
@@ -656,6 +665,17 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   // ---------- 运行 ----------
   // 运行态由 use-run-visuals 统一订阅并经 Context 下发给节点与连线（边流动动画需要读上下游状态）
 
+  /** 切换要跟随的运行：订阅 + 把 runId 写回 URL（深链可分享、刷新不丢） */
+  const switchRun = useCallback(
+    (runId: string) => {
+      subscribeRun(runId);
+      const url = new URL(window.location.href);
+      url.searchParams.set("runId", runId);
+      window.history.replaceState(null, "", url);
+    },
+    [subscribeRun],
+  );
+
   const handleRun = useCallback(async () => {
     const result = await persist();
     if (!result.ok) return;
@@ -671,11 +691,9 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         label: n.data.label,
         typeName: n.data.outputs[0]?.objectTypeName ?? "未知类型",
         kind: n.data.outputs[0]?.kind ?? "text",
-        filePreprocessor:
-          objectTypes.find((type) => type.id === n.data.objectTypeId)?.filePreprocessor ?? null,
       }));
     setRunSpecs(specs);
-  }, [objectTypes, persist, storeApi]);
+  }, [persist, storeApi]);
 
   const startRun = useCallback(
     async (inputs: Record<string, PortValue>) => {
@@ -701,36 +719,96 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         }
         setRunSpecs(null);
         setBanner(null);
-        subscribeRun(body.runId);
+        switchRun(body.runId);
       } finally {
         setSubmittingRun(false);
       }
     },
-    [workflowId, subscribeRun],
+    [workflowId, switchRun],
   );
 
-  // 挂载时重连进行中的运行：SSE snapshot 会全量回放状态，动画/跟随/运行条整套恢复。
-  // 没有它，离开画布再回来就只能去运行详情看时间线（多条并发时取最新一条）。
+  // 进行中运行清单：驱动运行条的并行切换器，也承担挂载时重连——
+  // SSE snapshot 会全量回放状态，动画/跟随/运行条整套恢复。
+  // 没有深链时跟最新一条；此后只在画面上没有活运行时自动补跟，不抢用户选择。
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
+    let disposed = false;
+    const load = async () => {
       try {
         const res = await fetch(
           `/api/runs?workflowId=${encodeURIComponent(workflowId)}&status=running`,
           { cache: "no-store" },
         );
-        if (!res.ok) return;
-        const rows = (await res.json()) as Array<{ id?: string }>;
-        const runId = Array.isArray(rows) ? rows[0]?.id : undefined;
-        if (!cancelled && runId) subscribeRun(runId);
+        if (!res.ok || disposed) return;
+        const rows = (await res.json()) as Array<{ id: string; startedAt: string | number }>;
+        if (disposed || !Array.isArray(rows)) return;
+        setRunsInFlight(rows.map((row) => ({ id: row.id, startedAt: row.startedAt })));
+        const current = visualsRef.current;
+        const followedLive =
+          current.runId !== null && (current.runStatus === "running" || current.visible);
+        if (!routeRunId && !followedLive && rows[0]?.id && rows[0].id !== current.runId) {
+          subscribeRun(rows[0].id);
+        }
       } catch {
-        // 重连失败不影响画布本身，静默即可
+        // 清单拉不到不影响画布本身；下一拍再试
       }
-    })();
-    return () => {
-      cancelled = true;
     };
-  }, [workflowId, subscribeRun]);
+    void load();
+    const timer = setInterval(() => void load(), 5000);
+    return () => {
+      disposed = true;
+      clearInterval(timer);
+    };
+  }, [workflowId, routeRunId, subscribeRun]);
+
+  // 同一个画布内从导航切换运行时只有 query string 变化，组件不会重挂载。
+  // 直接观察 useSearchParams，让每个新的 runId 都重新做归属校验并切换 SSE。
+  useEffect(() => {
+    if (!routeRunId) return;
+    let disposed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const retry = () => {
+      if (disposed) return;
+      retryTimer = setTimeout(() => void followDeepLink(), 2000);
+    };
+    const followDeepLink = async () => {
+      try {
+        const detailRes = await fetch(`/api/runs/${encodeURIComponent(routeRunId)}`, {
+          cache: "no-store",
+        });
+        if (!detailRes.ok && detailRes.status !== 404) {
+          if (disposed) return;
+          setBanner("运行详情暂时无法读取，已保留链接并正在重试");
+          retry();
+          return;
+        }
+        const detail = detailRes.ok
+          ? ((await detailRes.json()) as { run?: { workflowId?: string } })
+          : null;
+        const belongsToWorkflow = detail?.run?.workflowId === workflowId;
+        if (disposed) return;
+        if (belongsToWorkflow) {
+          setBanner(null);
+          subscribeRun(routeRunId);
+          return;
+        }
+        resetRun();
+        const url = new URL(window.location.href);
+        url.searchParams.delete("runId");
+        window.history.replaceState(null, "", url);
+        setBanner("链接中的运行不存在或不属于当前工作流，已停止跟随");
+      } catch {
+        if (disposed) return;
+        // 短暂网络错误保留深链并自动重试；只有 404 或确认属于别的工作流才清 URL。
+        setBanner("运行详情暂时无法读取，已保留链接并正在重试");
+        retry();
+      }
+    };
+    void followDeepLink();
+    return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [workflowId, routeRunId, subscribeRun, resetRun]);
 
   // ---------- 键盘 ----------
   useEffect(() => {
@@ -849,15 +927,16 @@ function EditorInner({ workflowId }: { workflowId: string }) {
             <button
               type="button"
               onClick={() => void handleRun()}
-              disabled={saving || visuals.runStatus === "running"}
+              disabled={saving}
               className="rounded-md bg-zinc-900 px-3.5 py-1.5 text-sm text-white hover:bg-zinc-700 disabled:opacity-50"
             >
-              运行
+              {/* 运行彼此独立，随时可以再开一路；发起后运行条切到新的一路，旧的经切换器回看 */}
+              {visuals.runStatus === "running" ? "再次运行" : "运行"}
             </button>
           </div>
         </header>
 
-        <RunBar visuals={visuals} />
+        <RunBar visuals={visuals} runsInFlight={runsInFlight} onSwitch={switchRun} />
 
         {banner && (
           <div className="flex items-start justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
