@@ -81,13 +81,18 @@ CREATE TABLE run_nodes (
   ontoflowCancelledRuns?: Set<string>;
   ontoflowRunProcesses?: Map<string, unknown>;
   ontoflowActiveRuns?: Set<string>;
+  ontoflowRunDisposalFailures?: Set<string>;
 }).ontoflowDb = drizzle(sqlite, { schema });
 (globalThis as unknown as { ontoflowCancelledRuns?: Set<string> }).ontoflowCancelledRuns =
   new Set();
+const runProcesses = new Map<string, unknown>();
 (globalThis as unknown as { ontoflowRunProcesses?: Map<string, unknown> }).ontoflowRunProcesses =
-  new Map();
+  runProcesses;
 const activeRuns = new Set<string>();
 (globalThis as unknown as { ontoflowActiveRuns?: Set<string> }).ontoflowActiveRuns = activeRuns;
+const disposalFailures = new Set<string>();
+(globalThis as unknown as { ontoflowRunDisposalFailures?: Set<string> })
+  .ontoflowRunDisposalFailures = disposalFailures;
 
 let startRun: typeof import("./runner").startRun;
 let cancelRun: typeof import("./runner").cancelRun;
@@ -298,9 +303,12 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  controls.dispose.mockClear();
+  controls.dispose.mockReset();
+  controls.dispose.mockResolvedValue(undefined);
   controls.cancel.mockClear();
   activeRuns.clear();
+  disposalFailures.clear();
+  runProcesses.clear();
 });
 
 describe("回边重入", () => {
@@ -431,5 +439,35 @@ describe("运行取消终态", () => {
     });
     sqlite.prepare("UPDATE runs SET run_dir = NULL WHERE id = ?").run(startedRun.runId);
     expect(deleteRun(startedRun.runId)).toEqual({ ok: true });
+  });
+
+  it("子进程无法确认退出时保持活动所有权并拒绝清理", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    controls.runActionNode.mockResolvedValue({
+      outputs: { result: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    controls.dispose.mockRejectedValueOnce(new Error("SIGKILL 后仍未退出"));
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("failed");
+      expect(run.error).toContain("运行子进程无法确认已退出");
+    });
+    expect(isRunExecutionActive(startedRun.runId)).toBe(true);
+    expect(deleteRun(startedRun.runId)).toEqual({
+      ok: false,
+      status: 409,
+      error: "运行执行尚未完全收束，不能删除",
+    });
   });
 });

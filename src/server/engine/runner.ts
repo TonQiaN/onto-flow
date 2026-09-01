@@ -59,6 +59,7 @@ interface RunnerGlobals {
   ontoflowCancelledRuns?: Set<string>;
   ontoflowRunProcesses?: Map<string, RunProcess>;
   ontoflowActiveRuns?: Set<string>;
+  ontoflowRunDisposalFailures?: Set<string>;
 }
 const g = globalThis as RunnerGlobals;
 const cancelledRuns: Set<string> = g.ontoflowCancelledRuns ?? new Set();
@@ -73,6 +74,12 @@ g.ontoflowRunProcesses = runProcesses;
  */
 const activeRuns: Set<string> = g.ontoflowActiveRuns ?? new Set();
 g.ontoflowActiveRuns = activeRuns;
+/**
+ * dispose 报错意味着无法证明子进程已退出；这类运行继续留在 activeRuns，文件预览、
+ * 清理和新运行准入全部 fail-closed，直到 Next 进程重启收走其子进程树。
+ */
+const disposalFailures: Set<string> = g.ontoflowRunDisposalFailures ?? new Set();
+g.ontoflowRunDisposalFailures = disposalFailures;
 
 export function isRunCancelled(runId: string): boolean {
   return cancelledRuns.has(runId);
@@ -229,7 +236,7 @@ export async function startResolvedRun(
       failWholeRun(runId, err instanceof Error ? err.message : String(err));
     })
     .finally(() => {
-      activeRuns.delete(runId);
+      if (!disposalFailures.has(runId)) activeRuns.delete(runId);
     });
 
   return { ok: true, runId };
@@ -600,10 +607,15 @@ async function executeRun(
     await Promise.allSettled(running.values());
   } finally {
     // 无论成败都把子进程收束到静止：一个运行的进程树不许活过它的运行。
-    runProcesses.delete(runId);
     try {
       await proc.dispose();
+      runProcesses.delete(runId);
+      disposalFailures.delete(runId);
     } catch (err) {
+      // dispose 已含 SIGTERM→SIGKILL；它仍报错就不能再宣称工作区无人写入。
+      // 保留进程句柄与 activeRuns 所有权，所有读取/删除/新准入继续 fail-closed。
+      disposalFailures.add(runId);
+      firstError ??= `运行子进程无法确认已退出：${err instanceof Error ? err.message : String(err)}`;
       console.error("[engine] 子进程收束失败", runId, err);
     }
   }

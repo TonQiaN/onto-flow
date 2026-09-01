@@ -147,6 +147,7 @@ Every rule here was learned the hard way while replacing opencode with dsh. Read
 - **A declared artifact that is not on disk fails the node.** The model saying it wrote the file is not evidence; this is the only mechanical backstop the dual-channel result has ([ADR-0008](docs/adr/0008-artifacts-not-values.md)).
 - **`cancelled` is a terminal state distinct from `failed`** and leaves `run.error` null; a prompt that throws after cancellation is cancelled, not failed.
 - **A run never stays `running`.** Terminal state is written by `executeRun`, by `cancelRun`, by `failWholeRun`, and at process start by `reconcileOrphanRuns` through `src/instrumentation.ts`.
+- **A subprocess disposal failure quarantines the run.** If `dispose()` cannot prove the child exited even after its termination escalation, keep the run in `activeRuns` and retain its process handle; file preview, cleanup, deletion, and new-run capacity must remain fail-closed until the Next process restarts and owns teardown.
 - Both SSE endpoints poll SQLite; there is no in-process pubsub, and the run stream ends only after three silent ticks past terminal state.
 
 ## Comments and documentation
