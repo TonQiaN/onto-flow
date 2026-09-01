@@ -87,7 +87,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   退出，该运行都保持 active 隔离所有权：预览、清理、删除与新准入容量 fail-closed，不能用
   数据库终态冒充工作区已经静止。若 Action 会话与整个进程都无法确认静止，该会话的用量结算
   保持活跃：每条迟到 usage 落明细后，以本会话前的节点历史为固定基线幂等刷新节点累计与同一
-  usage 事件；只有确认进程退出后才做最后一次刷新并释放兜底。
+  usage 事件；确认进程退出后再做最后一次刷新。节点累计或 usage 事件任一落库失败时，运行继续
+  占用 active 所有权并定时重试，二者都持久化后才释放进程句柄与内存兜底。
 - **事件、轨迹与用量**：`session.event` 通知到达时立刻归一为 text / reasoning / tool /
   session.idle / session.error 并落库。每个 step 的 usage chunk 是不累积值，按
   `(sessionId, turn:step)` 唯一化后求和；完整原始会话另存 `<run>/sessions/**/session.jsonl`。

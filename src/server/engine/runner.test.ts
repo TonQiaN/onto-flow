@@ -15,6 +15,7 @@ const controls = vi.hoisted(() => ({
   launchRun: vi.fn(),
   dispose: vi.fn(async () => {}),
   cancel: vi.fn(async () => {}),
+  finalizeUnsettledActionUsage: vi.fn(),
 }));
 
 vi.mock("@/server/resolve", () => ({
@@ -69,7 +70,7 @@ vi.mock("./events", () => ({ recordSessionEvent: vi.fn() }));
 vi.mock("./action", () => ({
   runActionNode: controls.runActionNode,
   refreshUnsettledActionUsage: vi.fn(),
-  finalizeUnsettledActionUsage: vi.fn(),
+  finalizeUnsettledActionUsage: controls.finalizeUnsettledActionUsage,
 }));
 
 const sqlite = new Database(":memory:");
@@ -94,6 +95,7 @@ CREATE TABLE run_nodes (
   ontoflowRunProcesses?: Map<string, unknown>;
   ontoflowActiveRuns?: Set<string>;
   ontoflowRunDisposalFailures?: Set<string>;
+  ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
 }).ontoflowDb = drizzle(sqlite, { schema });
 (globalThis as unknown as { ontoflowCancelledRuns?: Set<string> }).ontoflowCancelledRuns =
   new Set();
@@ -105,6 +107,10 @@ const activeRuns = new Set<string>();
 const disposalFailures = new Set<string>();
 (globalThis as unknown as { ontoflowRunDisposalFailures?: Set<string> })
   .ontoflowRunDisposalFailures = disposalFailures;
+const pendingUsageSettlements = new Map<string, Promise<void>>();
+(globalThis as unknown as {
+  ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
+}).ontoflowPendingUsageSettlements = pendingUsageSettlements;
 
 let startRun: typeof import("./runner").startRun;
 let cancelRun: typeof import("./runner").cancelRun;
@@ -325,8 +331,12 @@ beforeEach(() => {
   controls.dispose.mockReset();
   controls.dispose.mockResolvedValue(undefined);
   controls.cancel.mockClear();
+  controls.runActionNode.mockReset();
+  controls.finalizeUnsettledActionUsage.mockReset();
+  controls.finalizeUnsettledActionUsage.mockImplementation(() => undefined);
   activeRuns.clear();
   disposalFailures.clear();
+  pendingUsageSettlements.clear();
   runProcesses.clear();
 });
 
@@ -458,6 +468,52 @@ describe("运行取消终态", () => {
     });
     sqlite.prepare("UPDATE runs SET run_dir = NULL WHERE id = ?").run(startedRun.runId);
     expect(deleteRun(startedRun.runId)).toEqual({ ok: true });
+  });
+
+  it("子进程退出后的用量结算瞬时失败时持续占用并自动重试", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    controls.runActionNode.mockResolvedValue({
+      outputs: { result: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    let canSettle = false;
+    controls.finalizeUnsettledActionUsage.mockImplementation(() => {
+      if (!canSettle) throw new Error("database is locked");
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const startedRun = await startRun("workflow-1", {
+        "input-node": { kind: "text", text: "测试" },
+      });
+      expect(startedRun.ok).toBe(true);
+      if (!startedRun.ok) return;
+
+      await vi.waitFor(() => {
+        const run = sqlite
+          .prepare("SELECT status, error FROM runs WHERE id = ?")
+          .get(startedRun.runId) as { status: string; error: string | null };
+        expect(run.status).toBe("failed");
+        expect(run.error).toContain("运行子进程退出后的用量结算失败");
+        expect(isRunExecutionActive(startedRun.runId)).toBe(true);
+        expect(runProcesses.has(startedRun.runId)).toBe(true);
+      });
+
+      canSettle = true;
+      await vi.waitFor(
+        () => {
+          expect(controls.finalizeUnsettledActionUsage.mock.calls.length).toBeGreaterThan(1);
+          expect(isRunExecutionActive(startedRun.runId)).toBe(false);
+          expect(runProcesses.has(startedRun.runId)).toBe(false);
+          expect(pendingUsageSettlements.has(startedRun.runId)).toBe(false);
+        },
+        { timeout: 2_000 },
+      );
+    } finally {
+      canSettle = true;
+      log.mockRestore();
+    }
   });
 
   it("子进程无法确认退出时保持活动所有权并拒绝清理", async () => {

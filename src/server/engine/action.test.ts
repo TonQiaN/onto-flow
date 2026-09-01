@@ -411,6 +411,83 @@ describe("Action 执行时边界", () => {
     }
   });
 
+  it("子进程退出后的 usage 事件瞬时写入失败时保留结算状态供重试", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        runActionNode(
+          context({
+            usage: {
+              inputTokens: 10,
+              outputTokens: 4,
+              reasoningTokens: 2,
+              cacheReadTokens: 1,
+              cost: 0.1,
+            },
+            runTurnError: new Error("等待会话 node-1 进入 idle 超时"),
+            closeSession: async () => {
+              throw new Error("会话关闭失败");
+            },
+            dispose: async () => {
+              throw new Error("SIGKILL 后仍未退出");
+            },
+          }),
+        ),
+      ).rejects.toThrow("会话 node-1 失败后无法收束运行子进程");
+
+      sqlite
+        .prepare(
+          "insert into node_usage (id, run_id, node_id, session_id, message_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cost, ts) values ('usage-final-late', 'run-1', 'node-1', 'node-1', 'turn1-step2', 3, 2, 1, 1, 0.05, ?)",
+        )
+        .run(Date.now());
+      sqlite.exec(`
+        CREATE TRIGGER fail_usage_event_update
+        BEFORE UPDATE ON run_events
+        BEGIN SELECT RAISE(ABORT, 'forced usage event failure'); END;
+      `);
+
+      expect(() => finalizeUnsettledActionUsage("run-1")).toThrow(
+        "会话 node-1 的用量事件尚未持久化",
+      );
+      expect(
+        sqlite
+          .prepare(
+            "select input_tokens as inputTokens, output_tokens as outputTokens from run_nodes",
+          )
+          .get(),
+      ).toEqual({ inputTokens: 13, outputTokens: 6 });
+      expect(
+        JSON.parse(
+          (
+            sqlite.prepare("select payload from run_events where type = 'usage'").get() as {
+              payload: string;
+            }
+          ).payload,
+        ),
+      ).toMatchObject({ inputTokens: 10, outputTokens: 4 });
+
+      sqlite.exec("DROP TRIGGER fail_usage_event_update;");
+      expect(() => finalizeUnsettledActionUsage("run-1")).not.toThrow();
+      expect(
+        JSON.parse(
+          (
+            sqlite.prepare("select payload from run_events where type = 'usage'").get() as {
+              payload: string;
+            }
+          ).payload,
+        ),
+      ).toMatchObject({ inputTokens: 13, outputTokens: 6 });
+    } finally {
+      sqlite.exec("DROP TRIGGER IF EXISTS fail_usage_event_update;");
+      try {
+        finalizeUnsettledActionUsage("run-1");
+      } catch {
+        // 断言失败时仍尽量清掉全局测试状态；原始断言错误由 Vitest 保留。
+      }
+      log.mockRestore();
+    }
+  });
+
   it("用量明细写入失败时仍把全部 token 与费用汇总到节点", async () => {
     fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);

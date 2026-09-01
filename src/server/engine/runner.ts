@@ -67,6 +67,7 @@ interface RunnerGlobals {
   ontoflowRunProcesses?: Map<string, RunProcess>;
   ontoflowActiveRuns?: Set<string>;
   ontoflowRunDisposalFailures?: Set<string>;
+  ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
 }
 const g = globalThis as RunnerGlobals;
 const cancelledRuns: Set<string> = g.ontoflowCancelledRuns ?? new Set();
@@ -87,6 +88,46 @@ g.ontoflowActiveRuns = activeRuns;
  */
 const disposalFailures: Set<string> = g.ontoflowRunDisposalFailures ?? new Set();
 g.ontoflowRunDisposalFailures = disposalFailures;
+/**
+ * 子进程已退出但最终用量尚未完整落库的运行。任务会持续重试；Map 与 activeRuns
+ * 一起挂在 globalThis，HMR 不能让清理路径失去这份隔离所有权。
+ */
+const pendingUsageSettlements: Map<string, Promise<void>> =
+  g.ontoflowPendingUsageSettlements ?? new Map();
+g.ontoflowPendingUsageSettlements = pendingUsageSettlements;
+
+function waitForUsageSettlementRetry(attempt: number): Promise<void> {
+  const delayMs = Math.min(100 * 2 ** Math.min(attempt, 6), 5_000);
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, delayMs);
+    // 结算重试不能独自阻止 Next 进程正常退出；进程重启时由启动对账接管终态。
+    timer.unref();
+  });
+}
+
+/** 子进程退出后没有事件源可再触发刷新，因此由执行器持续持有并定时重试。 */
+function scheduleUsageSettlementRetry(runId: string): Promise<void> {
+  const existing = pendingUsageSettlements.get(runId);
+  if (existing) return existing;
+  const task = (async () => {
+    let attempt = 0;
+    for (;;) {
+      await waitForUsageSettlementRetry(attempt);
+      try {
+        finalizeUnsettledActionUsage(runId);
+        return;
+      } catch (error) {
+        attempt += 1;
+        // 首次与随后每分钟左右留一条诊断，避免持久故障以 5 秒频率刷爆 stderr。
+        if (attempt === 1 || attempt % 12 === 0) {
+          console.error("[engine] 退出后的用量结算仍未完成，继续重试", runId, error);
+        }
+      }
+    }
+  })();
+  pendingUsageSettlements.set(runId, task);
+  return task;
+}
 
 export function isRunCancelled(runId: string): boolean {
   return cancelledRuns.has(runId);
@@ -243,7 +284,19 @@ export async function startResolvedRun(
       failWholeRun(runId, err instanceof Error ? err.message : String(err));
     })
     .finally(() => {
-      if (!disposalFailures.has(runId)) activeRuns.delete(runId);
+      const settlement = pendingUsageSettlements.get(runId);
+      if (settlement) {
+        // executeRun 已写终态，但用量尚未完整落库；保留进程句柄和 activeRuns，
+        // 让预览、清理、删除与新准入继续 fail-closed，直到后台重试成功。
+        void settlement.then(() => {
+          if (pendingUsageSettlements.get(runId) !== settlement) return;
+          pendingUsageSettlements.delete(runId);
+          runProcesses.delete(runId);
+          activeRuns.delete(runId);
+        });
+      } else if (!disposalFailures.has(runId)) {
+        activeRuns.delete(runId);
+      }
     });
 
   return { ok: true, runId };
@@ -634,14 +687,15 @@ async function executeRun(
       await proc.dispose();
       try {
         finalizeUnsettledActionUsage(runId);
+        runProcesses.delete(runId);
       } catch (usageError) {
         firstError ??=
           `运行子进程退出后的用量结算失败：${
             usageError instanceof Error ? usageError.message : String(usageError)
           }`;
         console.error("[engine] 退出后的用量结算失败", runId, usageError);
+        scheduleUsageSettlementRetry(runId);
       }
-      runProcesses.delete(runId);
       disposalFailures.delete(runId);
     } catch (err) {
       // dispose 已含 SIGTERM→SIGKILL；它仍报错就不能再宣称工作区无人写入。

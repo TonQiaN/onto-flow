@@ -781,6 +781,12 @@ export function finalizeUnsettledActionUsage(runId: string): void {
     if (state.runId !== runId) continue;
     try {
       refreshUnsettledUsageRollup(state);
+      // refresh 对事件写入采取“记录并保留”的策略，不能据此误判整次结算成功。
+      // 子进程已经退出后没有新事件会再触发刷新；脏事件必须让调用方继续持有
+      // 本运行并重试，直到节点累计与同一条 usage 事件都已持久化。
+      if (state.eventDirty || state.eventId === undefined) {
+        throw new Error(`会话 ${state.sessionId} 的用量事件尚未持久化`);
+      }
       clearUnpersistedUsageForSession(state);
       unsettledUsageRollups.delete(key);
     } catch (error) {
