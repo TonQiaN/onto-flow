@@ -506,7 +506,7 @@ const report = upsertAction({
     "`reviewerScore` 原样记录评委整数分，`finalScore` 是你核验后的最终整数分。\n" +
     "- `evidenceConfidence` 把高/中/低分别写成 `high`/`medium`/`low`；顶层值取六个维度中的最低档。\n" +
     "- `hardRequirements` 必须逐条覆盖岗位要求中的每项硬性条件；状态分别用 `met`、`not_met`、`unverified`、`conflict`；" +
-    "没有原文证据时 `evidence` 写空字符串，但 `impact` 仍要给出当前材料内已经作出的裁决。\n" +
+    "只有 `unverified` 可以把 `evidence` 写成空字符串，`met`、`not_met`、`conflict` 必须给出非空原文证据；`impact` 始终要给出当前材料内已经作出的裁决。\n" +
     "- `strengths` 只保留有原文证据的优势。`concerns.evidenceStatus` 只用 `supported`、`unverified`、`conflict`。\n" +
     "- `adjustments` 只记录评委分与最终分不同的维度，每个维度最多一条，分数必须与 `dimensions` 完全相同；没有改分时写空数组。\n" +
     "- `decisiveReasons` 至少一条；`summary` 是不含完整简历与联系方式的一段最终结论。\n\n" +

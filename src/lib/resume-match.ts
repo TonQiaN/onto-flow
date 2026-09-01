@@ -371,7 +371,7 @@ export function validateResumeMatchResult(value: unknown): string[] {
         "conflict",
       ]);
       if (status !== null) hardStatuses.push(status);
-      text(requirement.evidence, `${at}.evidence`, true);
+      text(requirement.evidence, `${at}.evidence`, status === "unverified");
       text(requirement.impact, `${at}.impact`);
     });
   }

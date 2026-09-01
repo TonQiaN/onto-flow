@@ -110,6 +110,25 @@ describe("简历匹配 JSON 结果契约", () => {
     );
   });
 
+  it("只有未核验的硬性条件可以缺少原文证据", () => {
+    const result = validResult();
+    result.hardRequirements[0].evidence = "";
+    expect(validateResumeMatchResult(result)).toContain(
+      "$.hardRequirements[0].evidence 必须是非空字符串",
+    );
+
+    result.hardRequirements[0].status = "unverified";
+    result.dimensions.mustHave.reviewerScore = 0;
+    result.dimensions.mustHave.finalScore = 0;
+    result.decision = "not_recommend";
+    result.veto = {
+      triggered: true,
+      dimensions: ["mustHave"],
+      reasons: ["当前材料没有达到硬性条件的证据门槛。"],
+    };
+    expect(validateResumeMatchResult(result)).toEqual([]);
+  });
+
   it("要求每个改分维度在 adjustments 中且分数完全一致", () => {
     const result = validResult();
     result.dimensions.domainFit.finalScore = 64;
