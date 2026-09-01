@@ -301,6 +301,7 @@ export async function startResumeMatch(
       [resumeNode.id]: invocation.resume,
     },
     settings,
+    { source: "resume-match-api", contractVersion: 1 },
   );
   if (!started.ok) {
     return started.status === 422
@@ -418,6 +419,15 @@ function isValidValidatorReceipt(payload: Record<string, unknown> | null): boole
   }
 }
 
+/** 同名工作流可从通用入口启动；只有专用 POST 原子写下的来源证明可由专用 GET 读取。 */
+function isResumeMatchInvocation(imports: Record<string, unknown> | null): boolean {
+  if (!imports || typeof imports.invocation !== "object" || imports.invocation === null) {
+    return false;
+  }
+  const invocation = imports.invocation as Record<string, unknown>;
+  return invocation.source === "resume-match-api" && invocation.contractVersion === 1;
+}
+
 /** 成功结果只接受汇总 Action 自己持久化下来的 validator valid=true 回执。 */
 function hasValidatorReceipt(runId: string, nodeId: string): boolean {
   return db
@@ -471,7 +481,11 @@ function readResultArtifact(
 
 export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunView, string> {
   const run = db.select().from(runs).where(eq(runs.id, runId)).get();
-  if (!run || run.workflowName !== RESUME_MATCH_WORKFLOW_NAME) {
+  if (
+    !run ||
+    run.workflowName !== RESUME_MATCH_WORKFLOW_NAME ||
+    !isResumeMatchInvocation(run.imports)
+  ) {
     return writeFail(404, "简历匹配运行不存在");
   }
   const base: Omit<ResumeMatchRunView, "result"> = {

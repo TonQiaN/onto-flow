@@ -9,6 +9,7 @@
 - 工作流调用入口为：
   - `POST /api/internal/resume-matches`
   - `GET /api/internal/resume-matches/<runId>`
+- POST 受理时把 `resume-match-api` 来源证明与 run 同步持久化；GET 拒绝同名工作流经通用入口发起的运行。
 - 成功运行：`c8c98cc0-de41-48ba-a4e4-03e6edbfe1ad`
   - 11 / 11 节点成功；
   - 11 份工作区文件全部存在且非空（2 份物化输入、9 份 Action 产物）；
@@ -21,9 +22,10 @@
 
 首轮运行 `265e2a01-06c4-433e-b3db-aee227493f2f` 暴露校验 Tool 缺少转译辅助函数，已主动取消并保留轨迹；修正只发生在工作流 Tool 定义，没有修改 Harness。
 
-## 待抉择：全局“总 token”重复计入 reasoning
+## 已解决：全局“总 token”不再重复计入 reasoning
 
-这不是本次简历工作流或调用入口造成的问题，因此本次没有修改。
+这不是简历工作流或调用入口造成的问题；栈底运行时 PR 已采用下述方案 A 修正两处展示聚合，
+保留 reasoning 明细但不再把它重复加进总 token，底层 Harness 用量语义没有改动。
 
 成功运行的节点用量合计：
 
@@ -35,17 +37,17 @@
 | cache read | 165,120 |
 | cache write | 0 |
 | 权威总计，不重复加 reasoning | 200,164 |
-| 当前页面与运行列表显示 | 206,986 |
+| 修正前页面与运行列表显示 | 206,986 |
 
 差值 `6,822` 恰好等于 reasoning。仓库运行时契约已经明确：适配器把
 `completion_tokens` 整体记进 `outputTokens`，`reasoningTokens` 只是其中的可见细分，计费与总量都不能再加一次。
 
-当前重复发生在两个全局展示聚合处：
+修正前重复发生在两个全局展示聚合处：
 
 - `src/app/runs/lib.ts` 的 `sumTokens()`；
 - `src/app/api/runs/route.ts` 的运行列表 SQL 聚合。
 
-### 方案 A：修正展示聚合（建议）
+### 方案 A：修正展示聚合（已采用）
 
 两处总量都改为 `input + output + cacheRead + cacheWrite`，继续单独展示 reasoning 明细。历史行无需迁移，刷新后会按现有明细列重新得到正确总量。
 

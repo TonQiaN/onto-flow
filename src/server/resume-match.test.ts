@@ -104,6 +104,9 @@ const invocation = {
   job: { kind: "file" as const, file: { path: "uploads/job.md", name: "job.md", mime: "text/markdown" } },
   resume: { kind: "file" as const, file: { path: "uploads/resume.md", name: "resume.md", mime: "text/markdown" } },
 };
+const resumeMatchImports = JSON.stringify({
+  invocation: { source: "resume-match-api", contractVersion: 1 },
+});
 
 function validResult(): ResumeMatchResult {
   return {
@@ -475,6 +478,7 @@ describe("简历匹配工作流预检", () => {
         "resume-input": invocation.resume,
       },
       expect.objectContaining({ disabledTools: [] }),
+      { source: "resume-match-api", contractVersion: 1 },
     );
   });
 
@@ -597,11 +601,30 @@ describe("简历匹配工作流预检", () => {
       graph,
       expect.any(Object),
       expect.any(Object),
+      { source: "resume-match-api", contractVersion: 1 },
     );
   });
 });
 
 describe("简历匹配运行结果", () => {
+  it("同名工作流经通用运行入口启动时不属于内部 API", () => {
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, workflow_name, imports, started_at) values ('run-generic', ?, 'running', ?, ?, 100)",
+      )
+      .run(
+        workflowId,
+        "简历匹配评分",
+        JSON.stringify({ invocation: { source: "workflow" } }),
+      );
+
+    expect(readResumeMatchRun("run-generic")).toEqual({
+      ok: false,
+      status: 404,
+      error: "简历匹配运行不存在",
+    });
+  });
+
   it("严格 JSON 仍须汇总 Action 留下 validator valid=true 持久回执", () => {
     const result = validResult();
     const resultPath = path.join(tempRoot, RESUME_MATCH_RESULT_ARTIFACT);
@@ -630,9 +653,9 @@ describe("简历匹配运行结果", () => {
       );
     sqlite
       .prepare(
-        "insert into runs (id, workflow_id, status, workflow_name, run_dir, started_at, finished_at) values ('run-1', ?, 'success', ?, ?, 100, 101)",
+        "insert into runs (id, workflow_id, status, workflow_name, run_dir, imports, started_at, finished_at) values ('run-1', ?, 'success', ?, ?, ?, 100, 101)",
       )
-      .run(workflowId, "简历匹配评分", tempRoot);
+      .run(workflowId, "简历匹配评分", tempRoot, resumeMatchImports);
     sqlite
       .prepare(
         "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('report-row', 'run-1', 'report-action', '简历评分·汇总', 'success', '{}')",
@@ -731,9 +754,9 @@ describe("简历匹配运行结果", () => {
       );
     sqlite
       .prepare(
-        "insert into runs (id, workflow_id, status, workflow_name, run_dir, started_at, finished_at) values (?, ?, 'success', ?, ?, 100, 101)",
+        "insert into runs (id, workflow_id, status, workflow_name, run_dir, imports, started_at, finished_at) values (?, ?, 'success', ?, ?, ?, 100, 101)",
       )
-      .run("run-1", workflowId, "简历匹配评分", tempRoot);
+      .run("run-1", workflowId, "简历匹配评分", tempRoot, resumeMatchImports);
     sqlite
       .prepare(
         "insert into run_nodes (id, run_id, node_id, label, status, outputs) values (?, ?, ?, ?, 'success', ?)",

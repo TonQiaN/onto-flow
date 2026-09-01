@@ -59,6 +59,11 @@ export type CancelRunResult =
   | { ok: true }
   | { ok: false; status: 404 | 409; error: string };
 
+/** 运行由哪个受理边界发起；专用入口只读取自己留下的持久来源证明。 */
+export type RunInvocationProvenance =
+  | { source: "workflow" }
+  | { source: "resume-match-api"; contractVersion: 1 };
+
 /**
  * 进程级取消标记。executeRun 在每个节点开始前查它，已取消则停止调度剩余节点
  * （挂 globalThis 以免 HMR 重建模块时丢失正在跑的运行的标记）。
@@ -205,7 +210,7 @@ export async function startRun(
 ): Promise<StartRunResult> {
   const resolved = await resolveWorkflow(workflowId);
   if (!resolved) return { ok: false, status: 404, error: "工作流不存在" };
-  return startResolvedRun(resolved, inputs, readSettings());
+  return startResolvedRun(resolved, inputs, readSettings(), { source: "workflow" });
 }
 
 /**
@@ -215,7 +220,8 @@ export async function startRun(
 export async function startResolvedRun(
   resolved: ResolvedWorkflow,
   inputs: Record<string, unknown>,
-  settings: SettingsDocument = readSettings(),
+  settings: SettingsDocument,
+  invocation: RunInvocationProvenance,
 ): Promise<StartRunResult> {
   const issues = validateGraph(resolved.nodes, resolved.edges);
   for (const node of resolved.nodes) {
@@ -330,6 +336,8 @@ export async function startResolvedRun(
         // 冗余快照：工作流后续改名，历史运行仍显示当时的名字
         workflowName: resolved.workflow.name,
         status: "running",
+        // 入口来源与 run 同一次同步 insert 落库；专用 GET 不凭工作流名称猜来源。
+        imports: { invocation },
         startedAt: new Date(),
       })
       .run();
@@ -351,7 +359,7 @@ export async function startResolvedRun(
   // 异步执行，立即返回 runId。activeRuns 覆盖 executeRun 启动前到异常兜底后的
   // 全部生命期；cancelRun 提前写下 cancelled 也不能让清理路径误判为已经静止。
   activeRuns.add(runId);
-  void executeRun(runId, resolved, runInputs, settings)
+  void executeRun(runId, resolved, runInputs, settings, invocation)
     .catch((err) => {
       failWholeRun(runId, err instanceof Error ? err.message : String(err));
     })
@@ -410,6 +418,7 @@ async function executeRun(
   resolved: ResolvedWorkflow,
   rawInputs: Record<string, PortValue>,
   globalSettings: SettingsDocument,
+  invocation: RunInvocationProvenance,
 ): Promise<void> {
   const { nodes, edges } = resolved;
   const { backEdgeIds } = classifyEdges(nodes, edges);
@@ -432,7 +441,8 @@ async function executeRun(
   db.update(runs)
     .set({
       runDir: path.relative(process.cwd(), workspace.runDir),
-      imports: workspace.imports as unknown as Record<string, unknown>,
+      // 工作区导入摘要稍后补齐，但不能覆盖受理时已经持久化的入口来源证明。
+      imports: { ...workspace.imports, invocation } as unknown as Record<string, unknown>,
     })
     .where(eq(runs.id, runId))
     .run();

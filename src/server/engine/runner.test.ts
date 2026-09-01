@@ -503,10 +503,14 @@ describe("运行输入物化", () => {
 
     await vi.waitFor(() => {
       const run = sqlite
-        .prepare("SELECT status, error FROM runs WHERE id = ?")
-        .get(startedRun.runId) as { status: string; error: string | null };
+        .prepare("SELECT status, error, imports FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null; imports: string };
       expect(run.status).toBe("success");
       expect(run.error).toBeNull();
+      expect(JSON.parse(run.imports)).toMatchObject({
+        invocation: { source: "workflow" },
+        instructionsDigest: "test",
+      });
     });
 
     const textValue = capturedInputs?.题目?.[0];
