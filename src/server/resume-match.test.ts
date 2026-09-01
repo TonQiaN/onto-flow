@@ -9,6 +9,7 @@ import * as schema from "../db/schema";
 import {
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
+  RESUME_MATCH_VALIDATOR_TOOL_NAME,
 } from "../lib/resume-match";
 import type { ResolvedWorkflow } from "./resolve";
 
@@ -40,6 +41,17 @@ CREATE TABLE workflow_nodes (
   action_id TEXT, object_type_id TEXT, label TEXT NOT NULL DEFAULT '',
   x REAL NOT NULL DEFAULT 0, y REAL NOT NULL DEFAULT 0
 );
+CREATE TABLE tools (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL,
+  code TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE action_tools (
+  action_id TEXT NOT NULL, tool_id TEXT NOT NULL,
+  PRIMARY KEY (action_id, tool_id)
+);
+CREATE TABLE settings (
+  id INTEGER PRIMARY KEY, document TEXT NOT NULL, updated_at INTEGER NOT NULL
+);
 CREATE TABLE revisions (
   id TEXT PRIMARY KEY, entity_kind TEXT NOT NULL, entity_id TEXT NOT NULL,
   version_no INTEGER NOT NULL, payload TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
@@ -66,6 +78,8 @@ const { readResumeMatchRun, startResumeMatch } = await import("./resume-match");
 
 const workflowId = "resume-workflow";
 const resultTypeId = "resume-result-type";
+const reportActionId = "resume-report-action";
+const validatorToolId = "resume-validator-tool";
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-resume-match-"));
 const invocation = {
   job: { kind: "file" as const, file: { path: "uploads/job.md", name: "job.md", mime: "text/markdown" } },
@@ -140,13 +154,27 @@ function resolved(options: { outputLabel?: string; artifactPath?: string } = {})
         targetPort: "value",
       },
     ],
-    nodeRows: new Map(),
+    nodeRows: new Map([
+      [
+        "report-action",
+        {
+          id: "report-action",
+          workflowId,
+          kind: "action" as const,
+          actionId: reportActionId,
+          objectTypeId: null,
+          label: "",
+          x: 0,
+          y: 0,
+        },
+      ],
+    ]),
   };
 }
 
 beforeEach(() => {
   sqlite.exec(
-    "DELETE FROM run_nodes; DELETE FROM runs; DELETE FROM revisions; DELETE FROM workflow_nodes; DELETE FROM object_types; DELETE FROM workflows;",
+    "DELETE FROM run_nodes; DELETE FROM runs; DELETE FROM revisions; DELETE FROM action_tools; DELETE FROM tools; DELETE FROM settings; DELETE FROM workflow_nodes; DELETE FROM object_types; DELETE FROM workflows;",
   );
   fs.rmSync(tempRoot, { recursive: true, force: true });
   fs.mkdirSync(tempRoot, { recursive: true });
@@ -160,6 +188,14 @@ beforeEach(() => {
       "insert into object_types (id, name, kind, description, json_schema, created_at, updated_at) values (?, ?, 'json', '', ?, 0, 0)",
     )
     .run(resultTypeId, "评分报告", RESUME_MATCH_RESULT_SCHEMA_TEXT);
+  sqlite
+    .prepare(
+      "insert into tools (id, name, description, code, created_at, updated_at) values (?, ?, '', '', 0, 0)",
+    )
+    .run(validatorToolId, RESUME_MATCH_VALIDATOR_TOOL_NAME);
+  sqlite
+    .prepare("insert into action_tools (action_id, tool_id) values (?, ?)")
+    .run(reportActionId, validatorToolId);
   controls.resolveWorkflow.mockReset();
   controls.startRun.mockReset();
   controls.startRun.mockResolvedValue({ ok: true, runId: "run-1" });
@@ -200,6 +236,40 @@ describe("简历匹配工作流预检", () => {
       ok: false,
       status: 500,
       error: "「评分结果」必须使用简历匹配的严格 JSON Schema",
+    });
+    expect(controls.startRun).not.toHaveBeenCalled();
+  });
+
+  it("汇总 Action 未引用校验 Tool 时在 startRun 前失败", async () => {
+    sqlite.prepare("delete from action_tools").run();
+    controls.resolveWorkflow.mockResolvedValue(resolved());
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: `简历匹配汇总 Action 必须引用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}`,
+    });
+    expect(controls.startRun).not.toHaveBeenCalled();
+  });
+
+  it("校验 Tool 被全局停用时在 startRun 前失败", async () => {
+    sqlite
+      .prepare("insert into settings (id, document, updated_at) values (1, ?, 0)")
+      .run(
+        JSON.stringify({
+          modelApiKeyEnv: "DEEPSEEK_API_KEY",
+          modelBaseUrl: "",
+          credentialRefs: [],
+          mcpServers: [],
+          disabledTools: [RESUME_MATCH_VALIDATOR_TOOL_NAME],
+        }),
+      );
+    controls.resolveWorkflow.mockResolvedValue(resolved());
+
+    await expect(startResumeMatch(invocation)).resolves.toEqual({
+      ok: false,
+      status: 500,
+      error: `全局设置已停用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}，不能启动简历匹配运行`,
     });
     expect(controls.startRun).not.toHaveBeenCalled();
   });

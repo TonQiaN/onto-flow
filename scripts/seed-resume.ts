@@ -58,6 +58,7 @@ import {
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
   RESUME_MATCH_RESUME_INPUT_LABEL,
+  RESUME_MATCH_VALIDATOR_TOOL_NAME,
   RESUME_MATCH_WORKFLOW_NAME,
   validateResumeMatchResult,
 } from "../src/lib/resume-match";
@@ -233,12 +234,12 @@ function inside(root: string, target: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-export const name = "validate_resume_match_result";
+export const name = ${JSON.stringify(RESUME_MATCH_VALIDATOR_TOOL_NAME)};
 export const inject = ["tools"];
 
 export function apply(ctx: Context): void {
   ctx.tools.register({
-    name: "validate_resume_match_result",
+    name: ${JSON.stringify(RESUME_MATCH_VALIDATOR_TOOL_NAME)},
     description:
       "严格校验简历匹配 JSON 产物的字段、类型、总分算法、档位、否决、证据充分度和改分记录；提交结果前必须得到 valid=true。",
     parameters: {
@@ -311,7 +312,7 @@ export function apply(ctx: Context): void {
 `;
 
 const validateResultTool = upsertTool({
-  name: "validate_resume_match_result",
+  name: RESUME_MATCH_VALIDATOR_TOOL_NAME,
   description: "提交简历匹配结果前，严格校验 JSON 形状及评分字段间的一致性。",
   code: VALIDATE_RESUME_MATCH_TOOL_CODE,
 });
@@ -524,7 +525,7 @@ const report = upsertAction({
     "没有否决时这三个值分别是 false、空数组、空数组。没有否决时，总分 70 及以上 `decision` 为 `recommend`，69 及以下为 `not_recommend`；有否决一律为 `not_recommend`。" +
     "总分照常保留，否决原因和匹配程度分开表达。修正维度分数后必须用最终分重新计算总分。\n\n" +
     "## 提交流程\n\n" +
-    `先写 ${RESUME_MATCH_RESULT_ARTIFACT}，再调用 \`validate_resume_match_result\`，参数 ` +
+    `先写 ${RESUME_MATCH_RESULT_ARTIFACT}，再调用 \`${RESUME_MATCH_VALIDATOR_TOOL_NAME}\`，参数 ` +
     `\`result_path\` 固定传 \`${RESUME_MATCH_RESULT_ARTIFACT}\`。` +
     "如果返回 `valid=false`，逐条修正文件并重新调用，直到 `valid=true`；没有拿到 `valid=true` 不得提交结构化输出。" +
     "最终判断只表示基于当前岗位与简历材料的岗位匹配建议；不得生成面试问题、人工复核、后续核实或交给他人判断等行动项。\n\n" +
@@ -537,7 +538,7 @@ const report = upsertAction({
     "仍有冲突时按证据下限计分。每次调整都必须在 adjustments 写明原分、最终分和依据。" +
     "评委使用了非岗位相关依据时必须剔除该依据并重新评分，报告只写「已剔除非岗位相关依据」，不复述敏感信息。" +
     "未证实项不得写成候选人不具备，但必须说明它对分数和最终判断的影响；结果不得保留未裁决项，也不出现完整简历。" +
-    `只有 validate_resume_match_result 对 ${RESUME_MATCH_RESULT_ARTIFACT} 返回 valid=true 后才可以提交。`,
+    `只有 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 对 ${RESUME_MATCH_RESULT_ARTIFACT} 返回 valid=true 后才可以提交。`,
   modelId: textModel.id,
   effort: "high",
   inputs: [

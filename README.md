@@ -92,7 +92,9 @@ DeepSeek V4 Flash Vision，自己用 bash 调 Poppler 抽取文本层、逐页�
 
 内部调用方先把岗位和简历分别传给 `/api/uploads`，再把返回的两个 file PortValue 作为
 `{ job, resume }` POST 到 `/api/internal/resume-matches`；接口返回 `runId`，随后 GET
-`/api/internal/resume-matches/<runId>` 查询状态与最终 JSON，不需要知道工作流或节点 id。
+`/api/internal/resume-matches/<runId>` 查询状态与最终 JSON，不需要知道工作流或节点 id。POST 会在
+付费运行前核对完整图与 JSON 契约、汇总 Action 对校验 Tool 的引用，以及该 Tool 未被全局停用；
+任一条件被网页编辑破坏都会直接拒绝，不启动模型。
 命令行付费验收会真实走这组 HTTP 接口，并继续核对运行历史、工作区产物与 Agent 轨迹：
 
 ```bash

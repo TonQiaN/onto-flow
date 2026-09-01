@@ -17,7 +17,7 @@ describe("简历评分闭环裁决契约", () => {
     expect(source).toContain("## 证据缺口及计分处理");
     expect(source).toContain("RESUME_MATCH_RESULT_SCHEMA_TEXT");
     expect(source).toContain("match-result.json");
-    expect(source).toContain("validate_resume_match_result");
+    expect(source).toContain("RESUME_MATCH_VALIDATOR_TOOL_NAME");
     expect(source).toContain("const __name = <T>(target: T, _value: string): T => target");
     expect(source).toContain(
       "const expected = path.resolve(root, ${JSON.stringify(RESUME_MATCH_RESULT_ARTIFACT)});",

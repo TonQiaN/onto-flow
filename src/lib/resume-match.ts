@@ -11,6 +11,7 @@ export const RESUME_MATCH_RESUME_INPUT_LABEL = "简历";
 export const RESUME_MATCH_OUTPUT_LABEL = "评分结果";
 export const RESUME_MATCH_RESULT_ARTIFACT = "match-result.json";
 export const RESUME_MATCH_RESULT_SCHEMA_VERSION = "1.0";
+export const RESUME_MATCH_VALIDATOR_TOOL_NAME = "validate_resume_match_result";
 
 export const RESUME_MATCH_DIMENSIONS = [
   "mustHave",

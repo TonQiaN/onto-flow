@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   RESUME_MATCH_RESULT_ARTIFACT,
+  RESUME_MATCH_VALIDATOR_TOOL_NAME,
   validateResumeMatchResult,
   type ResumeMatchResult,
 } from "../src/lib/resume-match";
@@ -237,7 +238,7 @@ async function inspectTrajectories(runId: string, nodes: RunNode[]) {
         throw new Error(`Action「${node.label}」轨迹中存在错误记录`);
       }
       for (const record of session.records) {
-        if (record.toolName !== "validate_resume_match_result") continue;
+        if (record.toolName !== RESUME_MATCH_VALIDATOR_TOOL_NAME) continue;
         validatorCalls++;
         if (
           record.state === "complete" &&
@@ -251,7 +252,9 @@ async function inspectTrajectories(runId: string, nodes: RunNode[]) {
     }
   }
   if (validatorCalls === 0 || !validatorPassed) {
-    throw new Error("汇总 Agent 没有留下 validate_resume_match_result valid=true 的轨迹证据");
+    throw new Error(
+      `汇总 Agent 没有留下 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} valid=true 的轨迹证据`,
+    );
   }
   return { actionNodes: actionNodes.length, sessions, records, validatorCalls, validatorPassed };
 }

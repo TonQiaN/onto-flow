@@ -3,11 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { and, desc, eq, lte } from "drizzle-orm";
 import {
+  actionTools,
   db,
   objectTypes,
   revisions,
   runNodes,
   runs,
+  tools,
   workflows,
 } from "@/db";
 import type { ValidationIssue } from "@/lib/graph";
@@ -18,12 +20,14 @@ import {
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
   RESUME_MATCH_RESUME_INPUT_LABEL,
+  RESUME_MATCH_VALIDATOR_TOOL_NAME,
   RESUME_MATCH_WORKFLOW_NAME,
   type ResumeMatchResult,
 } from "@/lib/resume-match";
 import { isWithinData, resolveWithinData } from "@/server/fs-safety";
 import { startRun } from "@/server/engine/runner";
 import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import { readSettings } from "@/server/settings";
 import {
   type WriteResult,
   writeFail,
@@ -189,6 +193,40 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
   return null;
 }
 
+/** 汇总 Action 必须实际持有校验 Tool，且本次运行快照不能把它全局摘掉。 */
+function validateValidatorCapability(resolved: ResolvedWorkflow): string | null {
+  const outputNode = resolved.nodes.find(
+    (node) => node.kind === "output" && node.label === RESUME_MATCH_OUTPUT_LABEL,
+  );
+  const incoming = outputNode
+    ? resolved.edges.find((edge) => edge.targetNodeId === outputNode.id)
+    : undefined;
+  const actionId = incoming
+    ? resolved.nodeRows.get(incoming.sourceNodeId)?.actionId
+    : null;
+  if (!actionId) {
+    return "简历匹配汇总 Action 无法解析校验工具归属";
+  }
+  const validator = db
+    .select({ id: tools.id })
+    .from(actionTools)
+    .innerJoin(tools, eq(actionTools.toolId, tools.id))
+    .where(
+      and(
+        eq(actionTools.actionId, actionId),
+        eq(tools.name, RESUME_MATCH_VALIDATOR_TOOL_NAME),
+      ),
+    )
+    .get();
+  if (!validator) {
+    return `简历匹配汇总 Action 必须引用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}`;
+  }
+  if (readSettings().disabledTools.includes(RESUME_MATCH_VALIDATOR_TOOL_NAME)) {
+    return `全局设置已停用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}，不能启动简历匹配运行`;
+  }
+  return null;
+}
+
 export async function startResumeMatch(
   invocation: ResumeMatchInvocation,
 ): Promise<WriteResult<{ runId: string }, ValidationIssue>> {
@@ -204,6 +242,8 @@ export async function startResumeMatch(
   if (!resolved) return writeFail(500, "简历匹配工作流无法解析");
   const contractError = validateWorkflowContract(resolved);
   if (contractError) return writeFail(500, contractError);
+  const capabilityError = validateValidatorCapability(resolved);
+  if (capabilityError) return writeFail(500, capabilityError);
   const inputs = resolved.nodes.filter((node) => node.kind === "input");
   const jobNode = inputs.find((node) => node.label === RESUME_MATCH_JOB_INPUT_LABEL);
   const resumeNode = inputs.find((node) => node.label === RESUME_MATCH_RESUME_INPUT_LABEL);
