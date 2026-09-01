@@ -53,4 +53,31 @@ describe("Workflow 节点 id 路径安全", () => {
       }
     },
   );
+
+  it("拒绝超过文件系统安全余量的超长节点 id", () => {
+    const created = createWorkflow({ name: "超长节点测试", description: "" });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const result = writeWorkflow(created.data.id, {
+      nodes: [
+        {
+          id: "n".repeat(256),
+          kind: "input",
+          actionId: null,
+          objectTypeId: "unused",
+          label: "输入",
+          x: 0,
+          y: 0,
+        },
+      ],
+      edges: [],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining("不能超过 120 个 ASCII 字符"),
+    });
+  });
 });

@@ -106,9 +106,10 @@ npm run test:e2e   # Playwright E2E（复用 3592 端口的 dev server）
 ## 执行语义速览
 
 一次运行创建 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；
-每个 Action 的每一轮独占一个会话。文件输入和 Action 产物都留在共同工作区，连线只告诉下游
-「去读哪个路径」，不搬运全文。Skill 以目录链接进入工作区，由模型看描述按需加载；Tool 以
-cordis 插件进入本运行，再按 Action 的引用关系收窄每个会话可见面。
+每个 Action 的每一轮独占一个会话。全部输入在 Action 启动前物化到共同工作区：文件保留原件，
+文字写成 Markdown，JSON 写成 JSON 文件；Action 产物也留在该工作区。连线只告诉下游「去读
+哪个路径」，不搬运全文。Skill 以目录链接进入工作区，由模型看描述按需加载；Tool 以 cordis
+插件进入本运行，再按 Action 的引用关系收窄每个会话可见面。
 
 每个会话注册带真实 schema 的 `structured_output` 工具，模型用它报告产物路径与具名出口；实质
 内容仍写入产物文件，声明的文件没有落盘就判节点失败。dsh 会话事件到达即写 `run_events` /

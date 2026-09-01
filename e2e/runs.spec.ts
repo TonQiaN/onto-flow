@@ -239,8 +239,16 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
   const now = Date.now() - 10_000;
   const workflowName = `${PREFIX}${workflowId.slice(0, 8)}`;
   const fixture = { workflowId, workflowName, runId, runDir, nodeA, nodeB };
+  const dataRoot = path.join(process.cwd(), "data");
+  const artifactA = path.join(runDir, "workspace", "trajectory-a.md");
+  const artifactB = path.join(runDir, "workspace", "trajectory-b.md");
 
   try {
+    await mkdir(path.dirname(artifactA), { recursive: true });
+    await Promise.all([
+      writeFile(artifactA, "合成轨迹产物 A", "utf8"),
+      writeFile(artifactB, "合成轨迹产物 B", "utf8"),
+    ]);
     await writeSession(runDir, nodeA, eventLog(nodeA, now, "A_ROUND_1", true));
     await writeSession(
       runDir,
@@ -298,7 +306,16 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
           nodeA,
           "e2e-Agent甲",
           snapshot,
-          JSON.stringify({ 结果: { kind: "text", text: "合成轨迹产物 A" } }),
+          JSON.stringify({
+            结果: {
+              kind: "file",
+              file: {
+                path: path.relative(dataRoot, artifactA),
+                name: path.basename(artifactA),
+                mime: "text/markdown",
+              },
+            },
+          }),
           `${nodeA}#2`,
           now,
           now + 136,
@@ -309,7 +326,16 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
           nodeB,
           "e2e-Agent乙",
           snapshot,
-          JSON.stringify({ 结果: { kind: "text", text: "合成轨迹产物 B" } }),
+          JSON.stringify({
+            结果: {
+              kind: "file",
+              file: {
+                path: path.relative(dataRoot, artifactB),
+                name: path.basename(artifactB),
+                mime: "text/markdown",
+              },
+            },
+          }),
           nodeB,
           now + 200,
           now + 236,
@@ -413,6 +439,39 @@ function finishFixture(fixture: RunFixture): void {
   }
 }
 
+async function replaceFixtureArtifact(
+  fixture: RunFixture,
+  relativeName: string,
+  content: string,
+): Promise<void> {
+  const artifact = path.join(fixture.runDir, "workspace", relativeName);
+  await mkdir(path.dirname(artifact), { recursive: true });
+  await writeFile(artifact, content, "utf8");
+  const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
+  database.pragma("foreign_keys = ON");
+  database.pragma("busy_timeout = 5000");
+  try {
+    database
+      .prepare("update run_nodes set outputs = ? where run_id = ? and node_id = ?")
+      .run(
+        JSON.stringify({
+          结果: {
+            kind: "file",
+            file: {
+              path: path.relative(path.join(process.cwd(), "data"), artifact),
+              name: path.basename(artifact),
+              mime: "text/markdown",
+            },
+          },
+        }),
+        fixture.runId,
+        fixture.nodeA,
+      );
+  } finally {
+    database.close();
+  }
+}
+
 /**
  * 轨迹用完全合成的本地会话日志，避免失败 trace 把真实简历或模型上下文收进去。
  * fixture 只用 e2e 专属前缀与本 case 持有的目录清理，不触碰真实运行。
@@ -468,6 +527,9 @@ test.describe("运行历史", () => {
     await runRow.click();
     await page.waitForURL(`/runs/${current.runId}`);
     await expect(page.getByRole("heading", { name: "运行详情", exact: true })).toBeVisible();
+    await expect(page.getByTestId("run-workspace-path")).toHaveText(
+      path.relative(process.cwd(), path.join(current.runDir, "workspace")),
+    );
     await expect(page.getByRole("link", { name: "回画布看动画" })).toBeVisible();
 
     const cardA = page.locator(`[data-node-id="${current.nodeA}"]`);
@@ -475,8 +537,11 @@ test.describe("运行历史", () => {
     await expect(cardA).toContainText("e2e-Agent甲");
     await expect(cardB).toContainText("e2e-Agent乙");
     await expect(cardA).toContainText("输出");
+    await expect(cardA).toContainText("trajectory-a.md");
+    await cardA.getByRole("button", { name: "查看内容" }).click();
     await expect(cardA).toContainText("合成轨迹产物 A");
     await expect(cardB).toContainText("输出");
+    await expect(cardB).toContainText("trajectory-b.md");
     expect(trajectoryRequests).toHaveLength(0);
 
     const toggleA = cardA.getByTestId("agent-trajectory-toggle");
@@ -560,5 +625,32 @@ test.describe("运行历史", () => {
     const panelB = cardB.getByTestId("agent-trajectory-panel");
     await expect(panelB).toContainText("B_ONLY_SENTINEL");
     expect(trajectoryRequests).toHaveLength(3);
+  });
+
+  test("循环换轮时文件预览随产物路径重置，双点开头文件仍可读取", async ({ page, request }) => {
+    const current = fixture!;
+    setFixtureActive(current);
+    await page.goto(`/runs/${current.runId}`);
+    const cardA = page.locator(`[data-node-id="${current.nodeA}"]`);
+    await cardA.getByRole("button", { name: "查看内容" }).click();
+    await expect(cardA).toContainText("合成轨迹产物 A");
+
+    await replaceFixtureArtifact(current, "rounds/2/round-two.md", "第二轮独立产物");
+    await expect(cardA).toContainText("round-two.md");
+    await expect(cardA).not.toContainText("合成轨迹产物 A");
+    await expect(cardA.getByRole("button", { name: "查看内容" })).toBeVisible();
+    await cardA.getByRole("button", { name: "查看内容" }).click();
+    await expect(cardA).toContainText("第二轮独立产物");
+
+    const dotFile = path.join(current.runDir, "workspace", "..report.md");
+    await writeFile(dotFile, "双点开头是合法文件名", "utf8");
+    const response = await request.get(`/api/runs/${current.runId}/files`, {
+      params: { path: path.relative(path.join(process.cwd(), "data"), dotFile) },
+    });
+    expect(response.status()).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      name: "..report.md",
+      content: "双点开头是合法文件名",
+    });
   });
 });

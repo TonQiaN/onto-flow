@@ -6,15 +6,17 @@
 import { randomBytes } from "node:crypto";
 
 const SAFE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// 节点 id 会直接成为 inputs/ 下的目录段；给常见 255-byte 上限留足实现余量。
+const SAFE_ID_MAX_LENGTH = 120;
 
 /**
- * 校验机器生成的标识（运行 id、工作流 id）。这类值本就是 ASCII，
- * 收得死一点没有代价。
+ * 校验机器生成的标识（运行、工作流、节点 id）。这类值本就是 ASCII，
+ * 收得死一点没有代价；长度在写入边界限制，不能等运行异步 mkdir 才失败。
  */
 export function assertSafeId(kind: string, value: string): void {
-  if (!SAFE_ID_PATTERN.test(value)) {
+  if (!SAFE_ID_PATTERN.test(value) || value.length > SAFE_ID_MAX_LENGTH) {
     throw new Error(
-      `${kind}「${value}」不能用作目录名：只允许字母数字开头，后接字母数字、点、下划线或连字符`,
+      `${kind}「${value}」不能用作目录名：只允许字母数字开头，后接字母数字、点、下划线或连字符，且不能超过 ${SAFE_ID_MAX_LENGTH} 个 ASCII 字符`,
     );
   }
 }

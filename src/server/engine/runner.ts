@@ -2,7 +2,7 @@
  * 运行编排：startRun（校验 + 建 run + 异步执行）与 executeRun（就绪驱动并行）。
  *
  * 一次运行 = 一个独立工作区 + 一个 harness 子进程（ADR-0007）。executeRun 建工作区、
- * 物化文件输入、起子进程，然后按拓扑序驱动节点，最后无论成败都把子进程收束到静止。
+ * 物化全部运行输入、起子进程，然后按拓扑序驱动节点，最后无论成败都把子进程收束到静止。
  *
  * - 输入节点 → outputs = { value: 用户输入 }；输出节点 → 上游值透传为 outputs；
  *   Action 节点 → runActionNode（在子进程里开一个会话）。
@@ -13,6 +13,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, runNodes, runs } from "@/db";
 import {
@@ -129,6 +130,34 @@ function scheduleUsageSettlementRetry(runId: string): Promise<void> {
   return task;
 }
 
+/** 留出文件系统实现差异余量，避免贴着常见的 255-byte 单组件上限写入。 */
+const INPUT_FILENAME_MAX_BYTES = 240;
+
+/**
+ * 保留可辨认前缀与短扩展名，超长部分用内容散列稳定收敛；NUL 在进入文件系统
+ * 前替换，长度按 UTF-8 字节而非 JS 字符数计，非法名称不会在运行受理后异步失败。
+ */
+function boundedInputFilename(candidate: string): string {
+  const basename = safeBasename(candidate.replaceAll("\0", "_"));
+  if (Buffer.byteLength(basename, "utf8") <= INPUT_FILENAME_MAX_BYTES) return basename;
+
+  const candidateExtension = path.extname(basename);
+  const extension =
+    Buffer.byteLength(candidateExtension, "utf8") <= 16 ? candidateExtension : "";
+  const stem = extension ? basename.slice(0, -extension.length) : basename;
+  const suffix = `-${createHash("sha256").update(basename).digest("hex").slice(0, 12)}${extension}`;
+  const prefixBudget = INPUT_FILENAME_MAX_BYTES - Buffer.byteLength(suffix, "utf8");
+  let prefix = "";
+  let used = 0;
+  for (const character of stem) {
+    const bytes = Buffer.byteLength(character, "utf8");
+    if (used + bytes > prefixBudget) break;
+    prefix += character;
+    used += bytes;
+  }
+  return `${prefix || "input"}${suffix}`;
+}
+
 export function isRunCancelled(runId: string): boolean {
   return cancelledRuns.has(runId);
 }
@@ -158,6 +187,16 @@ function isPortValue(value: unknown): value is PortValue {
     );
   }
   return false;
+}
+
+/** JSON 输入在受理与物化阶段共用同一格式；递归过深等序列化失败不能逃成 500。 */
+function serializeJsonInput(value: unknown): string | null {
+  try {
+    const serialized = JSON.stringify(value, null, 2);
+    return serialized === undefined ? null : `${serialized}\n`;
+  } catch {
+    return null;
+  }
 }
 
 export async function startRun(
@@ -219,6 +258,30 @@ export async function startResolvedRun(
       issues.push({
         nodeId: node.id,
         message: `输入节点「${node.label}」的文件路径非法（越界 data/ 目录）`,
+      });
+      continue;
+    }
+    // 文字/JSON 输入的尺寸上限在校验期就判，超限走 422 而不是拿到 runId 后
+    // 才在物化阶段异步失败——确定性的输入违规不该伪装成引擎故障（file 类的
+    // 上限在上传边界已限，materializeRunInputs 的检查是纵深兜底）。
+    const serializedJson = value.kind === "json" ? serializeJsonInput(value.json) : null;
+    if (value.kind === "json" && serializedJson === null) {
+      issues.push({
+        nodeId: node.id,
+        message: `输入节点「${node.label}」的 JSON 内容无法安全序列化`,
+      });
+      continue;
+    }
+    const inlineBytes =
+      value.kind === "text"
+        ? Buffer.byteLength(value.text, "utf8")
+        : serializedJson === null
+          ? 0
+          : Buffer.byteLength(serializedJson, "utf8");
+    if (inlineBytes > MAX_FILE_INPUT_BYTES) {
+      issues.push({
+        nodeId: node.id,
+        message: `输入节点「${node.label}」的内容超过 32 MiB`,
       });
       continue;
     }
@@ -365,13 +428,14 @@ async function executeRun(
     .where(eq(runs.id, runId))
     .run();
 
-  // 文件输入落进工作区：模型的 cwd 是工作区，上传目录在它之外读不到。
-  // 输入按原样拷贝，一切格式转换都是 Action 里模型自己的工作（ADR-0011）。
+  // 全部输入落进工作区 inputs/：文件拷原件，文字与 JSON 写成文件（ADR-0012）。
+  // 输入是这次运行最初的产物，与 Action 产物同一种读法；一切格式转换都是
+  // Action 里模型自己的工作（ADR-0011）。
   if (isRunCancelled(runId)) {
     cancelledRuns.delete(runId);
     return;
   }
-  const runInputs = materializeFileInputs(rawInputs, workspace);
+  const runInputs = materializeRunInputs(rawInputs, workspace, nodes);
 
   // 每个 Action 在开跑前把自己的落库上下文登记进来，事件回调据此把 dsh 事件
   // 即时写成 run_events / node_usage。
@@ -885,37 +949,59 @@ function workflowInstructions(resolved: ResolvedWorkflow): string {
 }
 
 /**
- * 把文件类运行输入拷进工作区的 inputs/ 并改写它的 PortValue 路径。
- * 上传目录在工作区之外，模型的 cwd 是工作区，不搬进来它根本读不到。
+ * 把全部运行输入物化进工作区的 inputs/ 并改写 PortValue 为文件引用（ADR-0012）。
+ * 文件类拷原件（上传目录在工作区之外，模型的 cwd 是工作区，不搬进来读不到）；
+ * 文字与 JSON 写成 Markdown / JSON 文件——输入是这次运行最初的产物，提示里
+ * 只给路径不内联，超长文本被截断喂给模型这类特判缺陷从根上消失。
  * 只拷原件不做任何转换：格式处理是 Action 里模型用 bash 自己的工作（ADR-0011）。
  */
-function materializeFileInputs(
+function materializeRunInputs(
   inputs: Record<string, PortValue>,
   workspace: RunWorkspace,
+  nodes: readonly ResolvedNode[],
 ): Record<string, PortValue> {
   const out: Record<string, PortValue> = {};
   for (const [nodeId, value] of Object.entries(inputs)) {
-    if (value.kind !== "file") {
-      out[nodeId] = value;
-      continue;
-    }
     // nodeId 来自持久化工作流；writer 已校验，这里在真正进入路径前再守一次旧数据。
     assertSafeId("输入节点 id", nodeId);
-    const name = safeBasename(value.file.name || value.file.path);
     const destDir = path.join(workspace.workspaceDir, WORKSPACE_INPUTS_SUBDIR, nodeId);
     fs.mkdirSync(destDir, { recursive: true });
-    const dest = path.join(destDir, name);
-    const source = resolveWithinData(value.file.path);
-    if (fs.statSync(source).size > MAX_FILE_INPUT_BYTES) {
-      throw new Error(`输入节点「${nodeId}」的文件超过 32 MiB`);
+
+    if (value.kind === "file") {
+      const name = boundedInputFilename(value.file.name || value.file.path);
+      const dest = path.join(destDir, name);
+      const source = resolveWithinData(value.file.path);
+      if (fs.statSync(source).size > MAX_FILE_INPUT_BYTES) {
+        throw new Error(`输入节点「${nodeId}」的文件超过 32 MiB`);
+      }
+      fs.copyFileSync(source, dest);
+      out[nodeId] = {
+        kind: "file",
+        file: { path: path.relative(DATA_DIR, dest), name, mime: value.file.mime },
+      };
+      continue;
     }
-    fs.copyFileSync(source, dest);
+
+    // 文字与 JSON 物化为文件（ADR-0012）：按节点名命名，路径本身就是语义，
+    // 模型和事后翻工作区的人都能一眼认出这是什么。文字一字不差落盘，不加不减。
+    const label = nodes.find((node) => node.id === nodeId)?.label.trim() ?? "";
+    const stem = safeBasename(label || "value");
+    const name = boundedInputFilename(value.kind === "text" ? `${stem}.md` : `${stem}.json`);
+    const content = value.kind === "text" ? value.text : serializeJsonInput(value.json);
+    if (content === null) {
+      throw new Error(`输入节点「${nodeId}」的 JSON 内容无法安全序列化`);
+    }
+    if (Buffer.byteLength(content, "utf8") > MAX_FILE_INPUT_BYTES) {
+      throw new Error(`输入节点「${nodeId}」的内容超过 32 MiB`);
+    }
+    const dest = path.join(destDir, name);
+    fs.writeFileSync(dest, content, "utf8");
     out[nodeId] = {
       kind: "file",
       file: {
         path: path.relative(DATA_DIR, dest),
         name,
-        mime: value.file.mime,
+        mime: value.kind === "text" ? "text/markdown" : "application/json",
       },
     };
   }

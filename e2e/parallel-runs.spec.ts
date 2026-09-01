@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -27,7 +28,10 @@ interface RunDetail {
     nodeId: string;
     status: string;
     error: string | null;
-    outputs: Record<string, { kind: string; text?: string }> | null;
+    outputs: Record<
+      string,
+      { kind: string; text?: string; file?: { path: string; name: string } }
+    > | null;
   }>;
 }
 
@@ -156,7 +160,8 @@ test.describe("并行运行", () => {
       await observer;
     }
 
-    // 全部成功，逐个核对：状态、无错误、输入原样直通到输出节点。
+    // 全部成功，逐个核对：状态、无错误、文字输入物化为工作区文件后原样直通到
+    // 输出节点（ADR-0012），正文经 files 预览通道逐字核对。
     for (const [runId, detail] of details) {
       const label = `运行 ${runId}`;
       expect(detail.run.status, `${label} 状态`).toBe("success");
@@ -164,9 +169,16 @@ test.describe("并行运行", () => {
       const index = runIds.indexOf(runId);
       const outputNode = detail.nodes.find((n) => n.nodeId === outputNodeId);
       expect(outputNode?.status, `${label} 输出节点状态`).toBe("success");
-      expect(outputNode?.outputs?.value?.text, `${label} 直通值`).toBe(
-        `并行验收 #${index + 1}`,
+      const value = outputNode?.outputs?.value;
+      expect(value?.kind, `${label} 直通值应为文件引用`).toBe("file");
+      expect(value?.file?.name, `${label} 物化文件按节点名命名`).toBe("输入.md");
+      const fileRes = await request.get(
+        `/api/runs/${runId}/files?path=${encodeURIComponent(value!.file!.path)}`,
       );
+      expect(fileRes.ok(), `${label} 文件预览通道`).toBeTruthy();
+      const fileBody = (await fileRes.json()) as { content?: string; truncated?: boolean };
+      expect(fileBody.content, `${label} 物化正文`).toBe(`并行验收 #${index + 1}`);
+      expect(fileBody.truncated).toBeFalsy();
       for (const node of detail.nodes) {
         expect(node.error, `${label} 节点 ${node.nodeId} 错误`).toBeNull();
       }
@@ -174,6 +186,99 @@ test.describe("并行运行", () => {
 
     expect(maxConcurrentHarnesses, "实际同时存活的 harness 子进程数").toBe(RUN_COUNT);
 
+    // 预览通道的安全与容量边界：不能跨运行读，软链不能绕过真实路径收敛，
+    // 二进制拒绝，超大文本只返回固定大小前缀。
+    const firstRunId = runIds[0];
+    const secondRunId = runIds[1];
+    const firstDetail = details.get(firstRunId)!;
+    const secondDetail = details.get(secondRunId)!;
+    const secondValue = secondDetail.nodes.find((n) => n.nodeId === outputNodeId)!
+      .outputs!.value;
+    const crossRun = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(secondValue.file!.path)}`,
+    );
+    expect(crossRun.status(), "不能用一个运行 id 读取另一个运行的文件").toBe(400);
+
+    const dataRoot = path.join(process.cwd(), "data");
+    const firstRunRoot = path.join(process.cwd(), firstDetail.run.runDir!);
+    const secondFile = path.resolve(dataRoot, secondValue.file!.path);
+    const symlink = path.join(firstRunRoot, "workspace", "cross-run-link.md");
+    fs.symlinkSync(secondFile, symlink);
+    const symlinkRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, symlink))}`,
+    );
+    expect(symlinkRes.status(), "软链不能绕过运行目录边界").toBe(400);
+
+    const binary = path.join(firstRunRoot, "workspace", "binary.bin");
+    fs.writeFileSync(binary, Buffer.from([1, 0, 2]));
+    const binaryRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, binary))}`,
+    );
+    expect(binaryRes.status(), "二进制文件不进入文本预览").toBe(415);
+
+    const invalidUtf8 = path.join(firstRunRoot, "workspace", "invalid-utf8.bin");
+    fs.writeFileSync(invalidUtf8, Buffer.from([0xff, 0xfe, 0xfd]));
+    const invalidUtf8Res = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, invalidUtf8))}`,
+    );
+    expect(invalidUtf8Res.status(), "没有 NUL 的非法 UTF-8 也不能冒充文本").toBe(415);
+
+    const invalidAcrossCutoff = path.join(
+      firstRunRoot,
+      "workspace",
+      "invalid-utf8-across-cutoff.bin",
+    );
+    const invalidAcrossCutoffBytes = Buffer.alloc(262_145, 0x61);
+    invalidAcrossCutoffBytes[262_143] = 0xe4;
+    invalidAcrossCutoffBytes[262_144] = 0x41;
+    fs.writeFileSync(invalidAcrossCutoff, invalidAcrossCutoffBytes);
+    const invalidAcrossCutoffRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, invalidAcrossCutoff))}`,
+    );
+    expect(
+      invalidAcrossCutoffRes.status(),
+      "预览边界前的多字节起始符必须连同边界后首字节校验",
+    ).toBe(415);
+
+    const fifo = path.join(firstRunRoot, "workspace", "blocking.fifo");
+    const mkfifo = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
+    expect(mkfifo.status, `mkfifo 失败：${mkfifo.stderr}`).toBe(0);
+    const fifoRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, fifo))}`,
+      { timeout: 2_000 },
+    );
+    expect(fifoRes.status(), "FIFO 必须被已打开描述符校验拒绝且不能阻塞服务").toBe(400);
+
+    const oversized = path.join(firstRunRoot, "workspace", "oversized.txt");
+    fs.writeFileSync(oversized, "x".repeat(262_145));
+    const oversizedRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, oversized))}`,
+    );
+    expect(oversizedRes.ok()).toBeTruthy();
+    const oversizedBody = (await oversizedRes.json()) as {
+      content: string;
+      size: number;
+      truncated: boolean;
+    };
+    expect(oversizedBody.content).toHaveLength(262_144);
+    expect(oversizedBody.size).toBe(262_145);
+    expect(oversizedBody.truncated).toBe(true);
+
+    const oversizedChinese = path.join(firstRunRoot, "workspace", "oversized-chinese.txt");
+    fs.writeFileSync(oversizedChinese, "中".repeat(87_382));
+    const chineseRes = await request.get(
+      `/api/runs/${firstRunId}/files?path=${encodeURIComponent(path.relative(dataRoot, oversizedChinese))}`,
+    );
+    expect(chineseRes.ok()).toBeTruthy();
+    const chineseBody = (await chineseRes.json()) as {
+      content: string;
+      size: number;
+      truncated: boolean;
+    };
+    expect(chineseBody.content).toBe("中".repeat(87_381));
+    expect(chineseBody.content).not.toContain("�");
+    expect(chineseBody.size).toBe(262_146);
+    expect(chineseBody.truncated).toBe(true);
     // 逐运行查日志：运行目录独立存在，harness 子进程的 stderr 日志已落盘。
     const runDirs = new Set<string>();
     for (const [runId, detail] of details) {

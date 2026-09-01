@@ -203,6 +203,18 @@ export default function RunDetailPage() {
                 </span>
               )}
               <span className="font-mono text-xs text-zinc-400">{run.id}</span>
+              <span className="flex min-w-0 items-center gap-1 text-xs text-zinc-400">
+                <span className="shrink-0">工作区</span>
+                <code
+                  data-testid="run-workspace-path"
+                  title="相对 OntoFlow 项目根目录"
+                  className="break-all font-mono text-zinc-500"
+                >
+                  {run.runDir
+                    ? `${run.runDir.replaceAll("\\", "/").replace(/\/+$/, "")}/workspace`
+                    : "尚未生成"}
+                </code>
+              </span>
               <div className="ml-auto flex items-center gap-4">
                 {run.status === "running" && id && (
                   <CancelButton runId={id} onCancelled={() => void reload()} />

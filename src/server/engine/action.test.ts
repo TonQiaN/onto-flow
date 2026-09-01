@@ -652,4 +652,16 @@ describe("Action 执行时边界", () => {
     expect(renderedPrompt).toContain("原件，未经预处理");
     expect(renderedPrompt).toContain("用 bash 自行转换");
   });
+
+  it("拒绝把漏过物化层的文字输入重新内联进提示", async () => {
+    await expect(
+      runActionNode(
+        context({
+          inputs: {
+            source: [{ kind: "text", text: "不应进入模型提示的完整正文" }],
+          },
+        }),
+      ),
+    ).rejects.toThrow("运行输入未物化为文件（ADR-0012）");
+  });
 });
