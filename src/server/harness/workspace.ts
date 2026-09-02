@@ -20,6 +20,8 @@ import { assertSafeId, assertSafeName, newRunId } from "./ids";
 export const WORKSPACE_SKILLS_SUBDIR = path.join(".agents", "skills");
 /** 工作区内的指令文件名，对齐上游 agent-instructions 的发现清单。 */
 export const WORKSPACE_INSTRUCTIONS_FILE = "AGENTS.md";
+/** 运行 home 内的用户级指令文件名：上游固定读 $DSH_HOME/AGENTS.md。 */
+export const HOME_INSTRUCTIONS_FILE = "AGENTS.md";
 /** 运行目录内的组合配置文件名。 */
 export const RUN_COMPOSITION_FILE = "cordis.yml";
 /** 运行目录内 Action 子进程 cwd 的子目录名。 */
@@ -61,6 +63,12 @@ export interface CreateRunWorkspaceOptions {
   runId?: string;
   /** 物化为 workspace/AGENTS.md 的工作流级共同指令。 */
   instructions: string;
+  /**
+   * 物化为 <run>/home/AGENTS.md 的全局默认指令：上游 agent-instructions 把
+   * $DSH_HOME/AGENTS.md 当用户级指令读，因此每个 Action 会话都无条件读到（ADR-0016）。
+   * 省略即不写，空串也写——空文件与没有文件对上游都是「无用户级指令」。
+   */
+  homeInstructions?: string;
   /** 链接到 workspace/.agents/skills/ 的技能：经 cwd 发现对全部 Action 可见。 */
   skills?: readonly ImportSpec[];
   /** 整图重跑时引用的原运行 id。 */
@@ -165,6 +173,9 @@ export async function createRunWorkspace(
       options.instructions,
       "utf8",
     );
+    if (options.homeInstructions !== undefined) {
+      await writeFile(path.join(homeDir, HOME_INSTRUCTIONS_FILE), options.homeInstructions, "utf8");
+    }
 
     const items: ImportRecord[] = [];
     if ((options.skills ?? []).length > 0) {

@@ -5,10 +5,6 @@ OntoFlow 工作台的领域术语表（ubiquitous language）。只记语义，�
 > **Action** 与 **Action 模板** 两条记的是已经定下、但代码还没搬过去的模型
 > （[ADR-0010](docs/adr/0010-nodes-own-their-definition.md)）：库里的 Action 目前
 > 仍被工作流节点共享引用，节点还不自带定义。这次搬迁尚未排进里程碑。
->
-> **Skill**、**Tool**、**预载**、**工作流设置**、**引用** 五条同样记的是已定下、代码尚未搬过去的
-> 模型（[ADR-0016](docs/adr/0016-three-tier-settings.md)、[ADR-0017](docs/adr/0017-tool-is-a-contract.md)）：
-> 今天 Skill 仍是一段文字、按 Action 引用；Tool 仍是裸 cordis 插件。搬迁在第二批。
 
 ## Language
 

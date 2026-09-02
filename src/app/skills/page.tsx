@@ -206,7 +206,7 @@ function SkillsLibrary() {
     <>
       <LibraryLayout
         title="Skill 库"
-        subtitle="命名 prompt 片段，被 Action 引用后在执行时强制注入会话。"
+        subtitle="技能目录：SKILL.md 正文加资源文件。归工作流的技能集所有，运行时投影进工作区，模型看描述自行加载；必定要用的由 Action 预载。"
         tree={
           <FolderTree
             kind="skill"

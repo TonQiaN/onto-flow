@@ -24,6 +24,8 @@ export async function GET(request: Request) {
         name: tools.name,
         description: tools.description,
         updatedAt: tools.updatedAt,
+        // 库页按模型可见的公名也能搜到
+        extraSearch: tools.publicName,
       },
       query,
     });

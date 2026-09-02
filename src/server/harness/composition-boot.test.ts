@@ -5,19 +5,22 @@
  * llm-deepseek 的凭据缺失只会在请求时以 MISSING_CREDENTIAL 失败。
  *
  * 搜索开关单独 boot 一次：web 三件套默认不挂，不能只靠默认组合证明它们能加载。
+ * 契约 Tool 也单独 boot 一次：包装是平台生成的 cordis 插件，它能被 loader 加载并
+ * 完成注册，才证明 tool-plugin.ts 与上游 ToolDefinition 的形状仍对得上（ADR-0017）。
  */
 import { rm } from "node:fs/promises";
 import { afterAll, describe, expect, it } from "vitest";
 import { createRunWorkspace, runDirPath, type RunWorkspace } from "./workspace";
 import { launchRun } from "./launch";
-import { runCompositionEntries } from "./composition";
+import { runCompositionEntries, type RunCompositionOptions } from "./composition";
+import { materializeToolPlugin } from "./tool-plugin";
 
 const WORKFLOW_ID = "composition-boot-test";
 const created: RunWorkspace[] = [];
 
-async function bootAndDispose(ws: RunWorkspace, toggles: { webSearch: boolean }): Promise<void> {
+async function bootAndDispose(ws: RunWorkspace, composition: RunCompositionOptions): Promise<void> {
   const proc = await launchRun(ws, {
-    composition: { toggles },
+    composition,
     onCrash: (message) => {
       throw new Error(`子进程未经收束退出：${message}`);
     },
@@ -38,7 +41,39 @@ describe("每运行组合", () => {
       instructions: "# 组合启动测试\n",
     });
     created.push(ws);
-    await bootAndDispose(ws, { webSearch: false });
+    await bootAndDispose(ws, { toggles: { webSearch: false } });
+  }, 90_000);
+
+  it("带样例契约 Tool 的组合能 boot：平台包装被 loader 加载并完成注册", async () => {
+    const ws = await createRunWorkspace({
+      workflowId: WORKFLOW_ID,
+      runId: `boot-tool-${Date.now().toString(36)}`,
+      instructions: "# 组合启动测试\n",
+      homeInstructions: "# 默认指令\n",
+    });
+    created.push(ws);
+    const entry = materializeToolPlugin(
+      ws,
+      {
+        id: "boot-sample",
+        name: "启动样例",
+        publicName: "boot_sample",
+        description: "组合启动测试用的契约 Tool",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: { label: { type: "string" } },
+          required: ["label"],
+        },
+        output: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"] },
+        timeoutMs: 5_000,
+        code: "export default async function execute(args, ctx) { return { ok: typeof ctx.run === 'function' }; }",
+      },
+      { envKeys: ["DEEPSEEK_API_KEY"] },
+    );
+    const ids = runCompositionEntries(ws, { toolPlugins: [entry] }).map((e) => e.id);
+    expect(ids).toContain("tool-boot-sample");
+    await bootAndDispose(ws, { toolPlugins: [entry] });
   }, 90_000);
 
   it("打开搜索开关后 web 三件套同样能 boot", async () => {
@@ -50,7 +85,7 @@ describe("每运行组合", () => {
     created.push(ws);
     const ids = runCompositionEntries(ws, { toggles: { webSearch: true } }).map((e) => e.id);
     expect(ids).toEqual(expect.arrayContaining(["web", "web-search-deepseek", "tool-web"]));
-    await bootAndDispose(ws, { webSearch: true });
+    await bootAndDispose(ws, { toggles: { webSearch: true } });
   }, 90_000);
 
   it("默认组合不含搜索三件套", () => {

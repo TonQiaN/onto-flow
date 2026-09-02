@@ -22,6 +22,54 @@ afterEach(() => {
 });
 
 describe("Action 会话轨迹", () => {
+  it("预载技能的注入消息按 skill-invocation 来源标成「预载技能：<名>」，缺名表时退回 slug", () => {
+    const content = jsonl(
+      header("node-preload", 100, "/Users/example/private/workspace"),
+      event("turn/start", 0, 101, { turn: 1 }),
+      event("step/start", 1, 102, { turn: 1, step: 1 }),
+      event("user/message", 2, 103, userMessage("/skill-abc123\n\n请检查文件", { kind: "user" })),
+      event(
+        "user/message",
+        3,
+        104,
+        userMessage(
+          '<skill_content name="skill-abc123">核对规范正文</skill_content>',
+          { kind: "skill-invocation", name: "skill-abc123", form: "instructions" },
+        ),
+      ),
+      event(
+        "user/message",
+        4,
+        104,
+        userMessage(
+          '<skill_content name="skill-unknown">别的正文</skill_content>',
+          { kind: "skill-invocation", name: "skill-unknown", form: "instructions" },
+        ),
+      ),
+      event("step/end", 5, 141, { turn: 1, step: 1 }),
+      event("turn/end", 6, 142, { turn: 1, reason: { kind: "completed" } }),
+    );
+    const parsed = parseSessionJsonl(content);
+    const named = projectSession(parsed, 1, "/Users/example/private/run", false, {
+      "skill-abc123": "核对规范",
+    });
+    const injections = named.records.filter((record) => record.kind === "context");
+    expect(injections.map((record) => record.label)).toEqual([
+      "预载技能：核对规范",
+      "预载技能：skill-unknown",
+    ]);
+    expect(injections[0]?.lane).toBe("input");
+    expect(injections[0]?.details[0]?.content).toContain("核对规范正文");
+    // 手势本身仍是用户输入行，不被改写。
+    expect(named.records.find((record) => record.kind === "user")?.summary).toContain("/skill-abc123");
+
+    const bare = projectSession(parsed, 1, "/Users/example/private/run");
+    expect(bare.records.filter((r) => r.kind === "context").map((r) => r.label)).toEqual([
+      "预载技能：skill-abc123",
+      "预载技能：skill-unknown",
+    ]);
+  });
+
   it("解开 packed row，并把初始系统、输入上下文和模型响应投影到三条轨道", () => {
     const chunks = Array.from({ length: 8 }, (_, index) => ({
       type: "assistant/chunk" as const,

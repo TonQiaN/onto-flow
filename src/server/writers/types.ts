@@ -40,3 +40,18 @@ export function asObject(
     return { ok: false };
   return { ok: true, body: raw as Record<string, unknown> };
 }
+
+/**
+ * 关系 id 数组：缺省视同空、去重保序；不是字符串数组时返回 null 交调用方报 400。
+ * 保序是因为 position 由数组下标给出，编辑器里的排列顺序就是运行时的注入顺序。
+ */
+export function parseIdArray(value: unknown): string[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const out: string[] = [];
+  for (const v of value) {
+    if (typeof v !== "string") return null;
+    out.push(v);
+  }
+  return [...new Set(out)];
+}

@@ -17,7 +17,6 @@
  * 幂等：按名字查找，只在完整定义变化或尚无修订时走 writer。运行：npx tsx scripts/seed-resume.ts
  */
 import { and, eq } from "drizzle-orm";
-import { createHash } from "node:crypto";
 import {
   actions,
   db,
@@ -30,6 +29,8 @@ import {
   workflowNodes,
   workflows,
 } from "../src/db";
+import { toolContractSha256 } from "../src/lib/tool-digest";
+import { EMPTY_WORKFLOW_SETTINGS } from "../src/lib/workflow-settings";
 import {
   createAction,
   loadActionDto,
@@ -48,9 +49,11 @@ import {
 } from "../src/server/writers/tool";
 import {
   createWorkflow,
+  loadWorkflowSets,
   writeWorkflow,
   type EdgePayload,
   type NodePayload,
+  type WorkflowDefinition,
 } from "../src/server/writers/workflow";
 import type { WriteResult } from "../src/server/writers/types";
 import {
@@ -75,11 +78,12 @@ import {
   RESUME_MATCH_RESUME_INPUT_LABEL,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
   RESUME_MATCH_VALIDATOR_TOOL_SHA256,
+  RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256,
   RESUME_MATCH_WORKFLOW_DESCRIPTION,
-  RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256,
+  RESUME_MATCH_WORKFLOW_INSTRUCTIONS,
   RESUME_MATCH_WORKFLOW_NAME,
   resumeMatchActionBehaviorSha256,
-  resumeMatchWorkflowDescriptionSha256,
+  resumeMatchWorkflowBehaviorSha256,
   validateResumeMatchResult,
 } from "../src/lib/resume-match";
 import { writeResumeSamples } from "./resume-samples";
@@ -117,6 +121,7 @@ function normalizedAction(payload: ActionPayload): ActionPayload {
         left.position - right.position ||
         left.name.localeCompare(right.name),
     ),
+    preloadSkillIds: [...payload.preloadSkillIds].sort(),
     toolIds: [...payload.toolIds].sort(),
   };
 }
@@ -147,12 +152,17 @@ function upsertObjectType(
   return existing.id;
 }
 
+/** Tool 契约（ADR-0017）按公名查找（展示名可改，公名是身份），任一字段不同就走 writer 重写。 */
 function upsertTool(payload: ToolPayload): string {
-  const existing = db.select().from(tools).where(eq(tools.name, payload.name)).get();
+  const existing = db.select().from(tools).where(eq(tools.publicName, payload.publicName)).get();
   if (!existing) return unwrap(createTool(payload)).id;
   const current: ToolPayload = {
     name: existing.name,
+    publicName: existing.publicName,
     description: existing.description,
+    parameters: existing.parameters,
+    output: existing.output,
+    timeoutMs: existing.timeoutMs,
     code: existing.code,
   };
   if (!sameDefinition(current, payload) || !hasRevision("tool", existing.id)) {
@@ -174,10 +184,15 @@ function upsertAction(input: {
 }): string {
   const model = db.select().from(models).where(eq(models.id, input.modelId)).get();
   if (!model) throw new Error(`Action「${input.name}」引用的模型不存在`);
-  const toolNames = (input.toolIds ?? []).map((toolId) => {
-    const tool = db.select({ name: tools.name }).from(tools).where(eq(tools.id, toolId)).get();
+  // 摘要里放的是 Tool 公名（模型调用与会话收窄用的身份），展示名可改而不动契约。
+  const toolPublicNames = (input.toolIds ?? []).map((toolId) => {
+    const tool = db
+      .select({ publicName: tools.publicName })
+      .from(tools)
+      .where(eq(tools.id, toolId))
+      .get();
     if (!tool) throw new Error(`Action「${input.name}」引用的 Tool ${toolId} 不存在`);
-    return tool.name;
+    return tool.publicName;
   });
   const behaviorDigest = resumeMatchActionBehaviorSha256({
     name: input.name,
@@ -188,14 +203,14 @@ function upsertAction(input: {
     reasoningEffort: input.effort,
     maxReentries: 0,
     onExhausted: "fail",
-    skillNames: [],
-    toolNames,
+    preloadSkillNames: [],
+    toolPublicNames,
   });
   const expectedDigest = RESUME_MATCH_ACTION_BEHAVIOR_SHA256[input.name];
   if (behaviorDigest !== expectedDigest) {
     throw new Error(
       `Action「${input.name}」行为摘要变化：期望 ${String(expectedDigest)}，实际 ${behaviorDigest}；` +
-        "请先审查 prompt、rule、模型、Skill 与 Tool 集合，再显式更新摘要 pin",
+        "请先审查 prompt、rule、模型、预载技能与可见 Tool，再显式更新摘要 pin",
     );
   }
 
@@ -227,7 +242,7 @@ function upsertAction(input: {
     maxReentries: 0,
     onExhausted: "fail",
     ports,
-    skillIds: [],
+    preloadSkillIds: [],
     toolIds: input.toolIds ?? [],
   };
   const existing = db.select().from(actions).where(eq(actions.name, input.name)).get();
@@ -251,7 +266,7 @@ function upsertAction(input: {
       artifactPath: port.artifactPath,
       exitName: port.exitName,
     })),
-    skillIds: dto.skillIds,
+    preloadSkillIds: dto.preloadSkillIds,
     toolIds: dto.toolIds,
   };
   if (
@@ -266,14 +281,20 @@ function upsertAction(input: {
 /**
  * 汇总 Agent 在提交前必须亲自调用的机械校验器。校验函数从 src/lib 的同一个
  * 事实源生成，避免 API 与 Agent 各自维护一套会漂移的评分算法。
+ *
+ * 契约形态（ADR-0017）：这里只有 execute 模块，cordis 包装由平台在物化时生成；
+ * 结果文件只认 ctx.workspaceDir 下固定路径的产物。
  */
-const VALIDATE_RESUME_MATCH_TOOL_CODE = `import fs from "node:fs";
+const VALIDATE_RESUME_MATCH_TOOL_CODE = `/**
+ * 简历匹配结果校验：OntoFlow Tool 契约的 execute 模块（ADR-0017）。
+ * ctx 只用 workspaceDir；完整形状见 src/server/harness/tool-contract.ts 的 ToolContext。
+ */
+import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import type { Context } from "@deepseek-ai/cordis";
 
 // seed 由 tsx 转译；Function#toString 会保留 esbuild 加在嵌套函数后的 __name 调用，
-// 插件是另一份独立模块，必须在这里带上同名辅助函数，不能依赖 seed 模块的闭包。
+// execute 模块是另一份独立模块，必须在这里带上同名辅助函数，不能依赖 seed 模块的闭包。
 const __name = <T>(target: T, _value: string): T => target;
 const validationErrors = ${validateResumeMatchResult.toString()};
 
@@ -282,116 +303,110 @@ function inside(root: string, target: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-export const name = ${JSON.stringify(RESUME_MATCH_VALIDATOR_TOOL_NAME)};
-export const inject = ["tools"];
+interface Args {
+  result_path: string;
+}
 
-export function apply(ctx: Context): void {
-  ctx.tools.register({
-    name: ${JSON.stringify(RESUME_MATCH_VALIDATOR_TOOL_NAME)},
-    description:
-      "严格校验简历匹配 JSON 产物的字段、类型、总分算法、档位、否决、证据充分度和改分记录；提交结果前必须得到 valid=true。",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        result_path: {
-          type: "string",
-          description: "相对当前工作区的结果路径，固定为 match-result.json",
-        },
-      },
-      required: ["result_path"],
-    },
-    output: {
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          valid: { type: "boolean" },
-          errors: { type: "array", items: { type: "string" } },
-          resultSha256: {
-            type: "string",
-            description: "本次校验实际读取的结果文件 SHA-256；无法读取时为空字符串",
-          },
-        },
-        required: ["valid", "errors", "resultSha256"],
-      },
-      // 签名是 (args, value)：第一个参数是调用参数，第二个才是返回值。
-      render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }],
-    },
-    async execute(args: { result_path: string }) {
-      const root = fs.realpathSync.native(process.cwd());
-      if (path.isAbsolute(args.result_path)) {
-        return { valid: false, errors: ["result_path 必须是工作区相对路径"], resultSha256: "" };
-      }
-      const candidate = path.resolve(root, args.result_path);
-      const expected = path.resolve(root, ${JSON.stringify(RESUME_MATCH_RESULT_ARTIFACT)});
-      if (candidate !== expected) {
-        return {
-          valid: false,
-          errors: ["result_path 必须指向固定产物 ${RESUME_MATCH_RESULT_ARTIFACT}"],
-          resultSha256: "",
-        };
-      }
-      if (!inside(root, candidate)) {
-        return { valid: false, errors: ["result_path 越界工作区"], resultSha256: "" };
-      }
-      let stat: fs.Stats;
-      try {
-        stat = fs.lstatSync(candidate);
-      } catch {
-        return { valid: false, errors: ["结果文件不存在"], resultSha256: "" };
-      }
-      if (!stat.isFile() || stat.size > 1024 * 1024) {
-        return { valid: false, errors: ["结果必须是 1 MiB 内的普通文件"], resultSha256: "" };
-      }
-      const real = fs.realpathSync.native(candidate);
-      if (!inside(root, real)) {
-        return { valid: false, errors: ["结果文件真实路径越界工作区"], resultSha256: "" };
-      }
-      const bytes = fs.readFileSync(real);
-      const resultSha256 = createHash("sha256").update(bytes).digest("hex");
-      let value: unknown;
-      try {
-        value = JSON.parse(bytes.toString("utf8"));
-      } catch (error) {
-        return {
-          valid: false,
-          errors: ["JSON 解析失败：" + (error instanceof Error ? error.message : String(error))],
-          resultSha256,
-        };
-      }
-      const errors = validationErrors(value).slice(0, 100);
-      return { valid: errors.length === 0, errors, resultSha256 };
-    },
-  });
+interface Ctx {
+  workspaceDir: string;
+}
+
+interface Receipt {
+  valid: boolean;
+  errors: string[];
+  resultSha256: string;
+}
+
+export default async function execute(args: Args, ctx: Ctx): Promise<Receipt> {
+  const root = fs.realpathSync.native(ctx.workspaceDir);
+  if (path.isAbsolute(args.result_path)) {
+    return { valid: false, errors: ["result_path 必须是工作区相对路径"], resultSha256: "" };
+  }
+  const candidate = path.resolve(root, args.result_path);
+  const expected = path.resolve(root, ${JSON.stringify(RESUME_MATCH_RESULT_ARTIFACT)});
+  if (candidate !== expected) {
+    return {
+      valid: false,
+      errors: ["result_path 必须指向固定产物 ${RESUME_MATCH_RESULT_ARTIFACT}"],
+      resultSha256: "",
+    };
+  }
+  if (!inside(root, candidate)) {
+    return { valid: false, errors: ["result_path 越界工作区"], resultSha256: "" };
+  }
+  let stat: fs.Stats;
+  try {
+    stat = fs.lstatSync(candidate);
+  } catch {
+    return { valid: false, errors: ["结果文件不存在"], resultSha256: "" };
+  }
+  if (!stat.isFile() || stat.size > 1024 * 1024) {
+    return { valid: false, errors: ["结果必须是 1 MiB 内的普通文件"], resultSha256: "" };
+  }
+  const real = fs.realpathSync.native(candidate);
+  if (!inside(root, real)) {
+    return { valid: false, errors: ["结果文件真实路径越界工作区"], resultSha256: "" };
+  }
+  const bytes = fs.readFileSync(real);
+  const resultSha256 = createHash("sha256").update(bytes).digest("hex");
+  let value: unknown;
+  try {
+    value = JSON.parse(bytes.toString("utf8"));
+  } catch (error) {
+    return {
+      valid: false,
+      errors: ["JSON 解析失败：" + (error instanceof Error ? error.message : String(error))],
+      resultSha256,
+    };
+  }
+  const errors = validationErrors(value).slice(0, 100);
+  return { valid: errors.length === 0, errors, resultSha256 };
 }
 `;
 
-const validatorToolDigest = createHash("sha256")
-  .update(VALIDATE_RESUME_MATCH_TOOL_CODE, "utf8")
-  .digest("hex");
+const VALIDATE_RESUME_MATCH_TOOL: ToolPayload = {
+  name: "简历匹配结果校验",
+  publicName: RESUME_MATCH_VALIDATOR_TOOL_NAME,
+  description:
+    "严格校验简历匹配 JSON 产物的字段、类型、总分算法、档位、否决、证据充分度和改分记录；提交结果前必须得到 valid=true。",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      result_path: {
+        type: "string",
+        description: "相对当前工作区的结果路径，固定为 match-result.json",
+      },
+    },
+    required: ["result_path"],
+  },
+  output: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      valid: { type: "boolean" },
+      errors: { type: "array", items: { type: "string" } },
+      resultSha256: {
+        type: "string",
+        description: "本次校验实际读取的结果文件 SHA-256；无法读取时为空字符串",
+      },
+    },
+    required: ["valid", "errors", "resultSha256"],
+  },
+  timeoutMs: null,
+  code: VALIDATE_RESUME_MATCH_TOOL_CODE,
+};
+
+// 钉的是契约摘要（公名、描述、参数与输出 schema、超时、execute 源码），不是包装文件。
+const validatorToolDigest = toolContractSha256(VALIDATE_RESUME_MATCH_TOOL);
 if (validatorToolDigest !== RESUME_MATCH_VALIDATOR_TOOL_SHA256) {
   throw new Error(
-    `简历校验 Tool 源码摘要变化：期望 ${RESUME_MATCH_VALIDATOR_TOOL_SHA256}，实际 ${validatorToolDigest}；` +
+    `简历校验 Tool 契约摘要变化：期望 ${RESUME_MATCH_VALIDATOR_TOOL_SHA256}，实际 ${validatorToolDigest}；` +
       "请先审查实现，再显式更新摘要 pin",
   );
 }
 
-const workflowDescriptionDigest = resumeMatchWorkflowDescriptionSha256(
-  RESUME_MATCH_WORKFLOW_DESCRIPTION,
-);
-if (workflowDescriptionDigest !== RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256) {
-  throw new Error(
-    `简历工作流共同指令摘要变化：期望 ${RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256}，实际 ${workflowDescriptionDigest}；` +
-      "请先审查工作流级指令，再显式更新摘要 pin",
-  );
-}
-
-const validateResultTool = upsertTool({
-  name: RESUME_MATCH_VALIDATOR_TOOL_NAME,
-  description: "提交简历匹配结果前，严格校验 JSON 形状及评分字段间的一致性。",
-  code: VALIDATE_RESUME_MATCH_TOOL_CODE,
-});
+const validateResultTool = upsertTool(VALIDATE_RESUME_MATCH_TOOL);
 
 const textModel = db
   .select()
@@ -650,9 +665,29 @@ const report = upsertAction({
 
 const WF_NAME = RESUME_MATCH_WORKFLOW_NAME;
 const WF_DESCRIPTION = RESUME_MATCH_WORKFLOW_DESCRIPTION;
+// 三层设置（ADR-0016）：指令原样成为 workspace/AGENTS.md；技能集为空；Tool 集只有校验 Tool，
+// 且只对汇总 Action 可见。工作流层的行为摘要连同八个 Action 一起钉住。
+const WF_SETTINGS: Pick<WorkflowDefinition, "instructions" | "settings" | "skillIds" | "toolIds"> = {
+  instructions: RESUME_MATCH_WORKFLOW_INSTRUCTIONS,
+  settings: EMPTY_WORKFLOW_SETTINGS,
+  skillIds: [],
+  toolIds: [validateResultTool],
+};
+const workflowBehaviorDigest = resumeMatchWorkflowBehaviorSha256({
+  instructions: WF_SETTINGS.instructions,
+  settings: WF_SETTINGS.settings,
+  skillNames: [],
+  toolPublicNames: [VALIDATE_RESUME_MATCH_TOOL.publicName],
+});
+if (workflowBehaviorDigest !== RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256) {
+  throw new Error(
+    `简历工作流行为摘要变化：期望 ${RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256}，实际 ${workflowBehaviorDigest}；` +
+      "请先审查工作流指令、设置、技能集与 Tool 集，再显式更新摘要 pin",
+  );
+}
 let wf = db.select().from(workflows).where(eq(workflows.name, WF_NAME)).get();
 if (!wf) {
-  wf = unwrap(createWorkflow({ name: WF_NAME, description: WF_DESCRIPTION }));
+  wf = unwrap(createWorkflow({ name: WF_NAME, description: WF_DESCRIPTION, ...WF_SETTINGS }));
 }
 
 const currentNodeRows = db
@@ -791,9 +826,14 @@ const desiredEdges = [
 
 const byId = <T extends { id: string }>(items: T[]) =>
   [...items].sort((left, right) => left.id.localeCompare(right.id));
-const currentDefinition = {
+const currentSets = loadWorkflowSets(wf.id);
+const currentDefinition: WorkflowDefinition = {
   name: wf.name,
   description: wf.description,
+  instructions: wf.instructions,
+  settings: wf.settings,
+  skillIds: currentSets.skillIds,
+  toolIds: currentSets.toolIds,
   nodes: byId(
     currentNodeRows.map(({ id, kind, actionId, objectTypeId, label, x, y }) => ({
       id,
@@ -817,9 +857,10 @@ const currentDefinition = {
     ),
   ),
 };
-const desiredDefinition = {
+const desiredDefinition: WorkflowDefinition = {
   name: WF_NAME,
   description: WF_DESCRIPTION,
+  ...WF_SETTINGS,
   nodes: byId(desiredNodes),
   edges: byId(desiredEdges),
 };

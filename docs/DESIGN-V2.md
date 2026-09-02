@@ -18,6 +18,14 @@ v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 监控页。本
 - `runs` 新增：`workflowName`（冗余快照）、状态多一个 `cancelled`。
 - `run_results`：专用调用入口经完成门禁核验后的精确业务结果；以 runId 为主键并随 runs 级联删除，工作区/事件清理不动。
 - `node_usage`：逐 step 的用量明细，`messageId` 取 `turn:step`，`(sessionId, messageId)` 唯一。
+- 三层设置（ADR-0016 / ADR-0017）：`skill_files`（`skillId` 级联、`path`、`content` blob、`size`，PK
+  (skillId, path)）是 Skill 目录的资源文件；`action_skills` 改名 **`action_preloads`**（`actionId` 级联、
+  `skillId`、`position`），语义是预载；`action_tools` 不变，语义是可见子集；`workflows` 新增
+  `instructions`（text，默认 ""）与 `settings`（json：`{ toggles: Partial<CompositionToggles>, mcpServers: string[] }`）；
+  `workflow_skills` / `workflow_tools`（`workflowId` 级联、`skillId|toolId`、`position`）是工作流的技能集与
+  Tool 集；`tools` 是契约列：`name`（展示名）、`publicName`（`^[a-z][a-z0-9_]{0,63}$`，唯一）、
+  `description`、`parameters` json、`output` json 可空、`timeoutMs` 可空、`code`（execute 模块）；
+  `runs` 新增 `settingsSnapshot` json（`RunSettingsSnapshot`，受理时与 runs 行同一事务写入）。
 
 ## 一、通用列表查询契约（五个库的 GET 列表统一支持）
 
@@ -80,18 +88,22 @@ refCount: number   // 被引用次数，见第三节
   refs: Array<{
     kind: "workflow" | "action";     // 引用方的种类
     id: string; name: string;
-    detail: string;                   // 如「节点：集采计划审核」「输入端口：集采计划」
-    href: string;                     // 可跳转的前端路径
+    detail: string;                   // 如「节点：集采计划审核」「输入端口：集采计划」「技能集」「Tool 集」
+    href: string;                     // 可跳转的前端路径；技能集 / Tool 集指向 /workflows/<id>/settings
   }>
 }
 ```
 
-引用关系定义（唯一事实源，各处实现照此）：
+引用关系定义（唯一事实源 `src/server/references.ts`，各处实现照此；ADR-0016）：
 - Action ← `workflow_nodes.action_id`
-- Skill ← `action_skills`
-- Tool ← `action_tools`
+- Skill ← `workflow_skills`（工作流的技能集；按工作流名升序，detail「技能集」）
+- Tool ← `workflow_tools`（工作流的 Tool 集；detail「Tool 集」）
 - Object Type ← `action_ports.object_type_id` 与 `workflow_nodes.object_type_id`
 - Workflow ← 无（顶层实体，refCount 恒为 0）
+
+Action 对技能的预载（`action_preloads`）与对 Tool 的勾选（`action_tools`）**不是引用**：它们只在
+工作流已经引用的集合里做选择，工作流保存时校验子集关系（400，指名 Action 与技能 / Tool），删除
+保护不看它们。四个库的 DELETE 409 文案因此是「正被工作流引用」，`usedBy` 是工作流名。
 
 `POST /api/references/impact` 请求 `{ kind:"action", id, nextPorts: Array<{direction,name,objectTypeId}> }`，
 响应 `{ brokenEdges: Array<{workflowId, workflowName, nodeLabel, portName, reason}> }`——
@@ -107,8 +119,13 @@ refCount: number   // 被引用次数，见第三节
 | `/api/revisions/[revId]` | PATCH | `{pinned?, note?}` |
 
 写入时机：五个库的 **POST 创建**与 **PUT 更新**成功后，在同一事务内追加一条修订
-（`versionNo` = 该实体当前最大值 + 1，从 1 开始）。payload 就是该实体的完整定义
-（Action 含 ports/skillIds/toolIds；Workflow 含 nodes/edges）。
+（`versionNo` = 该实体当前最大值 + 1，从 1 开始）。payload 就是该实体的完整定义：
+Action `{ name, description, prompt, rule, modelId, reasoningEffort, maxReentries, onExhausted, ports, preloadSkillIds, toolIds }`；
+Skill `{ name, description, content, files: [{ path, contentBase64 }] }`；
+Tool `{ name, publicName, description, parameters, output, timeoutMs, code }`（完整契约）；
+Workflow `{ name, description, instructions, settings, skillIds, toolIds, nodes, edges }`；
+Object Type 同其 PUT 载荷。回滚把 payload 交回同一个 `write<Kind>()`，因此工作流回滚也重新校验
+预载 / 可见 Tool 的子集关系。
 
 ## 五、共享 UI 组件（`src/components/library/`，五个库页面必须复用，不得各写一套）
 
@@ -155,17 +172,22 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 
 ## 六、引擎改动（阶段一部分）
 
-1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口与 Tool 定义；`runActionNode`
-   不再回读这些共享库行，只把这份定义和本轮实际渲染提示写进 `run_nodes.snapshot`。Skill 只冻结
-   引用关系，正文在会话启动前从工作区活链接读取，并把当时的完整 `SKILL.md` 一并写入；链接目录
-   只由 Skill 实体 id 派生，网页改名不会让已经受理的运行断链。运行受理时验证并持有所需投影，
-   Skill 从库中删除后，目录也要等最后一个已受理运行完全收束才移除：
+1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口、工作流设置、技能集、Tool 集
+   与每个 Action 的预载 / 可见 Tool；`runActionNode` 不再回读这些共享库行，只把这份定义和本轮实际
+   渲染提示写进 `run_nodes.snapshot`。Skill 只冻结身份（id、名字、slug），正文在会话启动前从工作区
+   活链接读取，并把当时的完整 `SKILL.md` 一并写入；链接目录只由 Skill 实体 id 派生，网页改名不会让
+   已经受理的运行断链。运行受理时验证并持有所需投影，Skill 从库中删除后，目录也要等最后一个已受理
+   运行完全收束才移除：
    ```ts
    { actionId, actionName, prompt, rule, model:{providerId,modelId,displayName},
-     reasoningEffort, skills:[{name,content}], renderedPrompt,
+     reasoningEffort,
+     skills:[{id,name,slug,preloaded,content}],   // 工作流技能集全量，preloaded 标记本 Action 的预载
+     tools:[{name /* publicName */, visible}],     // 工作流 Tool 集全量，visible 标记本会话看得见
+     renderedPrompt,                                // 预载技能各一行 /<slug> 在正文之前
      ports:{inputs:[{name,objectTypeName,kind}], outputs:[{...,artifactPath,exitName}]} }
    ```
-   节点快照写入时机：会话创建前（即使随后失败也留有快照）。
+   节点快照写入时机：会话创建前（即使随后失败也留有快照）。三层设置本身的快照在 `runs.settingsSnapshot`
+   （DESIGN.md「三层设置与快照」），与 runs 行同一事务写入。
 2. **用量捕获**：dsh 每个 step 发一条不累积的 usage chunk，按
    `(sessionId, turn:step)` 唯一化写入 `node_usage`；节点收束时把该会话各 step 求和写入
    `run_nodes` 的用量字段。

@@ -3,6 +3,11 @@
 /**
  * Tool 编辑抽屉：小标签页组织「基本信息 / 被引用 / 修订历史」。
  * 基本信息里内嵌 FolderPicker（新建时先收集，实体落库后再补一次归属指派）。
+ *
+ * Tool 是 OntoFlow 契约（ADR-0017）：作者只写模型可见的公名、描述、参数 schema、
+ * 可选的返回值 schema 与超时，以及一个 execute 模块；cordis 包装归平台，作者永远
+ * 看不到 `name / inject / apply`。两个 schema 在文本框里以 JSON 编辑，客户端先按
+ * 写入口同一套规则（对象根、不含 type 数组）解析校验，见 tool-form.ts。
  */
 import { useCallback, useState } from "react";
 import {
@@ -13,60 +18,33 @@ import {
   ReferencesPanel,
   RevisionPanel,
 } from "@/components/library";
+import {
+  formatSchema,
+  parseObjectSchemaText,
+  parseOptionalObjectSchemaText,
+  parseTimeoutText,
+  publicNameProblem,
+  TOOL_EXECUTE_TEMPLATE,
+  TOOL_PARAMETERS_TEMPLATE,
+  toolCodeProblem,
+} from "./tool-form";
 
+/** tools 行：GET /api/tools/[id] 与列表项的形状 */
 export interface ToolRow {
   id: string;
+  /** 库里的展示名（中文） */
   name: string;
+  /** 模型可见的工具名，全库唯一 */
+  publicName: string;
   description: string;
+  parameters: Record<string, unknown>;
+  output: Record<string, unknown> | null;
+  timeoutMs: number | null;
+  /** execute 模块源码 */
   code: string;
   createdAt: string;
   updatedAt: string;
 }
-
-const TOOL_TEMPLATE = `/**
- * OntoFlow Tool = 一个 cordis 插件（ADR-0006）。运行时被物化到
- * <运行目录>/plugins/<工具 id>.ts，由本次运行的组合 include 进去。
- * 整张图的 Tool 会先注册到全局工具面，每个 Action 会话再只保留自己引用的 Tool。
- *
- * 模块解析从运行目录向上走到仓库根，所以 node: 内置模块与仓库的
- * node_modules 都可以 import。数据库用 node:sqlite，路径见环境变量。
- */
-import type { Context } from "@deepseek-ai/cordis";
-
-export const name = "my_tool";
-export const inject = ["tools"];
-
-export function apply(ctx: Context): void {
-  ctx.tools.register({
-    name: "my_tool",
-    description: "工具的功能描述（模型据此决定何时调用）",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        input: { type: "string", description: "参数说明" },
-      },
-      required: ["input"],
-    },
-    output: {
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: { ok: { type: "boolean" } },
-        required: ["ok"],
-      },
-      // 注意签名是 (args, value)：第一个参数是调用参数，第二个才是返回值。
-      // 写成 (result) => … 会把参数当结果，渲染出 undefined 并以
-      // 「output.render returned non-lossless JSON」失败。
-      render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }],
-    },
-    async execute(args: { input: string }) {
-      // TODO: 在这里实现工具逻辑
-      return { ok: true };
-    },
-  });
-}
-`;
 
 type TabKey = "basic" | "refs" | "revisions";
 
@@ -92,8 +70,16 @@ export function ToolEditor({
 }) {
   const [tab, setTab] = useState<TabKey>("basic");
   const [name, setName] = useState(initial?.name ?? "");
+  const [publicName, setPublicName] = useState(initial?.publicName ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
-  const [code, setCode] = useState(initial?.code ?? TOOL_TEMPLATE);
+  const [parametersText, setParametersText] = useState(
+    initial ? formatSchema(initial.parameters) : TOOL_PARAMETERS_TEMPLATE,
+  );
+  const [outputText, setOutputText] = useState(initial ? formatSchema(initial.output) : "");
+  const [timeoutText, setTimeoutText] = useState(
+    initial?.timeoutMs == null ? "" : String(initial.timeoutMs),
+  );
+  const [code, setCode] = useState(initial?.code ?? TOOL_EXECUTE_TEMPLATE);
   const [folder, setFolder] = useState<FolderRef | null>(initialFolder);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -106,20 +92,50 @@ export function ToolEditor({
       if (!res.ok) return;
       const row = (await res.json()) as ToolRow;
       setName(row.name);
+      setPublicName(row.publicName);
       setDescription(row.description);
+      setParametersText(formatSchema(row.parameters));
+      setOutputText(formatSchema(row.output));
+      setTimeoutText(row.timeoutMs == null ? "" : String(row.timeoutMs));
       setCode(row.code);
     } catch {
       // 拉取失败保持当前表单
     }
   }, [initial]);
 
+  /** 客户端先做一遍写入口的校验；通过时返回载荷，否则返回错误文案 */
+  function buildPayload():
+    | { ok: true; payload: Record<string, unknown> }
+    | { ok: false; error: string } {
+    if (!name.trim()) return { ok: false, error: "名称不能为空" };
+    const nameProblem = publicNameProblem(publicName.trim());
+    if (nameProblem) return { ok: false, error: nameProblem };
+    const parameters = parseObjectSchemaText(parametersText, "parameters");
+    if (!parameters.ok) return parameters;
+    const output = parseOptionalObjectSchemaText(outputText, "output");
+    if (!output.ok) return output;
+    const timeoutMs = parseTimeoutText(timeoutText);
+    if (!timeoutMs.ok) return timeoutMs;
+    const codeProblem = toolCodeProblem(code);
+    if (codeProblem) return { ok: false, error: codeProblem };
+    return {
+      ok: true,
+      payload: {
+        name: name.trim(),
+        publicName: publicName.trim(),
+        description,
+        parameters: parameters.value,
+        output: output.value,
+        timeoutMs: timeoutMs.value,
+        code,
+      },
+    };
+  }
+
   async function save() {
-    if (!name.trim()) {
-      setError("名称不能为空");
-      return;
-    }
-    if (!code.trim()) {
-      setError("代码不能为空");
+    const built = buildPayload();
+    if (!built.ok) {
+      setError(built.error);
       return;
     }
     setSaving(true);
@@ -130,7 +146,7 @@ export function ToolEditor({
         {
           method: initial ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), description, code }),
+          body: JSON.stringify(built.payload),
         },
       );
       if (!res.ok) {
@@ -204,17 +220,35 @@ export function ToolEditor({
         <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
           {tab === "basic" && (
             <>
-              <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  名称（将作为工具文件名 &lt;name&gt;.ts）
-                </span>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="如：save_purchase_plan"
-                  className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-sm focus:border-zinc-500 focus:outline-none"
-                />
-              </label>
+              <div className="grid grid-cols-2 gap-4">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">
+                    名称（库里的展示名）
+                  </span>
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="如：保存集采计划"
+                    className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">
+                    模型可见的工具名（publicName）
+                  </span>
+                  <input
+                    value={publicName}
+                    onChange={(e) => setPublicName(e.target.value)}
+                    placeholder="如：save_purchase_plan"
+                    spellCheck={false}
+                    className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-sm focus:border-zinc-500 focus:outline-none"
+                  />
+                </label>
+              </div>
+              <p className="-mt-2 text-xs leading-5 text-zinc-400">
+                公名小写字母开头，只含小写字母、数字与下划线，最长 64 位，全库唯一；它也是全局设置
+                「默认停用的工具」与 Action「可见 Tool」收窄时用的名字。
+              </p>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-zinc-700">
                   描述
@@ -222,7 +256,7 @@ export function ToolEditor({
                 <input
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="一句话说明这个 Tool 的用途"
+                  placeholder="一句话说明这个 Tool 的用途（模型据此决定何时调用）"
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                 />
               </label>
@@ -247,15 +281,64 @@ export function ToolEditor({
               </div>
               <label className="block">
                 <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  代码（一个 cordis 插件：导出 name / inject / apply）
+                  参数 schema（parameters，对象根 JSON Schema）
+                </span>
+                <textarea
+                  value={parametersText}
+                  onChange={(e) => setParametersText(e.target.value)}
+                  rows={9}
+                  spellCheck={false}
+                  className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
+                />
+                <span className="mt-1 block text-xs text-zinc-400">
+                  上游 JSON Schema 子集：type 不能写成数组（如 [&quot;integer&quot;, &quot;null&quot;]），可空字段直接省略。
+                </span>
+              </label>
+              <div className="grid grid-cols-[1fr_12rem] gap-4">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">
+                    返回值 schema（output，可选）
+                  </span>
+                  <textarea
+                    value={outputText}
+                    onChange={(e) => setOutputText(e.target.value)}
+                    rows={5}
+                    spellCheck={false}
+                    placeholder="留空即不校验返回值"
+                    className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">
+                    单次调用超时（timeoutMs）
+                  </span>
+                  <input
+                    value={timeoutText}
+                    onChange={(e) => setTimeoutText(e.target.value)}
+                    inputMode="numeric"
+                    placeholder="留空即不限"
+                    className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-sm focus:border-zinc-500 focus:outline-none"
+                  />
+                  <span className="mt-1 block text-xs text-zinc-400">
+                    毫秒；声明了才受超时策略约束。
+                  </span>
+                </label>
+              </div>
+              <label className="block">
+                <span className="mb-1 block text-sm font-medium text-zinc-700">
+                  execute 模块（默认导出 async function execute(args, ctx)）
                 </span>
                 <textarea
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
-                  rows={20}
+                  rows={22}
                   spellCheck={false}
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
                 />
+                <span className="mt-1 block text-xs text-zinc-400">
+                  可以 import node: 内置模块与仓库依赖；不能 import @deepseek-ai/*——能力只经 ctx 拿，
+                  cordis 包装由平台生成。
+                </span>
               </label>
             </>
           )}

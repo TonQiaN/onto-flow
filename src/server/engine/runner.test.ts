@@ -11,6 +11,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import * as schema from "../../db/schema";
 import type { PortValue } from "../../lib/values";
 import type { ResolvedActionDefinition, ResolvedWorkflow } from "../resolve";
+import type { SettingsDocument } from "../settings";
 
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
@@ -21,34 +22,48 @@ const controls = vi.hoisted(() => ({
   finalizeUnsettledActionUsage: vi.fn(),
   retainSkillProjections: vi.fn(),
   releaseSkillProjections: vi.fn(),
+  createRunWorkspace: vi.fn(),
 }));
 
-vi.mock("@/server/resolve", () => ({
-  resolveWorkflow: controls.resolveWorkflow,
-}));
-vi.mock("@/server/settings", () => ({
-  readSettings: () => ({
+vi.mock("@/server/resolve", () => {
+  class WorkflowResolveError extends Error {
+    readonly status = 422 as const;
+    constructor(
+      message: string,
+      readonly issues: Array<{ nodeId?: string; message: string }>,
+    ) {
+      super(message);
+      this.name = "WorkflowResolveError";
+    }
+  }
+  return { resolveWorkflow: controls.resolveWorkflow, WorkflowResolveError };
+});
+const GLOBAL_TOGGLES = {
+  webSearch: false,
+  fsSearch: true,
+  strReplaceEditor: true,
+  todo: true,
+  compaction: true,
+};
+const DEFAULT_INSTRUCTIONS_TEXT = "# 默认指令\n";
+function testSettings(overrides: Partial<SettingsDocument> = {}): SettingsDocument {
+  return {
     modelApiKeyEnv: "DEEPSEEK_API_KEY",
     modelBaseUrl: "",
     credentialRefs: [],
     mcpServers: [],
     disabledTools: [],
-  }),
+    toggles: { ...GLOBAL_TOGGLES },
+    defaultInstructions: DEFAULT_INSTRUCTIONS_TEXT,
+    ...overrides,
+  };
+}
+vi.mock("@/server/settings", () => ({
+  readSettings: () => testSettings(),
 }));
 vi.mock("@/server/harness/workspace", () => ({
   WORKSPACE_INPUTS_SUBDIR: "inputs",
-  createRunWorkspace: async ({ workflowId, runId }: { workflowId: string; runId: string }) => ({
-    runId,
-    workflowId,
-    runDir: "/tmp/ontoflow-runner-test/run",
-    workspaceDir: "/tmp/ontoflow-runner-test/workspace",
-    logsDir: "/tmp/ontoflow-runner-test/logs",
-    homeDir: "/tmp/ontoflow-runner-test/home",
-    pluginsDir: "/tmp/ontoflow-runner-test/plugins",
-    tmpDir: "/tmp/ontoflow-runner-test/tmp",
-    compositionPath: "/tmp/ontoflow-runner-test/cordis.yml",
-    imports: { instructionsDigest: "test", items: [] },
-  }),
+  createRunWorkspace: controls.createRunWorkspace,
 }));
 vi.mock("@/server/harness/launch", () => {
   class UnsettledRunLaunchError extends Error {
@@ -64,10 +79,11 @@ vi.mock("@/server/harness/launch", () => {
   return { launchRun: controls.launchRun, UnsettledRunLaunchError };
 });
 vi.mock("./capabilities", () => ({
-  collectCapabilities: () => ({
+  collectCapabilities: (resolved: ResolvedWorkflow) => ({
     skills: [],
-    tools: [],
-    toolNamesByActionId: new Map(),
+    skillRefs: resolved.capabilities.skills,
+    tools: resolved.capabilities.tools,
+    toolNamesByActionId: resolved.capabilities.toolNamesByActionId,
   }),
   materializeToolPlugins: () => [],
   toolFilterForAction: () => undefined,
@@ -88,7 +104,7 @@ sqlite.exec(`
 CREATE TABLE runs (
   id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
   workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
-  started_at INTEGER NOT NULL, finished_at INTEGER
+  settings_snapshot TEXT, started_at INTEGER NOT NULL, finished_at INTEGER
 );
 CREATE TABLE run_results (
   run_id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
@@ -162,7 +178,7 @@ function executionSnapshot(
           displayName: "测试模型",
         },
         ports: { inputs: [], outputs: [] },
-        skills: [],
+        preloads: [],
       },
     ]),
   );
@@ -173,14 +189,20 @@ function executionSnapshot(
   };
 }
 
-function resolvedWorkflow(): ResolvedWorkflow {
-  const workflow = {
-    id: "workflow-1",
-    name: "取消竞态测试",
+function workflowRow(id: string, name: string) {
+  return {
+    id,
+    name,
     description: "",
+    instructions: "",
+    settings: { toggles: {}, mcpServers: [] },
     createdAt: new Date(0),
     updatedAt: new Date(0),
   };
+}
+
+function resolvedWorkflow(): ResolvedWorkflow {
+  const workflow = workflowRow("workflow-1", "取消竞态测试");
   const actionNodeRow = {
     id: "action-node",
     workflowId: workflow.id,
@@ -193,6 +215,8 @@ function resolvedWorkflow(): ResolvedWorkflow {
   };
   return {
     workflow,
+    settings: { toggles: {}, mcpServers: [] },
+    subsetIssues: [],
     nodes: [
       {
         id: "input-node",
@@ -266,13 +290,7 @@ function resolvedWorkflow(): ResolvedWorkflow {
 }
 
 function materializationWorkflow(textInputLabel = "完整题目"): ResolvedWorkflow {
-  const workflow = {
-    id: "workflow-materialization",
-    name: "输入物化测试",
-    description: "",
-    createdAt: new Date(0),
-    updatedAt: new Date(0),
-  };
+  const workflow = workflowRow("workflow-materialization", "输入物化测试");
   const port = (
     name: string,
     objectTypeId: string,
@@ -291,6 +309,8 @@ function materializationWorkflow(textInputLabel = "完整题目"): ResolvedWorkf
   };
   return {
     workflow,
+    settings: { toggles: {}, mcpServers: [] },
+    subsetIssues: [],
     nodes: [
       {
         id: "text-input",
@@ -357,13 +377,7 @@ function materializationWorkflow(textInputLabel = "完整题目"): ResolvedWorkf
  * 不通过时经回边把写码节点连同环体拉回下一轮。
  */
 function loopWorkflow(): ResolvedWorkflow {
-  const workflow = {
-    id: "workflow-loop",
-    name: "回边重入测试",
-    description: "",
-    createdAt: new Date(0),
-    updatedAt: new Date(0),
-  };
+  const workflow = workflowRow("workflow-loop", "回边重入测试");
   const port = (name: string) => ({
     name,
     objectTypeId: "text-type",
@@ -392,6 +406,8 @@ function loopWorkflow(): ResolvedWorkflow {
   };
   return {
     workflow,
+    settings: { toggles: {}, mcpServers: [] },
+    subsetIssues: [],
     nodes: [
       { id: "input-node", kind: "input", label: "题目", inputs: [], outputs: [port("value")] },
       {
@@ -468,6 +484,21 @@ beforeAll(async () => {
 
 beforeEach(() => {
   sqlite.exec("DELETE FROM run_results;");
+  controls.createRunWorkspace.mockReset();
+  controls.createRunWorkspace.mockImplementation(
+    async ({ workflowId, runId }: { workflowId: string; runId: string }) => ({
+      runId,
+      workflowId,
+      runDir: "/tmp/ontoflow-runner-test/run",
+      workspaceDir: "/tmp/ontoflow-runner-test/workspace",
+      logsDir: "/tmp/ontoflow-runner-test/logs",
+      homeDir: "/tmp/ontoflow-runner-test/home",
+      pluginsDir: "/tmp/ontoflow-runner-test/plugins",
+      tmpDir: "/tmp/ontoflow-runner-test/tmp",
+      compositionPath: "/tmp/ontoflow-runner-test/cordis.yml",
+      imports: { instructionsDigest: "test", items: [] },
+    }),
+  );
   controls.launchRun.mockReset();
   controls.launchRun.mockResolvedValue({
     dispose: controls.dispose,
@@ -491,6 +522,181 @@ afterAll(() => {
   fs.rmSync(runnerTestRoot, { recursive: true, force: true });
 });
 
+describe("三层设置受理", () => {
+  function settingsWorkflow(): ResolvedWorkflow {
+    const graph = resolvedWorkflow();
+    graph.workflow.instructions = "# 工作流自己的指令\n";
+    graph.workflow.settings = { toggles: { webSearch: true, todo: false }, mcpServers: ["docs", "ghost"] };
+    graph.settings = { toggles: { webSearch: true, todo: false }, mcpServers: ["docs", "ghost"] };
+    graph.capabilities = {
+      skills: [{ id: "skill-1", name: "核对", slug: "skill-abc" }],
+      tools: [
+        {
+          id: "tool-1",
+          name: "校验",
+          publicName: "validate_result",
+          description: "",
+          parameters: { type: "object" },
+          output: null,
+          timeoutMs: null,
+          code: "export default async () => ({})",
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        },
+      ],
+      toolNamesByActionId: new Map([["action-1", ["validate_result"]]]),
+    };
+    return graph;
+  }
+
+  it("settingsSnapshot 与 runs 行同一事务落库，记全局、工作流与生效三层", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.runActionNode.mockResolvedValue({
+      outputs: { result: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    const settings = testSettings({
+      disabledTools: ["todo_write"],
+      mcpServers: [
+        { name: "docs", enabled: true, transport: "streamable-http", url: "https://example.invalid/a", headers: {} },
+        { name: "off", enabled: false, transport: "streamable-http", url: "https://example.invalid/b", headers: {} },
+        { name: "other", enabled: true, transport: "streamable-http", url: "https://example.invalid/c", headers: {} },
+      ],
+    });
+    const startedRun = await startResolvedRun(
+      settingsWorkflow(),
+      { "input-node": { kind: "text", text: "测试" } },
+      settings,
+      { source: "workflow" },
+    );
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    // 受理返回 runId 时快照已经在库里，不等执行器启动。
+    const row = sqlite
+      .prepare("SELECT settings_snapshot AS snapshot FROM runs WHERE id = ?")
+      .get(startedRun.runId) as { snapshot: string };
+    const snapshot = JSON.parse(row.snapshot);
+    expect(snapshot).toEqual({
+      global: {
+        toggles: GLOBAL_TOGGLES,
+        mcpServers: ["docs", "other"],
+        disabledTools: ["todo_write"],
+        defaultInstructionsSha256: createHash("sha256").update(DEFAULT_INSTRUCTIONS_TEXT).digest("hex"),
+      },
+      workflow: {
+        settings: { toggles: { webSearch: true, todo: false }, mcpServers: ["docs", "ghost"] },
+        instructionsSha256: createHash("sha256").update("# 工作流自己的指令\n").digest("hex"),
+        skills: [{ id: "skill-1", name: "核对", slug: "skill-abc" }],
+        tools: [{ id: "tool-1", name: "校验", publicName: "validate_result" }],
+      },
+      effective: {
+        toggles: { ...GLOBAL_TOGGLES, webSearch: true, todo: false },
+        mcpServers: ["docs"],
+      },
+    });
+
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string };
+      expect(run.status).toBe("success");
+    });
+  });
+
+  it("组合的开关取生效值、MCP 取全局启用与工作流子集的交集，指令分两处落盘", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.runActionNode.mockResolvedValue({
+      outputs: { result: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    const docs = { name: "docs", enabled: true, transport: "streamable-http" as const, url: "https://example.invalid/a", headers: {} };
+    const settings = testSettings({
+      credentialRefs: [{ name: "TEAM_API_KEY", purpose: "" }],
+      mcpServers: [
+        docs,
+        { name: "ghost", enabled: false, transport: "streamable-http", url: "https://example.invalid/b", headers: {} },
+        { name: "other", enabled: true, transport: "streamable-http", url: "https://example.invalid/c", headers: {} },
+      ],
+    });
+    const startedRun = await startResolvedRun(
+      settingsWorkflow(),
+      { "input-node": { kind: "text", text: "测试" } },
+      settings,
+      { source: "workflow" },
+    );
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string };
+      expect(run.status).toBe("success");
+    });
+
+    expect(controls.createRunWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: "# 工作流自己的指令\n",
+        homeInstructions: DEFAULT_INSTRUCTIONS_TEXT,
+      }),
+    );
+    const launch = controls.launchRun.mock.calls[0]?.[1] as {
+      credentialRefs: string[];
+      composition: { toggles: unknown; mcpServers: unknown[] };
+    };
+    expect(launch.credentialRefs).toEqual(["TEAM_API_KEY"]);
+    expect(launch.composition.toggles).toEqual({ ...GLOBAL_TOGGLES, webSearch: true, todo: false });
+    // 工作流子集里的 ghost 已停用、other 不在子集里：只剩 docs。
+    expect(launch.composition.mcpServers).toEqual([docs]);
+  });
+
+  it("工作流没有自己的指令时工作区 AGENTS.md 只留标题", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.runActionNode.mockResolvedValue({
+      outputs: { result: { kind: "text", text: "完成" } },
+      selectedExit: null,
+    });
+    const startedRun = await startResolvedRun(
+      resolvedWorkflow(),
+      { "input-node": { kind: "text", text: "测试" } },
+      testSettings(),
+      { source: "workflow" },
+    );
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      expect(controls.createRunWorkspace).toHaveBeenCalledWith(
+        expect.objectContaining({ instructions: "# 取消竞态测试\n" }),
+      );
+    });
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string };
+      expect(run.status).toBe("success");
+    });
+  });
+
+  it("预载或可见 Tool 越出工作流集合时 startRun 以 422 回绝，不创建运行", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const { WorkflowResolveError } = await import("../resolve");
+    controls.resolveWorkflow.mockRejectedValueOnce(
+      new WorkflowResolveError("工作流校验未通过", [
+        { message: "Action「汇总」预载的技能「外部技能」不在本工作流的技能集里" },
+      ]),
+    );
+    await expect(
+      startRun("workflow-1", { "input-node": { kind: "text", text: "测试" } }),
+    ).resolves.toEqual({
+      ok: false,
+      status: 422,
+      error: "工作流校验未通过",
+      issues: [{ message: "Action「汇总」预载的技能「外部技能」不在本工作流的技能集里" }],
+    });
+    expect(sqlite.prepare("SELECT count(*) AS count FROM runs").get()).toEqual({ count: 0 });
+  });
+});
+
 describe("运行输入物化", () => {
   it("Skill 投影缺失时在受理前返回 422，不创建运行或付费节点", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
@@ -502,14 +708,7 @@ describe("运行输入物化", () => {
     const startedRun = await startResolvedRun(
       graph,
       { "input-node": { kind: "text", text: "测试" } },
-      {
-        modelApiKeyEnv: "DEEPSEEK_API_KEY",
-        modelBaseUrl: "",
-        credentialRefs: [],
-        mcpServers: [],
-        disabledTools: [],
-        webSearchEnabled: false,
-      },
+      testSettings(),
       { source: "workflow" },
     );
 
@@ -545,14 +744,7 @@ describe("运行输入物化", () => {
         "text-input": { kind: "text", text: "正文" },
         "json-input": { kind: "json", json: { ok: true } },
       },
-      {
-        modelApiKeyEnv: "DEEPSEEK_API_KEY",
-        modelBaseUrl: "",
-        credentialRefs: [],
-        mcpServers: [],
-        disabledTools: [],
-        webSearchEnabled: false,
-      },
+      testSettings(),
       { source: "workflow" },
       completionGate,
     );
@@ -598,14 +790,7 @@ describe("运行输入物化", () => {
         "text-input": { kind: "text", text: "正文" },
         "json-input": { kind: "json", json: { ok: true } },
       },
-      {
-        modelApiKeyEnv: "DEEPSEEK_API_KEY",
-        modelBaseUrl: "",
-        credentialRefs: [],
-        mcpServers: [],
-        disabledTools: [],
-        webSearchEnabled: false,
-      },
+      testSettings(),
       { source: "workflow" },
       () => ({ ok: false, error: "权威回执未落库" }),
     );

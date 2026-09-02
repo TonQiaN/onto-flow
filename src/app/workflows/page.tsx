@@ -5,7 +5,8 @@
  * 工作流不参与文件夹分类（ADR-0005），所以没有左侧文件夹树。
  * 列表数据读 DESIGN-V2 第一节的信封响应 { items, total, page, pageSize }。
  * 工作流是顶层实体（refCount 恒为 0），卡片不显示引用计数，改显示节点数。
- * 卡片点开进画布；「信息」抽屉里改名称/描述、看被引用与修订历史。
+ * 卡片点开进画布；「设置」进 /workflows/[id]/settings（指令、开关、MCP 子集、技能集与 Tool 集，
+ * ADR-0016）；「信息」抽屉里改名称/描述、看被引用与修订历史。
  */
 import { useRouter } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
@@ -247,6 +248,14 @@ function WorkflowsLibrary() {
                     className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
                   >
                     信息
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => router.push(`/workflows/${workflow.id}/settings`)}
+                    title="工作流级指令、插件开关、MCP 子集、技能集与 Tool 集"
+                    className="rounded px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800"
+                  >
+                    设置
                   </button>
                   <button
                     type="button"
@@ -495,6 +504,15 @@ function WorkflowDrawer({
                 >
                   打开画布
                 </button>
+                ；指令、插件开关、MCP 子集、技能集与 Tool 集在
+                <button
+                  type="button"
+                  onClick={() => router.push(`/workflows/${workflow.id}/settings`)}
+                  className="ml-1 underline hover:text-zinc-700"
+                >
+                  工作流设置
+                </button>
+                里改。
               </p>
             </>
           )}

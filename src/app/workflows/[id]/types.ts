@@ -5,6 +5,13 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { FolderRef } from "@/components/library";
 import type { ValidationIssue } from "@/lib/graph";
+import {
+  COMPOSITION_TOGGLE_KEYS,
+  estimateTokens,
+  type CompositionToggleKey,
+  type CompositionToggles,
+  type WorkflowSettings,
+} from "@/lib/workflow-settings";
 
 export type PortKind = "text" | "file" | "json";
 export type ReasoningEffort = "off" | "low" | "high" | "max";
@@ -57,7 +64,9 @@ export interface ActionDto {
   maxReentries: number;
   onExhausted: "fail" | "accept";
   ports: ActionPortDto[];
-  skillIds: string[];
+  /** 会话开始时以 /技能 注入的技能（ADR-0016）；必须 ⊆ 所在工作流的技能集 */
+  preloadSkillIds: string[];
+  /** 本 Action 会话看得见的 Tool；必须 ⊆ 所在工作流的 Tool 集 */
   toolIds: string[];
 }
 
@@ -87,12 +96,19 @@ export interface SkillRow {
   id: string;
   name: string;
   description: string;
+  /** SKILL.md 正文；预载时整段进入会话首条消息，估算成本用它 */
+  content: string;
 }
 
 export interface ToolRow {
   id: string;
+  /** 展示名（中文） */
   name: string;
+  /** 模型看见的工具名 */
+  publicName: string;
   description: string;
+  /** 参数 schema；连同公名与描述一起进入会话的工具清单 */
+  parameters: unknown;
 }
 
 export interface NodeDto {
@@ -113,11 +129,124 @@ export interface EdgeDto {
   targetPort: string;
 }
 
+/** GET/PUT /api/workflows/[id] 里的 workflow 全量定义（ADR-0016：指令、设置与两个集合） */
+export interface WorkflowDetailRow {
+  id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  settings: WorkflowSettings;
+  skillIds: string[];
+  toolIds: string[];
+}
+
 export interface WorkflowDetail {
-  workflow: { id: string; name: string; description: string };
+  workflow: WorkflowDetailRow;
   nodes: NodeDto[];
   edges: EdgeDto[];
   issues: ValidationIssue[];
+}
+
+/** 工作流的技能集与 Tool 集 id（按 position）；画布检查器据此收窄候选 */
+export interface WorkflowSets {
+  skillIds: string[];
+  toolIds: string[];
+}
+
+/** 五个可按工作流切换的插件开关的界面文案；键顺序与 COMPOSITION_TOGGLE_KEYS 一致 */
+
+/** 三态开关的选项值：继承全局 / 强制开 / 强制关 */
+export type ToggleChoice = "inherit" | "on" | "off";
+
+export function toggleChoice(value: boolean | undefined): ToggleChoice {
+  if (value === undefined) return "inherit";
+  return value ? "on" : "off";
+}
+
+export function fromToggleChoice(choice: ToggleChoice): boolean | undefined {
+  if (choice === "inherit") return undefined;
+  return choice === "on";
+}
+
+/** 只保留写了覆盖的键：PUT 载荷里不能出现 undefined 值的键，服务端按键存在即覆盖 */
+export function pruneToggles(
+  toggles: Partial<CompositionToggles>,
+): Partial<CompositionToggles> {
+  const result: Partial<CompositionToggles> = {};
+  for (const key of COMPOSITION_TOGGLE_KEYS) {
+    const value = toggles[key];
+    if (typeof value === "boolean") result[key] = value;
+  }
+  return result;
+}
+
+/** 按集合顺序取出库里在集合中的行；集合里已不存在于库的 id 静默跳过 */
+export function pickBySet<T extends { id: string }>(
+  rows: readonly T[],
+  ids: readonly string[],
+): T[] {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  return ids.flatMap((id) => {
+    const row = byId.get(id);
+    return row ? [row] : [];
+  });
+}
+
+/** 已选中但不在集合里的 id（保序）：Action 从库里选的预载/可见 Tool 越出了工作流集合 */
+export function outsideSet(
+  selected: readonly string[],
+  set: readonly string[],
+): string[] {
+  const inSet = new Set(set);
+  return selected.filter((id) => !inSet.has(id));
+}
+
+/** 切换一个 id 在数组里的存在；保序，不重复 */
+export function toggleId(ids: readonly string[], id: string): string[] {
+  return ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id];
+}
+
+/** 预载时整段进入会话首条消息的 token 估算 */
+export function skillTokenEstimate(skill: Pick<SkillRow, "content">): number {
+  return estimateTokens(skill.content);
+}
+
+/** 进入每个可见会话工具清单的 token 估算：公名、描述与参数 schema 三者 */
+export function toolTokenEstimate(
+  tool: Pick<ToolRow, "publicName" | "description" | "parameters">,
+): number {
+  return estimateTokens(
+    JSON.stringify({
+      name: tool.publicName,
+      description: tool.description,
+      parameters: tool.parameters ?? {},
+    }),
+  );
+}
+
+/**
+ * 画布上每个技能 / Tool 被哪些 Action 节点预载 / 看见：设置页据此提示「取消勾选会让保存失败」，
+ * 因为服务端在保存时校验预载 ⊆ 技能集、可见 Tool ⊆ Tool 集。同一 Action 放了多个节点只算一次。
+ */
+export function actionNamesByEntity(
+  nodes: readonly NodeDto[],
+  actionById: ReadonlyMap<string, ActionDto>,
+  field: "preloadSkillIds" | "toolIds",
+): Map<string, string[]> {
+  const result = new Map<string, string[]>();
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    if (node.kind !== "action" || !node.actionId || seen.has(node.actionId)) continue;
+    seen.add(node.actionId);
+    const action = actionById.get(node.actionId);
+    if (!action) continue;
+    for (const id of action[field]) {
+      const names = result.get(id) ?? [];
+      if (!names.includes(action.name)) names.push(action.name);
+      result.set(id, names);
+    }
+  }
+  return result;
 }
 
 /** 节点卡片上的只读展示信息，不参与持久化（`_` 前缀，toNodeDto 天然剥离） */

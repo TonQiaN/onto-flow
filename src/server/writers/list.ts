@@ -77,6 +77,8 @@ export interface LibraryColumns {
   name: AnySQLiteColumn;
   description: AnySQLiteColumn;
   updatedAt: AnySQLiteColumn;
+  /** 关键词额外匹配的一列（Tool 的公名）；没有就只搜名字与描述。 */
+  extraSearch?: AnySQLiteColumn;
 }
 
 export interface LibraryPage {
@@ -106,9 +108,14 @@ export function selectLibraryPage(opts: {
 
   if (query.q !== "") {
     const pattern = `%${escapeLike(query.q.toLowerCase())}%`;
-    conditions.push(
-      sql`(lower(${columns.name}) like ${pattern} escape '\\' or lower(${columns.description}) like ${pattern} escape '\\')`,
-    );
+    const clauses = [
+      sql`lower(${columns.name}) like ${pattern} escape '\\'`,
+      sql`lower(${columns.description}) like ${pattern} escape '\\'`,
+      ...(columns.extraSearch === undefined
+        ? []
+        : [sql`lower(${columns.extraSearch}) like ${pattern} escape '\\'`]),
+    ];
+    conditions.push(sql`(${sql.join(clauses, sql` or `)})`);
   }
 
   if (query.folderId !== null && isFolderEntityKind(kind)) {

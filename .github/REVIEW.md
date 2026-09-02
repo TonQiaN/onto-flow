@@ -27,12 +27,14 @@
 - [ ] 实体体校验在 writer 的 `parse…Payload` 里，route 只窄化自己的非实体参数；仍是手写 `typeof` 窄化，没有引入 schema 库
 - [ ] 每次实体写入在**同一事务**里记一版修订，包含关系；回滚复用同一个 `write<Kind>()`
 - [ ] 原生 SQL 只经 `sql` 标签、只出现在查询构建器表达不了聚合的地方；`LIKE` 里的用户输入已转义并配 `escape '\'`
-- [ ] 全局设置仍是单行表里的一份 JSON 文档，整份在 `src/server/settings.ts` 写边界校验；凭据只以环境变量**名**出现，值从 Next 进程环境在 spawn 时取
+- [ ] 全局设置仍是单行表里的一份 JSON 文档，整份在 `src/server/settings.ts` 写边界校验；凭据只以环境变量**名**出现，值从 Next 进程环境在 spawn 时取；插件开关是 `toggles` 五键、默认指令是 `defaultInstructions`，没有回到 `webSearchEnabled` 或硬编码指令
+- [ ] 三层归属没有越界（Settings have three tiers）：全局给基线；工作流拥有 `instructions` / `settings.toggles`（只写覆盖键）/ `settings.mcpServers` / 技能集 / Tool 集；Action 只有预载 ⊆ 技能集、可见 Tool ⊆ Tool 集。⊆ 在**工作流保存**（`parseGraphPayload` 400，指名 Action 与技能 / Tool）与**运行受理**（`resolveWorkflow` 抛 `WorkflowResolveError` → 422）两处校验，没有挪到 Action 保存，也没有只留一处
+- [ ] 工作流 PUT 对 `instructions` / `settings` / `skillIds` / `toolIds` 仍是「缺省沿用现值、出现即整体替换」；画布只发图的保存没有清空集合
 
 ## 3. 删除保护与引用（Delete protection is per-owner and there are exactly four）
 
 - [ ] 没有新增第五种删除保护。四种是：四个可被引用库经 `usedByNames()` 答 409；workflow DELETE 的运行中守卫；folder DELETE 的重名守卫；run DELETE 经 `monitor/cleanup.ts` 的 `deleteRun` 拒绝运行中
-- [ ] 没有手写引用 join：`src/server/references.ts` 是唯一 join 引用关系的模块
+- [ ] 没有手写引用 join：`src/server/references.ts` 是唯一 join 引用关系的模块；Skill / Tool 的引用方是**工作流**（`workflow_skills` / `workflow_tools`，detail「技能集」/「Tool 集」，href 指向工作流设置页），Action 的预载与可见 Tool 不是引用、不进删除保护
 - [ ] 破坏性路径仍只在 `src/server/monitor/cleanup.ts`；没有第二处删 `run_events` / `runs` / `data/runs/<id>`
 - [ ] 文件夹路径一律用 `isFolderEntityKind` 守门；工作流没有进文件夹（ADR-0005）
 
@@ -50,7 +52,8 @@
 
 - [ ] 进程级可变状态挂在 `globalThis` 且键以 `ontoflow` 开头；模块级 `const map = new Map()` 是这条规则要防的 bug
 - [ ] 跨运行状态按 runId 键在 `globalThis` 上或落在运行自己的目录里；没有任何东西把运行串行化。`startRun` 仍是唯一准入口，满 `MAX_CONCURRENT_RUNS` 答 429 不排队
-- [ ] 运行在准入时冻结定义（`resolveWorkflow` 一次事件循环内取完），后续节点没有再回查共享库
+- [ ] 运行在准入时冻结定义（`resolveWorkflow` 一次事件循环内取完：图、Action、模型、端口、工作流指令与设置、技能集、Tool 集、每个 Action 的预载与可见 Tool），后续节点没有再回查共享库；`runs.settingsSnapshot` 与 runs 行同一事务写入，组合的开关 / MCP / Tool 插件都从冻结对象合成
+- [ ] 预载没有绕过上游手势：`buildPrompt` 在正文前每个预载技能一行 `/<slug>`，没有把 SKILL.md 正文拼进 prompt，也没有在会话创建窗口里注册技能（A Skill is a directory…）
 - [ ] 运行绝不停留在 `running`：新增的终态路径与 `executeRun` / `cancelRun` / `failWholeRun` / `reconcileOrphanRuns` 一致；`cancelled` 与 `failed` 仍是两个终态，前者 `run.error` 为 null
 - [ ] 子进程收束失败时运行被隔离（留在 `activeRuns`、保留进程句柄），预览 / 清理 / 删除 / 新运行容量 fail-closed
 - [ ] 会话事件到达即写 `run_events`（两个 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写
@@ -63,12 +66,14 @@
 - [ ] 改了 `src/server/harness/composition.ts` 的条目 → `src/server/harness/catalog.ts` 的 `PLUGIN_CATALOG` 与 `docs/harness/` 的散文同一 PR 里跟上；`catalog.test.ts` 会红，但评审要看散文是否**说对了**，不只是不红
 - [ ] 新插件的 `decision` / `mountedByDefault` / `workflowToggle` / `reason` 与它在组合里的实际挂载一致
 - [ ] 新增 `models` 行走 `scripts/seed.ts` 的 `upsertModel`；新 provider 路由有 `runCompositionEntries` 里的 adapter；没有 route 写 `models`
+- [ ] Tool 仍是契约、包装仍归平台（A Tool is an OntoFlow contract）：库里的 `code` 只是 `export default async function execute(args, ctx)`，没有 `name` / `inject` / `apply`，不 import `@deepseek-ai/*`（写入口拒绝）；上游注册形状只出现在 `src/server/harness/tool-plugin.ts`，改了它就跑 `tool-plugin.test.ts` 与 `composition-boot.test.ts`（真 boot 带样例契约 Tool 的组合）；Tool 要围栏只经 `ctx.run()`，谨慎的 Tool 以 `sandbox.enforced && !sandbox.runnerFailed` 为门禁
+- [ ] JSON Schema 子集在**写入口**拦（`objectSchemaProblem`，`parameters` 与 `output` 都查，客户端 `tool-form.ts` 同款）；没有把 type 数组的拒绝寄托在插件加载上——上游 `register` 不校验 `parameters`
 
 ## 7. 专用付费入口的行为钉死（A specialized paid invocation pins behavior, not names）
 
-- [ ] 改了参与专用入口的 Action 的 prompt / rule / provider / model / 思考强度 / 重入策略，或其 Skill / Tool 集合，或工作流级指令 → 对应的 digest pin（`src/server/resume-match-*-integrity.ts` 与其测试）**显式**审阅并更新，PR 描述写明审阅结论；种子改了而 pin 没动，测试必须红
+- [ ] 改了参与专用入口的 Action 的 prompt / rule / provider / model / 思考强度 / 重入策略 / 预载技能 / 可见 Tool，或工作流的指令 / 开关覆盖 / MCP 子集 / 技能集 / Tool 集，或校验 Tool 的任一契约字段 → 对应的三类 digest pin（`src/lib/resume-match.ts` 的 `RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256` / `RESUME_MATCH_ACTION_BEHAVIOR_SHA256` / `RESUME_MATCH_VALIDATOR_TOOL_SHA256`，经 `src/server/resume-match-*-integrity.ts` 与其测试）**显式**审阅并更新，PR 描述列出新旧值；种子改了而 pin 没动，种子与测试必须红。工作流描述与 Tool 展示名不进契约，改它们不该动 pin
 - [ ] 专用入口的业务结果仍写 `run_results`，没有塞进 `runs.imports`（运行列表 / 详情 API 会暴露它）
-- [ ] Skill 目录名仍是 id 稳定的 ASCII slug（`skillSlug()`），没有用中文库名；一定要生效的内容放进 Action 的 rule 或工作流指令，不是靠模型「判断相关」
+- [ ] Skill 目录名仍是 id 稳定的 ASCII slug（`skillSlug()`），没有用中文库名；预载手势用的也是这个 slug。一定要生效的内容放进 Action 的 rule、工作流指令或全局默认指令，必定要用的技能由 Action 预载，不是靠模型「判断相关」；预载有 token 代价，编辑器旁的估算没有被拿掉
 
 ## 8. 测试（Checks / Test fixtures）
 

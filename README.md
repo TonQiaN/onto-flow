@@ -13,11 +13,11 @@
 
 | 实体 | 说明 |
 |---|---|
-| Action | prompt + rule + 引用 skills/tools + 模型 + 思考强度 + 类型化输入输出端口 |
-| Skill | 带名字与描述的指令包，运行时投影到工作区，由模型按描述决定是否加载 |
-| Tool | cordis 插件（TS）；运行时按整图并集物化，再把每个 Action 会话收窄到它声明的 Tool |
+| Action | prompt + rule + 模型 + 思考强度 + 类型化输入输出端口，外加在所在工作流集合里选的预载技能与可见 Tool |
+| Skill | 技能目录：SKILL.md 正文 + 资源文件；归工作流技能集所有，运行时投影到工作区，由模型按描述决定是否加载，Action 可预载（等同命令行敲 `/技能`） |
+| Tool | 按本工作台契约写的执行模块（`execute(args, ctx)`）；由工作流 Tool 集带进运行，平台套 cordis 包装，再把每个 Action 会话收窄到它可见的 Tool |
 | Object Type | 产物契约类型；同类型端口才能连线 |
-| Workflow | Action + 输入/输出节点组成的有向图，保存图定义，运行全程留痕 |
+| Workflow | Action + 输入/输出节点组成的有向图，外加工作流设置（指令、插件开关覆盖、MCP 子集、技能集、Tool 集）；保存图定义，运行全程留痕 |
 
 五个库共用同一套治理能力（面向长期积累设计）：
 
@@ -33,6 +33,9 @@
 面板常驻引用数警告；只想改一处时一键「复制为新 Action 并替换本节点」）。这是当前实现；
 [ADR-0010](docs/adr/0010-nodes-own-their-definition.md) 已推翻
 [ADR-0004](docs/adr/0004-canvas-edits-the-shared-action.md)，但节点自带定义的迁移尚未落地。
+设置分三层（[ADR-0016](docs/adr/0016-three-tier-settings.md)）：全局设置给基线，工作流设置页
+（画布工具栏「工作流设置」）声明本工作流的指令、插件开关覆盖、MCP 子集、技能集与 Tool 集，
+Action 只在其中选预载技能与可见 Tool；越出集合的选择在保存与运行受理时都会被指名拒绝。
 
 运行时画布会显示"工作的流动"：六态节点视觉（未执行/执行中/已完成/失败/跳过/已取消）、
 数据已流过的连线变绿、正在供数的连线走流动虚线、节点内联显示秒表与流式输出字数、
@@ -93,12 +96,13 @@ DeepSeek V4 Flash Vision，自己用 bash 调 Poppler 抽取文本层、逐页�
 内部调用方先把岗位和简历分别传给 `/api/uploads`，再把返回的两个 file PortValue 作为
 `{ job, resume }` POST 到 `/api/internal/resume-matches`；接口返回 `runId`，随后 GET
 `/api/internal/resume-matches/<runId>` 查询状态与最终 JSON，不需要知道工作流或节点 id。POST 会在
-付费运行前核对完整图、岗位/简历各自的对象类型与解析连线、JSON 契约、汇总 Action 对校验 Tool
-的引用和内置源码摘要、校验 Tool 与 `read`/`write`/`bash`/`read_image`/`structured_output`
-均未被全局停用，以及汇总 Action 不会被回边重入；八个固定 Action 的完整
-输入输出端口集合、产物路径及 11 个指定节点间的 23 条业务边都必须精确齐全，六位评审各自都要收到岗位与
-简历、并各有且仅有一份结论进入汇总。工作流描述生成的共同指令，以及八个 Action 的 prompt、rule、
-provider/model、思考强度、重入策略与完整 Skill/Tool 集合，还必须匹配经过代码审查的 seed 摘要 pin。
+付费运行前核对完整图、岗位/简历各自的对象类型与解析连线、JSON 契约、工作流 Tool 集里的校验 Tool
+及其契约摘要（公名、描述、参数与返回值 schema、超时、execute 模块）、汇总 Action 对它可见、校验
+Tool 与 `read`/`write`/`bash`/`read_image`/`structured_output` 均未被全局停用，以及汇总 Action 不会
+被回边重入；八个固定 Action 的完整输入输出端口集合、产物路径及 11 个指定节点间的 23 条业务边都
+必须精确齐全，六位评审各自都要收到岗位与简历、并各有且仅有一份结论进入汇总。工作流级指令、
+插件开关覆盖、MCP 子集、技能集与 Tool 集，以及八个 Action 的 prompt、rule、provider/model、
+思考强度、重入策略、预载技能与可见 Tool，还必须匹配经过代码审查的 seed 摘要 pin。
 任一条件被网页编辑
 破坏都会直接拒绝，不启动模型。
 通过后执行的就是这份图、Action、模型、端口、Tool 与设置快照，并发保存不会把已预检定义替换成另一版。
@@ -137,8 +141,10 @@ npx vitest run src/rules.test.ts   # AGENTS.md 里能机械核对的约定
 一次运行创建 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；
 每个 Action 的每一轮独占一个会话。全部输入在 Action 启动前物化到共同工作区：文件保留原件，
 文字写成 Markdown，JSON 写成 JSON 文件；Action 产物也留在该工作区。连线只告诉下游「去读
-哪个路径」，不搬运全文。Skill 以目录链接进入工作区，由模型看描述按需加载；Tool 以 cordis
-插件进入本运行，再按 Action 的引用关系收窄每个会话可见面。
+哪个路径」，不搬运全文。工作流技能集以目录链接进入工作区，由模型看描述按需加载，Action 预载的
+技能在会话首条消息前以 `/技能` 手势显式注入；工作流 Tool 集经平台的 cordis 包装进入本运行，再按
+Action 的可见子集收窄每个会话可见面。工作流指令写进工作区的 `AGENTS.md`，全局默认指令写进运行
+home 的 `AGENTS.md`，两者都由上游指令载入机制读进每个会话。
 
 每个会话注册带真实 schema 的 `structured_output` 工具，模型用它报告产物路径与具名出口；实质
 内容仍写入产物文件，声明的文件没有落盘就判节点失败。dsh 会话事件到达即写 `run_events` /

@@ -53,6 +53,8 @@ export interface RunRow {
   error: string | null;
   /** 相对项目根目录的运行目录；工作区位于其 workspace/ 子目录。 */
   runDir: string | null;
+  /** 受理时冻结的三层设置（RunSettingsSnapshot，ADR-0016）；早于三层设置的运行为 null */
+  settingsSnapshot?: unknown;
   startedAt: string | number;
   finishedAt: string | number | null;
 }
@@ -255,30 +257,60 @@ export interface RunSnapshotPortView {
   kind: string;
 }
 
+/** 工作流技能集里的一项：content 是会话启动前读到的投影正文，preloaded 标记本 Action 的预载 */
+export interface RunSnapshotSkillView {
+  id: string;
+  name: string;
+  slug: string;
+  preloaded: boolean;
+  content: string;
+}
+
+/** 工作流 Tool 集里的一项公名；visible 标记本 Action 会话看得见它 */
+export interface RunSnapshotToolView {
+  name: string;
+  visible: boolean;
+}
+
 export interface RunSnapshotView {
   actionName: string;
   prompt: string;
   rule: string;
   model: string;
   reasoningEffort: string;
-  skills: Array<{ name: string; content: string }>;
-  tools: Array<{ name: string; code: string }>;
+  skills: RunSnapshotSkillView[];
+  tools: RunSnapshotToolView[];
+  /** 实际发给模型的完整提示（含预载的 /技能 行、上游产物指引与产物要求） */
+  renderedPrompt: string;
   inputs: RunSnapshotPortView[];
   outputs: RunSnapshotPortView[];
 }
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-function asNamedText(
-  value: unknown,
-  field: "content" | "code",
-): Array<{ name: string; content: string; code: string }> {
+function asSnapshotSkills(value: unknown): RunSnapshotSkillView[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
     if (typeof item !== "object" || item === null) return [];
     const o = item as Record<string, unknown>;
-    const text = str(o[field]);
-    return [{ name: str(o.name), content: text, code: text }];
+    return [
+      {
+        id: str(o.id),
+        name: str(o.name),
+        slug: str(o.slug),
+        preloaded: o.preloaded === true,
+        content: str(o.content),
+      },
+    ];
+  });
+}
+
+function asSnapshotTools(value: unknown): RunSnapshotToolView[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const o = item as Record<string, unknown>;
+    return [{ name: str(o.name), visible: o.visible === true }];
   });
 }
 
@@ -312,8 +344,9 @@ export function asRunSnapshot(value: unknown): RunSnapshotView | null {
         [str(model.providerId), str(model.modelId)].filter(Boolean).join("/")
       : "",
     reasoningEffort: str(o.reasoningEffort),
-    skills: asNamedText(o.skills, "content"),
-    tools: asNamedText(o.tools, "code"),
+    skills: asSnapshotSkills(o.skills),
+    tools: asSnapshotTools(o.tools),
+    renderedPrompt: str(o.renderedPrompt),
     inputs: asPorts(ports.inputs),
     outputs: asPorts(ports.outputs),
   };

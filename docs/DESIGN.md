@@ -28,23 +28,25 @@ src/
 
 | 路由 | 方法 | 说明 |
 |---|---|---|
-| /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建 |
-| /api/object-types/[id] 等同上三者 | GET, PUT, DELETE | 详情/更新/删除；被引用时 DELETE 返回 409 `{ error, usedBy }`；builtin 类型不可删改 |
+| /api/object-types, /api/skills, /api/tools | GET, POST | 列表/新建。Skill 载荷 `{ name, description?, content?, files?: [{ path, contentBase64 }] }`：`content` 是 SKILL.md 正文，`files` 是资源文件、缺省即空、整体替换（≤ 32 个、单个 ≤ 1 MiB、相对 `/` 分段路径、不含 `.`/`..`/空段/控制字符、≤ 200 字符、不能叫 SKILL.md、不能既是文件又是目录）；Tool 载荷是完整契约 `{ name, publicName, description?, parameters, output?, timeoutMs?, code }`（ADR-0017：`publicName` 匹配 `^[a-z][a-z0-9_]{0,63}$` 且唯一、`parameters`/`output` 是对象根 JSON Schema 且不含 type 数组、`timeoutMs` 正整数或 null、`code` 非空且不引用 `@deepseek-ai/*`） |
+| /api/object-types/[id] 等同上三者 | GET, PUT, DELETE | 详情/更新/删除；GET /api/skills/[id] 另带 `files: [{ path, contentBase64, size }]`（按 path 排序；列表 GET 不带）；被引用时 DELETE 返回 409 `{ error, usedBy }`——Skill / Tool 的引用方是工作流的技能集 / Tool 集，`usedBy` 是工作流名；builtin 类型不可删改 |
 | /api/models | GET | 模型白名单 |
-| /api/actions | GET, POST | POST/PUT 载荷含 `ports: {direction,name,objectTypeId,position,artifactPath,exitName}[]`、`maxReentries`、`onExhausted`、`skillIds`、`toolIds`，整体替换；每个输出端口的 `artifactPath` 必填，输入端口两字段归一为 null |
+| /api/actions | GET, POST | POST/PUT 载荷含 `ports: {direction,name,objectTypeId,position,artifactPath,exitName}[]`、`maxReentries`、`onExhausted`、`preloadSkillIds`（预载技能，ADR-0016）、`toolIds`（可见 Tool），整体替换；每个输出端口的 `artifactPath` 必填，输入端口两字段归一为 null。预载 ⊆ 技能集 / 可见 Tool ⊆ Tool 集不在这里校验（Action 是共享实体，只有放进工作流时才知道集合是什么），在工作流保存与运行受理两处校验 |
 | /api/actions/[id] | GET, PUT, DELETE | 被 workflow 节点引用时 DELETE 409 |
-| /api/workflows | GET, POST | |
-| /api/workflows/[id] | GET, PUT, DELETE | GET 返回 nodes+edges+校验结果；PUT 保存整图（nodes+edges 整体替换，节点 id 由前端生成保持连线引用） |
-| /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；校验不通过 422 `{ issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
+| /api/workflows | GET, POST | POST body `{ name, description?, instructions?, settings?, skillIds?, toolIds? }`，图为空 |
+| /api/workflows/[id] | GET, PUT, DELETE | GET 返回 `workflow`（含 `instructions`、`settings: { toggles, mcpServers }`、`skillIds`、`toolIds`）+ nodes + edges + 校验结果；PUT 保存整图（nodes+edges 必填、整体替换，节点 id 由前端生成保持连线引用），`instructions` / `settings` / `skillIds` / `toolIds` 缺省沿用现值、出现即整体替换（画布只发图，不清空集合）；400：`instructions` 非字符串或 > 64 KiB、`settings.toggles` 出现未知键或非布尔、`settings.mcpServers` 不是合规名字数组、集合里的 id 不存在、`Action「X」预载的技能「Y」不在工作流技能集里，请先在工作流设置里加入`（可见 Tool 同款）。修订回滚走同一路径 |
+| /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；图校验不通过、或某个 Action 的预载 / 可见 Tool 越出工作流集合（`WorkflowResolveError`）都是 422 `{ error, issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
 | /api/internal/resume-matches | POST | 「简历匹配评分」工作流调用入口；body 严格为 `{ job: PortValue(file), resume: PortValue(file) }`，调用方先经 `/api/uploads` 取得两个值；202 返回 `runId`、`statusUrl`、`historyUrl`，不暴露工作流或节点 id |
 | /api/internal/resume-matches/[id] | GET | 只查询由该入口 POST 受理并在 run 元数据中留下来源证明的运行（同名工作流经通用入口启动仍为 404）；running/failed/cancelled 时 `result=null`，success 时读取完成门禁写入 `run_results` 的精确 JSON，再次严格校验并核对完成证据里的内容 SHA-256 后返回；工作区/事件清理不影响结果，删除 run 才级联删除 |
 | /api/runs?workflowId=&status= | GET | 运行列表；每行带 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用） |
-| /api/runs/[id] | GET, DELETE | GET：run + run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage / run_results 外键级联，连同运行目录），running 时 409 |
+| /api/runs/[id] | GET, DELETE | GET：run（全列，含受理时冻结的 `settingsSnapshot`：`global` / `workflow` / `effective` 三层，见「三层设置与快照」）+ run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage / run_results 外键级联，连同运行目录），running 时 409 |
 | /api/runs/[id]/files?path= | GET | 只读预览已结束运行目录内的 UTF-8 文本文件（执行中 409；路径收敛在该 run 的 run_dir 内；256KB 按完整字符截断，二进制或非法 UTF-8 为 415）；运行详情看输入与产物正文的唯一通道（ADR-0012） |
 | /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
 | /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
 | /api/uploads | POST | multipart 单文件 → 存 `data/uploads/<uuid>/<原名>`，返回 PortValue(file) |
 | /api/documents | GET | purchase_plans 倒序列表 |
+| /api/settings | GET, PUT | 全局设置单文档 `SettingsDocument`（`modelApiKeyEnv`、`modelBaseUrl`、`credentialRefs[]`、`mcpServers[]`、`disabledTools[]`、`toggles`（五键全量，只发部分键时其余取默认，非布尔 400）、`defaultInstructions`（≤ 65536 字节，非字符串 400，空串合法））；写入口整份校验 |
+| /api/settings/composition | GET | 插件面板：按**全局**开关推导的下次组合 `entries`、停用的 MCP、`PLUGIN_CATALOG` 十组投影 `groups`、最近一次运行落盘的 `cordis.yml`；工作流覆盖不在这里，看运行的 `settingsSnapshot` |
 
 ## 约定
 
@@ -70,21 +72,44 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   子进程 stdout 只承载 JSON-RPC，stderr 写 `<run>/logs/harness.stderr.log`，运行结束在 `finally`
   中逐级收束子进程，任何路径都不得遗留 `running`。
 - **受理时执行快照**：`resolveWorkflow` 在同一个事件循环片段内一次读取图所引用的 Object Type、
-  Action、模型、端口、Skill 身份关系、Tool 源码与 Action→Tool 归属。运行受理、Tool 物化和稍后
-  启动的每个 Action 都消费同一对象；共享库的并发保存只影响下一次运行。Skill 正文仍按下条的活链接
-  契约读取，并在各 Action 会话启动前把当时可读的工作区投影全文写进节点快照；受理边界先验证并
-  持有全部 Skill 投影，库内删除不会在运行与子进程完全收束前拆掉链接目标。
-- **能力与隔离**：工作流级指令写 `workspace/AGENTS.md`；Skill 以 ASCII slug 链进
-  `workspace/.agents/skills/`，由 `skill-filesystem` 按描述发现，不强制拼进提示。Tool 以 ASCII id
-  物化为 `<run>/plugins/tool-<id>.ts` cordis 插件；工作流并集进入全局工具面后，每个 Action
-  会话再按自己的 `action_tools` 引用收窄可见面。`DSH_HOME`、`dshHome` 与 `agentsHome` 全部钉在
-  运行目录内，避免发现机器所有者的个人能力；spawn 时另注入 `TMPDIR=<run>/tmp`——上游沙箱围栏
-  允许写的临时根是 `os.tmpdir()`，它认 `TMPDIR`——于是 bash 的 `mktemp`、Python 的 `tempfile`、
-  Poppler 的临时文件与 `subprocess-local` 的完整输出文件全部落在运行目录内，随运行清理并计入磁盘
-  统计；`<run>/tmp` 是工作区的兄弟目录，不在工作区内部。`spill-local` 的 root 钉为
+  Action、模型、端口，工作流的 `instructions` 与规范化后的 `settings`（只留五个开关键的布尔与
+  字符串形的服务器名），工作流技能集（`ResolvedSkillRef { id, name, slug }`，按 position）与
+  Tool 集（`tools` 行全量），以及每个 Action 的预载（`ResolvedActionDefinition.preloads`）与可见
+  Tool 公名（`capabilities.toolNamesByActionId`）。预载 ⊄ 技能集或可见 Tool ⊄ Tool 集时抛
+  `WorkflowResolveError`（status 422，`issues[]` 一次列出全部越界项，文案指名 Action 与技能 /
+  Tool），`startRun` 与专用入口都把它映射成 422。运行受理、Tool 物化和稍后启动的每个 Action 都
+  消费同一对象；共享库的并发保存只影响下一次运行。Skill 正文仍按下条的活链接契约读取，并在各
+  Action 会话启动前把当时可读的工作区投影全文写进节点快照；受理边界先验证并持有全部 Skill 投影，
+  库内删除不会在运行与子进程完全收束前拆掉链接目标。
+- **三层设置与快照（ADR-0016）**：全局设置是基线，工作流设置声明本工作流有什么，Action 只在其中
+  收窄；Action 从不开关插件。合成规则：开关 `effectiveToggles(global.toggles, workflow.settings.toggles)`
+  （工作流只写要覆盖的键）；MCP = 全局登记且启用 ∩ 工作流子集（子集里登记表已没有的名字静默忽略）；
+  Tool 集全部物化、按 Action 可见子集收窄；技能集全部 symlink 进工作区、按 Action 预载。指令分两
+  份文件：工作流 `instructions` 原样写 `workspace/AGENTS.md`（空时写 `# <工作流名>\n`），全局
+  `defaultInstructions` 写 `<run>/home/AGENTS.md`——上游 `agent-instructions` 把 `$DSH_HOME/AGENTS.md`
+  当用户级指令读，每个 Action 会话都无条件读到；出厂默认是原先硬编码在引擎里的四条运行约定。
+  `runs.settingsSnapshot`（`RunSettingsSnapshot`：`global.{toggles, mcpServers(启用名), disabledTools,
+  defaultInstructionsSha256}`、`workflow.{settings, instructionsSha256（对实际写进 workspace/AGENTS.md
+  的文本）, skills[{id,name,slug}], tools[{id,name,publicName}]}`、`effective.{toggles, mcpServers}`）
+  在 `startResolvedRun` 里与 `runs`、`run_nodes` 行同一事务写入；运行详情的「设置快照」折叠区读它。
+  `run_nodes.snapshot` 的形状随之为：`skills: [{ id, name, slug, preloaded, content }]`（技能集全量，
+  content 在会话启动前从工作区投影读）、`tools: [{ name: publicName, visible }]`（Tool 集全量）、
+  `renderedPrompt`（预载技能各一行 `/<slug>` 在正文之前）。
+- **能力与隔离**：Skill 是目录——`data/skills/<slug>/SKILL.md` 加资源文件 `<path>`——以 ASCII
+  slug 链进 `workspace/.agents/skills/`，由 `skill-filesystem` 按描述发现；预载不拼提示，是提示正文
+  前的 `/<slug>` 行，由上游 `tool-skill` 在同一步以 `skill-invocation` 来源展开成 `<skill_content>`，
+  轨迹面板标成「预载技能：<名>」。Tool 是契约（ADR-0017）：`<run>/plugins/tool-<id>.execute.ts`
+  是库里的 execute 模块原样，`tool-<id>.ts` 是 `src/server/harness/tool-plugin.ts` 生成的 cordis
+  包装（注册公名、描述、schema、`timeoutMs`，`render` 一律 `JSON.stringify`；`execute` 组装
+  `ToolContext`：绝对路径、白名单 `env`、`signal`、经 `sandboxPolicy` + `shell` 的 `run()`），以绝对路径
+  进组合；工作流 Tool 集进入全局工具面后，每个 Action 会话再按自己的 `action_tools` 收窄可见面
+  （deny = 全局停用 ∪ (Tool 集公名 − 本 Action 可见公名)）。`DSH_HOME`、`dshHome` 与 `agentsHome`
+  全部钉在运行目录内，避免发现机器所有者的个人能力；spawn 时另注入 `TMPDIR=<run>/tmp`——上游
+  沙箱围栏允许写的临时根是 `os.tmpdir()`，它认 `TMPDIR`——于是 bash 的 `mktemp`、Python 的
+  `tempfile`、Poppler 的临时文件与 `subprocess-local` 的完整输出文件全部落在运行目录内，随运行
+  清理并计入磁盘统计；`<run>/tmp` 是工作区的兄弟目录，不在工作区内部。`spill-local` 的 root 钉为
   `<run>/home/spill`：不钉时它落在 `os.tmpdir()` 下的进程级私有目录，钉在 `home/` 而不是工作区是
-  因为 spill 文件不是产物，不该被 `glob` 扫进或被下游当成上游写的文件。Skill 目录化与 Tool
-  契约化已经决定（ADR-0016 / ADR-0017），第二批实现；本节写的是今天的行为。
+  因为 spill 文件不是产物，不该被 `glob` 扫进或被下游当成上游写的文件。
 - **提示与产物**：Action 的任务、规则、上游取用说明、产物路径和出口要求组成一条文本消息。
   文件输入与上游产物都只给工作区相对路径；实质内容不沿边复制。循环第 N 轮的产物写进
   `rounds/N/`，不覆盖前一轮（ADR-0008 / ADR-0009）。
@@ -93,8 +118,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   两阶段提交；会话收束后未捕获、出口不合法或声明的产物文件不存在，节点都失败。
 - **模型调用**：模型行的 `providerId` 是 dsh 路由；`deepseek-official` 由
   `llm-deepseek` 提供。思考强度经会话 scope 上的 `agent/request` waterfall 无条件覆盖到调用配置；
-  每节点最多 40 步、墙钟 15 分钟。图与全局设置在运行准入时冻结并传给执行器；网页保存只影响
-  下一次运行。全局停用工具从会话工具面移除，晚注册工具另由 guard 兜底。
+  每节点最多 40 步、墙钟 15 分钟。图、全局设置与工作流设置在运行准入时冻结并传给执行器；网页
+  保存只影响下一次运行。全局停用工具从会话工具面移除，晚注册工具另由 guard 兜底。
 - **组合清单**：每运行的 `cordis.yml` 由 `composition.ts` 逐行生成，是显式平铺清单，不叠上游
   bundle、不用 patch（ADR-0013）。每一行的决定、分组、开关与定制标记记在 `catalog.ts` 的
   `PLUGIN_CATALOG`，散文论证按十组记在 `docs/harness/`；`catalog.test.ts` 钉死三方——默认组合
@@ -123,22 +148,26 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   观察政策与沙箱策略；`tool-todo` 给模型 `todo_write`，`allowParallelInProgress: true`（必填项）。
   `tool-bash` 关掉 `run_in_background`，后台作业、子 agent 与上游的 workflow / goal / schedule
   一律不挂（ADR-0014）：编排只有人画的图。
-- **可切换插件**：目录里 `mountedByDefault: false` 的行（今天只有搜索三件套 web /
-  web-search-deepseek / tool-web）由 `CompositionToggles` 决定是否进入 cordis.yml。全局设置文档
-  `SettingsDocument`（`modelApiKeyEnv`、`modelBaseUrl`、`credentialRefs[]`、`mcpServers[]`、
-  `disabledTools[]`、`webSearchEnabled`）的 `webSearchEnabled`（布尔，缺省 false，非布尔值 400）
-  是它的全局默认值，受理时与凭据引用、MCP 服务器一起冻结成 `composition.toggles.webSearch` 交给
-  `launchRun`；工作流级覆盖属于第二批（ADR-0016）。搜索默认关是账目原因：DeepSeek 搜索是一次
-  独立的辅助模型请求，用量不经 `llm/stream`，本站 `node_usage` 与成本页收不到，属账外支出；
-  设置页的开关旁写明「DeepSeek 搜索的费用不计入本站用量」。打开后 `web-search-deepseek` 用与
-  模型同一把凭据引用名，`tool-web` 只开 search 不开 fetch。
-- **插件面板**：`GET /api/settings/composition` 返回 `entries`（按当前设置与开关推导的下次
-  组合）、`disabledEntries`（停用的 MCP）、`groups`（`catalog.ts` 十组的投影：每行 package /
-  decision / entryId（固定 id 或「前缀*」，无 entry 为 null）/ mounted / workflowToggle / reason /
-  customization）与 `lastComposition`（最近一次运行落盘的 cordis.yml）。`mounted` 六值：会挂载
-  （含按运行生成的 MCP / Tool 前缀行）、按开关未挂、按开关已挂、不挂（含待定）、备选、库（没有
-  entry 的库与自有模块）。面板是目录的投影而不是第二份清单：目录钉住组合（catalog.test.ts），
-  面板按组对齐 API（settings.spec.ts），三者不会各说各话。
+- **可切换插件**：目录里带 `toggle` 键的行由 `CompositionToggles`（`src/lib/workflow-settings.ts`，
+  五键）决定是否进入 cordis.yml：`webSearch` 控制搜索三件套 web / web-search-deepseek / tool-web
+  （`mountedByDefault: false`，默认关），`fsSearch` 控制 `tool-fs-search`，`strReplaceEditor` 控制
+  `tool-str-replace-editor`，`todo` 控制 `tool-todo`，`compaction` 控制 token-meter / compaction-basic /
+  tool-result-pruner 三行同进同出（后四个默认开，与上游 headless 一致）。全局设置文档
+  `SettingsDocument.toggles` 是五键的全局默认值（只发部分键时其余取默认，非布尔 400），工作流
+  设置 `settings.toggles` 只写要覆盖的键，受理时 `effectiveToggles` 合成后与凭据引用、MCP 子集一起
+  冻结成 `composition.toggles` 交给 `launchRun`（ADR-0016）；只有目录标为 `workflowToggle` 的行可被
+  工作流覆盖，`catalog.test.ts` 对每个键验开与关都只动它那些行。搜索默认关是账目原因：DeepSeek
+  搜索是一次独立的辅助模型请求，用量不经 `llm/stream`，本站 `node_usage` 与成本页收不到，属账外
+  支出；全局设置页与工作流设置页的开关旁都写明「DeepSeek 搜索的费用不计入本站用量」。打开后
+  `web-search-deepseek` 用与模型同一把凭据引用名，`tool-web` 只开 search 不开 fetch。
+- **插件面板**：`GET /api/settings/composition` 返回 `entries`（按当前**全局**设置与开关推导的
+  下次组合，不折入任何工作流的覆盖——那是每次运行 `settingsSnapshot` 的事）、`disabledEntries`
+  （停用的 MCP）、`groups`（`catalog.ts` 十组的投影：每行 package / decision / entryId（固定 id 或
+  「前缀*」，无 entry 为 null）/ mounted / workflowToggle / reason / customization）与
+  `lastComposition`（最近一次运行落盘的 cordis.yml）。`mounted` 六值：会挂载（含按运行生成的
+  MCP / Tool 前缀行）、按开关未挂、按开关已挂、不挂（含待定）、备选、库（没有 entry 的库与自有
+  模块）。面板是目录的投影而不是第二份清单：目录钉住组合（catalog.test.ts），面板按组对齐 API
+  （settings.spec.ts），三者不会各说各话。
 - **完成、取消与错误**：`session/prompt` 懒创建会话，Next 侧等待同一会话依次进入 running / idle；
   人工取消走 `session/cancel`，运行与节点进入独立的 `cancelled` 终态。节点完成后关闭会话，一次
   运行完成后关闭子进程；崩溃、超时与无产物都写入 run / run_node 的失败事实。无论发生在
@@ -222,15 +251,20 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - Object Types：需求文件(file)、需求Prompt(text)、集采计划(text)、**审核评价(json+完整schema)**、
   **归档回执(text)** + 内置 text/file/json。
 - Models：DeepSeek V4 Flash Vision / V4 Flash / V4 Pro，provider 路由均为 `deepseek-official`。
-- Skills：集采计划编制规范、集采计划审核要点（全文见 erp-seed.json）。
-- Tool：save_purchase_plan——物化为 cordis 插件并在本运行的 harness 子进程执行，用 `node:sqlite` 打开
-  `process.env.ONTOFLOW_DB_PATH` 写 purchase_plans（17 字段见 schema.ts），备份 Markdown 写
-  `ONTOFLOW_DATA_DIR/documents/<safePlanNo>-<日期>-<UUID>.md`；同一 `plan_no` 的并发 upsert 以
-  `BEGIN IMMEDIATE` 排定顺序，提交新指针后删除被替换的旧备份，返回 { id, planNo, backupPath }。
-- Actions（prompt/rule 全文见 erp-seed.json）：需求整理(deepseek, low)、集采计划生成(deepseek, high)、
-  集采计划审核(deepseek, high；输出 审核评价+集采计划透传)、集采计划归档(deepseek, low；引用 save_purchase_plan)。
+- Skills：集采计划编制规范、集采计划审核要点（全文见 erp-seed.json；两者都进工作流技能集）。
+- Tool：显示名「集采计划归档入库」、公名 `save_purchase_plan`——契约形态（ADR-0017）：execute 模块
+  在本运行的 harness 子进程里经平台包装被调用，用 `node:sqlite` 打开 `ctx.dbPath` 写 purchase_plans
+  （17 字段见 schema.ts），备份 Markdown 写 `ctx.dataDir/documents/<safePlanNo>-<日期>-<UUID>.md`
+  （不再读 `ONTOFLOW_*` 环境变量）；同一 `plan_no` 的并发 upsert 以 `BEGIN IMMEDIATE` 排定顺序，
+  提交新指针后删除被替换的旧备份，返回 { id, planNo, backupPath }。
+- Actions（prompt/rule 全文见 erp-seed.json）：需求整理(deepseek, low)、集采计划生成(deepseek, high；
+  预载《集采计划编制规范》)、集采计划审核(deepseek, high；预载《集采计划审核要点》；输出 审核评价+
+  集采计划透传)、集采计划归档(deepseek, low；可见 Tool save_purchase_plan)。规范类技能必定要用，
+  所以走预载；能力冒烟里的技能只进技能集不预载，验证的是「被发现」。
 - Workflow「采购集采计划生成」：输入节点(需求文件) → 需求整理 → 集采计划生成 → 集采计划审核 →
-  集采计划归档 → 输出节点(归档回执)；审核评价另接一个输出节点(审核评价)。
+  集采计划归档 → 输出节点(归档回执)；审核评价另接一个输出节点(审核评价)。工作流设置：
+  技能集 [编制规范, 审核要点]、Tool 集 [save_purchase_plan]、`instructions` = 「# 采购集采计划生成」
+  + 描述、`settings` 为空（全部继承全局）。
 - 示例需求文件写入 data/samples/采购需求示例.txt。
 
 ## 第二个案例种子（scripts/seed-resume.ts）
@@ -251,16 +285,23 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   与最终产物字节，并把它固化进运行元数据，同时把精确 JSON 写入 `run_results`；工作区与事件明细
   随后可以清理，成功结果不会因此失去读取依据。
   只写出合法 JSON 却跳过 Tool、回执落库失败或校验后又改文件的运行都收束为失败。Agent 自检与
-  API 边界不会各自维护一套规则。该入口还会验证汇总 Action 仍引用此 Tool、源码 SHA-256 匹配
-  内置 pin，本次全局设置快照没有停用它或 `read`/`write`/`bash`/`read_image`/
-  `structured_output` 这些必需基础工具，且汇总 Action 不在任何回边的重入范围内。受理时把
-  结果输出节点和汇总校验节点 id 与来源证明
-  一起持久化，不按 `startedAt` 反推修订。岗位 JD 与简历输入还必须
-  各自使用指定 Object Type，并分别连到解析 Action 的对应端口；八个固定 Action 的完整输入输出
-  端口集合、产物路径与 11 个指定节点间的 23 条业务边必须精确匹配种子定义，六位评审各自接齐岗位与
-  简历且各有一份结论进入汇总。工作流描述生成的共同指令，以及八个 Action 的 prompt、rule、
-  provider/model、思考强度、重入策略及完整 Skill/Tool 集合，也必须匹配经过审查的 seed 摘要 pin；
-  网页编辑任一行为定义后，专用入口拒绝付费
-  运行，直到 seed 定义与 pin 经过代码审查并同步更新。随后把通过预检的同一图、
-  Action/Tool 定义与设置对象交给 `startResolvedRun`，并发画布或共享库保存不能换掉实际执行快照。
-  缺失或被改写的契约不得先产生模型费用再失败。
+  API 边界不会各自维护一套规则。该入口还会验证工作流 Tool 集里仍有公名为
+  `validate_resume_match_result` 的 Tool、汇总 Action 仍能看见它、它的契约摘要
+  `toolContractSha256({ publicName, description, parameters, output, timeoutMs, code })`
+  （`src/lib/tool-digest.ts`，规范 JSON 键排序，schema 只改键序不算变化）匹配内置 pin
+  `RESUME_MATCH_VALIDATOR_TOOL_SHA256`，本次全局设置快照没有停用它或 `read`/`write`/`bash`/
+  `read_image`/`structured_output` 这些必需基础工具，且汇总 Action 不在任何回边的重入范围内。
+  受理时把结果输出节点和汇总校验节点 id 与来源证明一起持久化，不按 `startedAt` 反推修订。岗位
+  JD 与简历输入还必须各自使用指定 Object Type，并分别连到解析 Action 的对应端口；八个固定
+  Action 的完整输入输出端口集合、产物路径与 11 个指定节点间的 23 条业务边必须精确匹配种子定义，
+  六位评审各自接齐岗位与简历且各有一份结论进入汇总。行为摘要 pin 有两类：工作流行为摘要
+  `RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256` = sha256(规范 JSON `{ instructions, settings: { toggles,
+  mcpServers(排序) }, skillNames(排序), toolPublicNames(排序) }`)，工作流指令是常量
+  `RESUME_MATCH_WORKFLOW_INSTRUCTIONS`；每个参与 Action 的 `{ name, prompt, rule, providerId, modelId,
+  reasoningEffort, maxReentries, onExhausted, preloadSkillNames(排序), toolPublicNames(排序) }` 匹配
+  `RESUME_MATCH_ACTION_BEHAVIOR_SHA256[name]`。工作流描述与 Tool 展示名不进契约。预载或可见 Tool
+  越出工作流集合时入口回 422（issues 与 `startRun` 同形）。网页编辑任一行为定义后，专用入口拒绝
+  付费运行，直到 seed 定义与 pin 经过代码审查并同步更新（种子在 pin 不符时 throw 并打印新旧值；
+  re-pin 是显式评审动作，PR 描述列新旧值）。随后把通过预检的同一图、Action/Tool 定义与设置对象
+  交给 `startResolvedRun`，并发画布或共享库保存不能换掉实际执行快照。缺失或被改写的契约不得先
+  产生模型费用再失败。

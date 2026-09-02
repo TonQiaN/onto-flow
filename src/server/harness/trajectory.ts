@@ -96,6 +96,12 @@ export interface ReadAgentTrajectoryOptions {
   activeSessionId: string | null;
   /** 仅供单测把安全根指到临时目录。 */
   runsRoot?: string;
+  /**
+   * 技能 slug → 库里的展示名。会话日志里预载注入只记上游认得的 slug，节点快照
+   * （run_nodes.snapshot.skills）才有中文名；调用方从快照取来，轨迹面板据此
+   * 把注入行标成「预载技能：<名>」。
+   */
+  skillNames?: Readonly<Record<string, string>>;
 }
 
 interface SessionHeader {
@@ -309,7 +315,7 @@ export function readAgentTrajectory(
       if (round === null) continue;
       const active = header.id === options.activeSessionId;
       const parsed = parseSessionJsonl(content);
-      projected.push(projectSession(parsed, round, runReal, active));
+      projected.push(projectSession(parsed, round, runReal, active, options.skillNames));
     }
   }
 
@@ -474,6 +480,7 @@ export function projectSession(
   round: number,
   runDirectory = "",
   active = false,
+  skillNames: Readonly<Record<string, string>> = {},
 ): TrajectorySession {
   const { header, events } = parsed;
   const scrubRoots = [header.cwd, runDirectory].filter(
@@ -621,7 +628,7 @@ export function projectSession(
           seq: event.seq,
           kind: direct ? "user" : "context",
           lane: "input",
-          label: direct ? "用户" : contextLabel(sourceKind, source),
+          label: direct ? "用户" : contextLabel(sourceKind, source, skillNames),
           summary: summary(
             content || (direct ? "用户输入" : "上下文注入"),
             scrubRoots,
@@ -1508,9 +1515,18 @@ function isContentBlock(value: unknown): value is { type: string; [key: string]:
   return isRecord(value) && typeof value.type === "string";
 }
 
-function contextLabel(sourceKind: string, source: unknown): string {
+function contextLabel(
+  sourceKind: string,
+  source: unknown,
+  skillNames: Readonly<Record<string, string>>,
+): string {
   if (sourceKind === "agent-instructions") return "工作区指令";
   if (sourceKind === "skill") return "Skill 上下文";
+  // 预载：Action 提示里的 `/<slug>` 手势被上游 tool-skill 识别后注入的技能正文（ADR-0016）。
+  if (sourceKind === "skill-invocation") {
+    const slug = isRecord(source) && typeof source.name === "string" ? source.name : "";
+    return `预载技能：${(slug && skillNames[slug]) || slug || "未知技能"}`;
+  }
   // 日志里没有配对 compaction/summary 的检查点（未知后端）仍单独成行，只是换个名字。
   if (sourceKind === "plugin" && isRecord(source) && source.plugin === "compact") {
     return "上下文检查点";

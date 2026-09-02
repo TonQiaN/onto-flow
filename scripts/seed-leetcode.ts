@@ -6,8 +6,9 @@
  *              └──────────────────────────┘
  *                                         │通过：定稿脚本 ──→ 输出
  *
- * - 测试 Action 独享 run_python 工具（cordis 插件，经 Harness 的 ctx.shell 与
- *   统一沙箱策略跑 python3），解题 Action 看不到它——工具面按引用收窄。
+ * - 测试 Action 独享 run_python 工具（契约形态的 Tool，ADR-0017：execute 模块经 ctx.run()
+ *   走与 bash 同一道沙箱围栏跑 python3），解题 Action 看不到它——工具面按可见子集收窄。
+ * - 工作流声明 Tool 集 = [run_python]、技能集为空（ADR-0016）。
  * - 解题 Action 声明 maxReentries=4：最多迭代 5 版，耗尽仍不通过则运行失败。
  * - 每一轮都是全新会话，测试 Action 的提示明确要求每轮从零重写全部用例。
  *
@@ -26,6 +27,7 @@ import {
   workflowNodes,
   workflows,
 } from "../src/db";
+import { EMPTY_WORKFLOW_SETTINGS } from "../src/lib/workflow-settings";
 import {
   createAction,
   loadActionDto,
@@ -41,9 +43,11 @@ import { createTool, writeTool, type ToolPayload } from "../src/server/writers/t
 import type { WriteResult } from "../src/server/writers/types";
 import {
   createWorkflow,
+  loadWorkflowSets,
   writeWorkflow,
   type EdgePayload,
   type NodePayload,
+  type WorkflowDefinition,
 } from "../src/server/writers/workflow";
 
 export const LEETCODE_WORKFLOW_NAME = "LeetCode 解题验收";
@@ -51,97 +55,111 @@ export const LEETCODE_INPUT_NODE_ID = "lc-in";
 
 const RUN_PYTHON_TOOL_CODE = `/**
  * run_python：在工作区内运行一个 Python 脚本并返回退出码与输出。
- * 执行必须复用 Harness 的 shell seam 与当前会话沙箱策略，不能另起裸子进程。
+ *
+ * OntoFlow Tool 契约的 execute 模块（ADR-0017）：执行走 ctx.run()，与 bash 工具同一道
+ * 沙箱围栏；围栏没有真的包住这次执行（enforced=false 或 runnerFailed）时返回 ok=false，
+ * 拒绝把裸跑当成功。ctx 的完整形状见 src/server/harness/tool-contract.ts 的 ToolContext。
  */
-import type { Context } from "@deepseek-ai/cordis";
-import type { ToolRunContext } from "@deepseek-ai/dsh-tools";
-import type {} from "@deepseek-ai/dsh-shell";
-import type {} from "@deepseek-ai/dsh-sandbox-policy";
+interface Args {
+  script_path: string;
+  timeout_seconds?: number;
+}
 
-export const name = "run_python";
-export const inject = ["tools", "shell", "sandboxPolicy"];
+interface RunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+  sandbox: { mode: string; enforced: boolean; runnerFailed: boolean; denied: boolean };
+}
 
-export function apply(ctx: Context): void {
-  ctx.tools.register({
-    name: "run_python",
-    description: "运行工作区内的一个 Python 3 脚本，返回退出码、stdout 与 stderr（用于执行测试文件）",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        script_path: { type: "string", description: "相对当前工作区的 Python 脚本路径" },
-        timeout_seconds: { type: "integer", description: "超时秒数，默认 30" },
-      },
-      required: ["script_path"],
-    },
-    output: {
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          exitCode: { type: "integer" },
-          stdout: { type: "string" },
-          stderr: { type: "string" },
-          sandboxMode: { type: "string" },
-          sandboxEnforcement: { type: "string" },
-          sandboxDenied: { type: "boolean" },
-        },
-        required: [
-          "exitCode",
-          "stdout",
-          "stderr",
-          "sandboxMode",
-          "sandboxEnforcement",
-          "sandboxDenied",
-        ],
-      },
-      // 签名是 (args, value)：第一个是调用参数，第二个才是返回值。
-      render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }],
-    },
-    async execute(
-      args: { script_path: string; timeout_seconds?: number },
-      exec: ToolRunContext,
-    ) {
-      const segments = args.script_path.split("/");
-      if (
-        !/^[A-Za-z0-9._/-]+$/.test(args.script_path) ||
-        args.script_path.startsWith("/") ||
-        segments.includes("..") ||
-        segments.includes("")
-      ) {
-        throw new Error("script_path 必须是工作区内仅含字母、数字、点、下划线、斜杠和连字符的相对路径");
-      }
-      if (!exec.agent) throw new Error("run_python 只能由 Action 会话调用");
-      const sandboxPolicy = ctx.sandboxPolicy.resolve({ session: exec.agent.session });
-      const result = await ctx.shell.run(ctx.shell.resolve({
-        command: \`python3 -- \${args.script_path}\`,
-        workdir: exec.agent.session.header.cwd,
-        timeoutMs: Math.min(Math.max(args.timeout_seconds ?? 30, 1), 120) * 1000,
-        stdoutMaxBytes: 64 * 1024,
-        signal: exec.signal,
-        sandboxPolicy,
-      }));
-      if (result.aborted) {
-        const error = new Error("run_python 已取消");
-        error.name = "AbortError";
-        throw error;
-      }
-      if (!result.sandbox || result.sandbox.runnerFailed) {
-        throw new Error("run_python 的沙箱执行器未生效，已拒绝把裸执行当成成功");
-      }
-      const clip = (text: string | null | undefined) => (text ?? "").slice(0, 20000);
-      return {
-        exitCode: result.exitCode ?? -1,
-        stdout: clip(result.stdout.text),
-        stderr: clip(result.stderr.text || (result.timedOut ? "运行超时" : "")),
-        sandboxMode: result.sandbox.mode,
-        sandboxEnforcement: result.sandbox.enforcement ?? "unknown",
-        sandboxDenied: result.sandbox.denied,
-      };
-    },
+interface Ctx {
+  run(command: string, options?: { cwd?: string; timeoutMs?: number }): Promise<RunResult>;
+}
+
+interface Output {
+  /** false 表示脚本没有在沙箱里真正跑起来，stdout/stderr 不可信 */
+  ok: boolean;
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  sandboxMode: string;
+  sandboxEnforced: boolean;
+  sandboxDenied: boolean;
+  error?: string;
+}
+
+export default async function execute(args: Args, ctx: Ctx): Promise<Output> {
+  const segments = args.script_path.split("/");
+  if (
+    !/^[A-Za-z0-9._/-]+$/.test(args.script_path) ||
+    args.script_path.startsWith("/") ||
+    segments.includes("..") ||
+    segments.includes("")
+  ) {
+    throw new Error("script_path 必须是工作区内仅含字母、数字、点、下划线、斜杠和连字符的相对路径");
+  }
+  const result = await ctx.run(\`python3 -- \${args.script_path}\`, {
+    timeoutMs: Math.min(Math.max(args.timeout_seconds ?? 30, 1), 120) * 1000,
   });
+  const clip = (text: string) => text.slice(0, 20000);
+  const output: Output = {
+    ok: result.sandbox.enforced && !result.sandbox.runnerFailed,
+    exitCode: result.exitCode ?? -1,
+    stdout: clip(result.stdout),
+    stderr: clip(result.stderr || (result.timedOut ? "运行超时" : "")),
+    sandboxMode: result.sandbox.mode,
+    sandboxEnforced: result.sandbox.enforced,
+    sandboxDenied: result.sandbox.denied,
+  };
+  if (!output.ok) {
+    output.error = "沙箱执行器未生效，已拒绝把裸执行当成功；本次没有可信的运行结果";
+  }
+  return output;
 }
 `;
+
+const RUN_PYTHON_TOOL: ToolPayload = {
+  name: "运行 Python 脚本",
+  publicName: "run_python",
+  description:
+    "运行工作区内的一个 Python 3 脚本，返回退出码、stdout 与 stderr（用于执行测试文件）；" +
+    "ok=false 表示脚本没有在沙箱里真正跑起来，结果不可信",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      script_path: { type: "string", description: "相对当前工作区的 Python 脚本路径" },
+      timeout_seconds: { type: "integer", description: "超时秒数，默认 30，上限 120" },
+    },
+    required: ["script_path"],
+  },
+  output: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      ok: { type: "boolean" },
+      exitCode: { type: "integer" },
+      stdout: { type: "string" },
+      stderr: { type: "string" },
+      sandboxMode: { type: "string" },
+      sandboxEnforced: { type: "boolean" },
+      sandboxDenied: { type: "boolean" },
+      error: { type: "string" },
+    },
+    required: [
+      "ok",
+      "exitCode",
+      "stdout",
+      "stderr",
+      "sandboxMode",
+      "sandboxEnforced",
+      "sandboxDenied",
+    ],
+  },
+  timeoutMs: null,
+  code: RUN_PYTHON_TOOL_CODE,
+};
 
 const WRITER_PROMPT = `你要解一道 LeetCode 算法题，题目全文见「你要读的东西」。
 
@@ -163,7 +181,8 @@ const TESTER_PROMPT = `你是严格的验收测试员。题目全文与被测脚
    spec = importlib.util.spec_from_file_location("solution", "<被测脚本路径>")
    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
    每个用例断言失败时要打印输入、期望值与实际值，最后打印通过统计。
-3. 用 run_python 工具真正运行这个测试文件，依据退出码与输出判定。
+3. 用 run_python 工具真正运行这个测试文件，依据退出码与输出判定；
+   返回 ok=false 表示脚本根本没在沙箱里跑起来，本轮按不通过处理并把 error 原文写进意见。
 4. 5 个用例全部通过 → 用 read 读出被测脚本全文，原样 write 成「通过」出口的
    定稿产物，走「通过」出口。
 5. 有任何用例失败或脚本报错 → 把失败用例、期望值、实际输出与具体修复建议
@@ -199,7 +218,7 @@ function normalizedAction(payload: ActionPayload): ActionPayload {
         left.position - right.position ||
         left.name.localeCompare(right.name),
     ),
-    skillIds: [...payload.skillIds].sort(),
+    preloadSkillIds: [...payload.preloadSkillIds].sort(),
     toolIds: [...payload.toolIds].sort(),
   };
 }
@@ -225,13 +244,17 @@ function upsertObjectType(name: string, kind: "text" | "file"): string {
   return existing.id;
 }
 
-function upsertTool(name: string, description: string, code: string): string {
-  const desired: ToolPayload = { name, description, code };
-  const existing = db.select().from(tools).where(eq(tools.name, name)).get();
+/** Tool 契约（ADR-0017）按公名查找（展示名可改，公名是身份），任一字段不同就走 writer 重写。 */
+function upsertTool(desired: ToolPayload): string {
+  const existing = db.select().from(tools).where(eq(tools.publicName, desired.publicName)).get();
   if (!existing) return unwrap(createTool(desired)).id;
   const current: ToolPayload = {
     name: existing.name,
+    publicName: existing.publicName,
     description: existing.description,
+    parameters: existing.parameters,
+    output: existing.output,
+    timeoutMs: existing.timeoutMs,
     code: existing.code,
   };
   if (!sameDefinition(current, desired) || !hasRevision("tool", existing.id)) {
@@ -286,7 +309,7 @@ function upsertAction(input: {
     maxReentries: input.maxReentries ?? 0,
     onExhausted: "fail",
     ports,
-    skillIds: [],
+    preloadSkillIds: [],
     toolIds: input.toolIds ?? [],
   };
   const existing = db.select().from(actions).where(eq(actions.name, input.name)).get();
@@ -310,7 +333,7 @@ function upsertAction(input: {
       artifactPath: port.artifactPath,
       exitName: port.exitName,
     })),
-    skillIds: dto.skillIds,
+    preloadSkillIds: dto.preloadSkillIds,
     toolIds: dto.toolIds,
   };
   if (
@@ -337,11 +360,7 @@ export function seedLeetcodeWorkflow(): { workflowId: string; inputNodeId: strin
   const tFeedback = upsertObjectType("LC测试意见", "file");
   const tFinal = upsertObjectType("LC定稿脚本", "file");
 
-  const runPythonId = upsertTool(
-    "run_python",
-    "运行工作区内的 Python 3 脚本并返回退出码与输出",
-    RUN_PYTHON_TOOL_CODE,
-  );
+  const runPythonId = upsertTool(RUN_PYTHON_TOOL);
 
   const writerId = upsertAction({
     name: "LC·解题",
@@ -375,8 +394,17 @@ export function seedLeetcodeWorkflow(): { workflowId: string; inputNodeId: strin
   });
 
   const description = "解题与测试互审的循环：测试每轮重写用例并真跑，通过才产出定稿脚本";
+  // 三层设置（ADR-0016）：Tool 集声明 run_python 并只对测试 Action 可见；指令原样成为 workspace/AGENTS.md。
+  const settingsFields: Pick<WorkflowDefinition, "instructions" | "settings" | "skillIds" | "toolIds"> = {
+    instructions: [`# ${LEETCODE_WORKFLOW_NAME}`, "", description, ""].join("\n"),
+    settings: EMPTY_WORKFLOW_SETTINGS,
+    skillIds: [],
+    toolIds: [runPythonId],
+  };
   let wf = db.select().from(workflows).where(eq(workflows.name, LEETCODE_WORKFLOW_NAME)).get();
-  if (!wf) wf = unwrap(createWorkflow({ name: LEETCODE_WORKFLOW_NAME, description }));
+  if (!wf) {
+    wf = unwrap(createWorkflow({ name: LEETCODE_WORKFLOW_NAME, description, ...settingsFields }));
+  }
 
   const desiredNodes: NodePayload[] = [
     {
@@ -438,9 +466,14 @@ export function seedLeetcodeWorkflow(): { workflowId: string; inputNodeId: strin
     .all();
   const byId = <T extends { id: string }>(items: T[]) =>
     [...items].sort((left, right) => left.id.localeCompare(right.id));
-  const currentDefinition = {
+  const currentSets = loadWorkflowSets(wf.id);
+  const currentDefinition: WorkflowDefinition = {
     name: wf.name,
     description: wf.description,
+    instructions: wf.instructions,
+    settings: wf.settings,
+    skillIds: currentSets.skillIds,
+    toolIds: currentSets.toolIds,
     nodes: byId(
       currentNodeRows.map(({ id, kind, actionId, objectTypeId, label, x, y }) => ({
         id,
@@ -464,9 +497,10 @@ export function seedLeetcodeWorkflow(): { workflowId: string; inputNodeId: strin
       ),
     ),
   };
-  const desiredDefinition = {
+  const desiredDefinition: WorkflowDefinition = {
     name: LEETCODE_WORKFLOW_NAME,
     description,
+    ...settingsFields,
     nodes: byId(desiredNodes),
     edges: byId(desiredEdges),
   };
