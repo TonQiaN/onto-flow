@@ -34,7 +34,7 @@ src/
 | /api/actions | GET, POST | POST/PUT 载荷含 `ports: {direction,name,objectTypeId,position,artifactPath,exitName}[]`、`maxReentries`、`onExhausted`、`preloadSkillIds`（预载技能，ADR-0016）、`toolIds`（可见 Tool），整体替换；每个输出端口的 `artifactPath` 必填，输入端口两字段归一为 null。预载 ⊆ 技能集 / 可见 Tool ⊆ Tool 集不在这里校验（Action 是共享实体，只有放进工作流时才知道集合是什么），在工作流保存与运行受理两处校验 |
 | /api/actions/[id] | GET, PUT, DELETE | 被 workflow 节点引用时 DELETE 409 |
 | /api/workflows | GET, POST | POST body `{ name, description?, instructions?, settings?, skillIds?, toolIds? }`，图为空 |
-| /api/workflows/[id] | GET, PUT, DELETE | GET 返回 `workflow`（含 `instructions`、`settings: { toggles, mcpServers }`、`skillIds`、`toolIds`）+ nodes + edges + 校验结果；PUT 保存整图（nodes+edges 必填、整体替换，节点 id 由前端生成保持连线引用），`instructions` / `settings` / `skillIds` / `toolIds` 缺省沿用现值、出现即整体替换（画布只发图，不清空集合）；400：`instructions` 非字符串或 > 64 KiB、`settings.toggles` 出现未知键或非布尔、`settings.mcpServers` 不是合规名字数组、集合里的 id 不存在、`Action「X」预载的技能「Y」不在工作流技能集里，请先在工作流设置里加入`（可见 Tool 同款）。修订回滚走同一路径 |
+| /api/workflows/[id] | GET, PUT, DELETE | GET 返回 `workflow`（含 `instructions`、`settings: { toggles, mcpServers }`、`skillIds`、`toolIds`）+ nodes + edges + 校验结果；PUT 的每个部分都是「缺省沿用现值、出现即整体替换」：`nodes` 与 `edges` 必须同时提供或同时省略（只给其一 400 `nodes 与 edges 必须同时提供或同时省略`），提供时整图替换（节点 id 由前端生成保持连线引用），同时省略时沿用库里当前的图、⊆ 校验与修订载荷都按当前图；`instructions` / `settings` / `skillIds` / `toolIds` 同理。画布只发图（不清空集合），设置页只发设置与集合（不发图，画布并发保存的图不会被设置页读来的旧图覆盖）；400：`instructions` 非字符串或 > 64 KiB、`settings.toggles` 出现未知键或非布尔、`settings.mcpServers` 不是合规名字数组、集合里的 id 不存在、`Action「X」预载的技能「Y」不在工作流技能集里，请先在工作流设置里加入`（可见 Tool 同款）。修订回滚走同一路径 |
 | /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；图校验不通过、或某个 Action 的预载 / 可见 Tool 越出工作流集合（`WorkflowResolveError`）都是 422 `{ error, issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
 | /api/internal/resume-matches | POST | 「简历匹配评分」工作流调用入口；body 严格为 `{ job: PortValue(file), resume: PortValue(file) }`，调用方先经 `/api/uploads` 取得两个值；202 返回 `runId`、`statusUrl`、`historyUrl`，不暴露工作流或节点 id |
 | /api/internal/resume-matches/[id] | GET | 只查询由该入口 POST 受理并在 run 元数据中留下来源证明的运行（同名工作流经通用入口启动仍为 404）；running/failed/cancelled 时 `result=null`，success 时读取完成门禁写入 `run_results` 的精确 JSON，再次严格校验并核对完成证据里的内容 SHA-256 后返回；工作区/事件清理不影响结果，删除 run 才级联删除 |
@@ -134,7 +134,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `tool-result-pruner`（8192 码点以上的工具结果改写为前 4096 + 后 1024）无模型剪枝，仍超才以一次
   独立的 `llm/stream` 调用把最旧的完整单元摘要成 `<compacted-summary>` 检查点；摘要失败不替换、
   带完整历史继续；摘要路由默认回退到 Action 自己的模型。摘要那次调用的用量不以 usage chunk
-  到达，按「事件、轨迹与用量」一条经 `compaction/summary` 计费，不是账外支出。任何工具的纯文本
+  到达，按「事件、轨迹与用量」一条经 `compaction/summary` 计费，不是账外支出（例外：摘要在提交
+  阶段失败时上游不发 `compaction/summary`，那一次已付费的调用无法计费，见该条）。任何工具的纯文本
   结果超过 `spill-policy` 的 `maxInlineBytes`（50000 字节；必须显式写，上游省略该键等于整个策略
   禁用）时替换为首尾预览加 spill 文件路径，模型用 `read` 的 offset/limit 回读；`read` 的结果本身
   不经 spill。
@@ -158,15 +159,21 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   冻结成 `composition.toggles` 交给 `launchRun`（ADR-0016）；只有目录标为 `workflowToggle` 的行可被
   工作流覆盖，`catalog.test.ts` 对每个键验开与关都只动它那些行。搜索默认关是账目原因：DeepSeek
   搜索是一次独立的辅助模型请求，用量不经 `llm/stream`，本站 `node_usage` 与成本页收不到，属账外
-  支出；全局设置页与工作流设置页的开关旁都写明「DeepSeek 搜索的费用不计入本站用量」。打开后
+  支出；两个设置页的开关旁都写明这一点，文案各有一份：全局设置页用自己的 `TOGGLE_COPY`
+  （「DeepSeek 搜索的费用不计入本站用量：……是账外支出」），工作流设置页与运行页的设置快照用
+  `COMPOSITION_TOGGLE_LABELS`（`src/lib/workflow-settings.ts`，「……本站成本页收不到，是账外支出」）。打开后
   `web-search-deepseek` 用与模型同一把凭据引用名，`tool-web` 只开 search 不开 fetch。
 - **插件面板**：`GET /api/settings/composition` 返回 `entries`（按当前**全局**设置与开关推导的
   下次组合，不折入任何工作流的覆盖——那是每次运行 `settingsSnapshot` 的事）、`disabledEntries`
   （停用的 MCP）、`groups`（`catalog.ts` 十组的投影：每行 package / decision / entryId（固定 id 或
   「前缀*」，无 entry 为 null）/ mounted / workflowToggle / reason / customization）与
-  `lastComposition`（最近一次运行落盘的 cordis.yml）。`mounted` 六值：会挂载（含按运行生成的
-  MCP / Tool 前缀行）、按开关未挂、按开关已挂、不挂（含待定）、备选、库（没有 entry 的库与自有
-  模块）。面板是目录的投影而不是第二份清单：目录钉住组合（catalog.test.ts），面板按组对齐 API
+  `lastComposition`（最近一次运行落盘的 cordis.yml）。`mounted` 八值，按路由的 `mountedState`
+  逐条判定：决定为不挂或待定 → 不挂；备选 → 备选；没有 entry 的行按决定分两值——自有 → 自有
+  （生成器 / 入口 / 会话内改造），其余 → 库；前缀行（MCP / Tool 插件，按运行生成）看推导组合里
+  有没有解析到本行的实例（经 `catalogRowForEntryId`，不是裸前缀匹配——`tool-` 也是上游 tool-fs
+  等固定 id 的前缀）：有 → 会挂载，没有 → 按运行生成；固定 id 且 `mountedByDefault: false` 的行
+  按 entry 在不在组合里给按开关已挂 / 按开关未挂，其余固定 id 行给会挂载 / 不挂。面板是目录的
+  投影而不是第二份清单：目录钉住组合（catalog.test.ts），面板按组对齐 API
   （settings.spec.ts），三者不会各说各话。
 - **完成、取消与错误**：`session/prompt` 懒创建会话，Next 侧等待同一会话依次进入 running / idle；
   人工取消走 `session/cancel`，运行与节点进入独立的 `cancelled` 终态。节点完成后关闭会话，一次
@@ -187,7 +194,10 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   撞键，同一事件重放只落一行），provider/model 取事件自带的摘要路由（缺省回退会话路由），
   variant 记 `compaction`（摘要不经思考强度 waterfall，不能冒充会话档位），费用按到达时刻计峰谷；
   `action.ts` 按会话对 `node_usage` 求和，摘要费用随之进入 `run_nodes.cost` 与 usage 结算事件，
-  不另设桶、不重复计。`run_events` 的 compaction 事件：`compaction/start` 落
+  不另设桶、不重复计。例外：摘要在提交阶段失败（中止、表层被并发改动、commit 抛错）时上游只发
+  带 `error` 的 `compaction/end`、不发带 usage 的 `compaction/summary`，那一次已付费的调用无法
+  计费——这是上游事件模型的限制，成本页会少算，不能把这条链路说成完整计费。`run_events` 的
+  compaction 事件：`compaction/start` 落
   `{ op: "summary", status: "running", compactionId, turn }`；`compaction/summary` 落
   `{ op: "summary", status: "ok", compactionId, provider, model, summaryChars, shadowedNodes,
   shadowedTokenCount, inputTokens, outputTokens, reasoningTokens, cacheReadTokens,
@@ -246,7 +256,7 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - **HMR 下的运行所有权**：取消标记与在跑子进程句柄挂在 `globalThis`，使开发期 HMR 不会丢失
   对现存运行的取消和收束能力；运行结束必须删除对应句柄与取消标记。
 
-## 首个案例种子（scripts/seed.ts，幂等：按 name upsert；内容取自 scratchpad research/erp-seed.json）
+## 首个案例种子（scripts/seed.ts，幂等：Action / Skill / 对象类型按 name upsert，Tool 按公名 upsert、展示名已被别的公名占用时点名报错；内容取自 scratchpad research/erp-seed.json）
 
 - Object Types：需求文件(file)、需求Prompt(text)、集采计划(text)、**审核评价(json+完整schema)**、
   **归档回执(text)** + 内置 text/file/json。

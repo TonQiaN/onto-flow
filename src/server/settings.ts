@@ -23,6 +23,7 @@ import {
   COMPOSITION_TOGGLE_KEYS,
   DEFAULT_COMPOSITION_TOGGLES,
   type CompositionToggles,
+  DEFAULT_INSTRUCTIONS_MAX_BYTES,
 } from "@/lib/workflow-settings";
 
 /** 一条凭据引用登记：只有名字与用途。 */
@@ -69,9 +70,6 @@ export const DEFAULT_INSTRUCTIONS = [
   "- 声明了的产物必须真的写出来：文件不存在，本节点即判失败。",
   "",
 ].join("\n");
-
-/** 默认指令的字节上限，对齐组合里 agent-instructions 的 maxBytes。 */
-export const DEFAULT_INSTRUCTIONS_MAX_BYTES = 65_536;
 
 export const DEFAULT_SETTINGS: SettingsDocument = {
   modelApiKeyEnv: DEFAULT_CREDENTIAL_ENV,

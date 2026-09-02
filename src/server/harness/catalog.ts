@@ -160,6 +160,12 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     entry: { id: "credentials" },
     workflowToggle: false,
     reason: "从子进程环境按引用名解析凭据；$DSH_HOME 已钉进运行目录，不会读到机器上的 .env。",
+    customization: {
+      kind: "配置",
+      what: "watch=false。",
+      why: "上游默认对 <run>/home/.credentials.yaml 起一个 chokidar watcher，这个文件在运行里本就不存在；与 skill-filesystem 同理，并发运行下文件句柄不该随运行数线性增长。",
+      upstream: { path: "packages/credentials/credentials-local/src/index.ts", version: V },
+    },
   },
   {
     package: "@deepseek-ai/dsh-session",
@@ -601,8 +607,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     reason: "从工作区 AGENTS.md 载入工作流级共同指令；工作区内的空 .git 把 projectRoot 钉在运行边界内。",
     customization: {
       kind: "配置",
-      what: "maxBytes 65536（与上游 base 相同）。",
-      why: "指令超限该在编辑期发现，不该在运行期被静默截断。",
+      what: "maxBytes = 全局默认指令上限 + 工作流指令上限 + 帧余量（65536 + 65536 + 4096），不是上游 base 的 65536。",
+      why: "上游预算是整批的：$DSH_HOME/AGENTS.md 与 workspace/AGENTS.md 合在一起算，超限先整份省略前者；两份各 64 KiB 的写入口上限合计超过 65536 时全局默认指令会被静默丢掉。预算盖过两份之和，超限只可能在编辑期出现。",
     },
   },
   {
@@ -1489,11 +1495,15 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
 
 /** 组合 entry id 是否被目录里某一行声明（固定 id 或前缀）。 */
 export function catalogRowForEntryId(entryId: string): PluginCatalogRow | undefined {
-  return PLUGIN_CATALOG.find((row) => {
-    if (row.entry === undefined) return false;
-    if ("id" in row.entry) return row.entry.id === entryId;
-    return entryId.startsWith(row.entry.idPrefix);
-  });
+  // 先精确匹配固定 id，再退到前缀行：否则一个没进目录的固定 `tool-*` / `mcp-*` 行会被 Tool 插件
+  // 或 MCP 的前缀行吸收，三方一致测试对上游 dsh-tool-* 整族失效。
+  const exact = PLUGIN_CATALOG.find(
+    (row) => row.entry !== undefined && "id" in row.entry && row.entry.id === entryId,
+  );
+  if (exact) return exact;
+  return PLUGIN_CATALOG.find(
+    (row) => row.entry !== undefined && "idPrefix" in row.entry && entryId.startsWith(row.entry.idPrefix),
+  );
 }
 
 /** 目录里应当出现在默认组合的固定行。 */

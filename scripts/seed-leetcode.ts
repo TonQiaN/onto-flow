@@ -247,7 +247,17 @@ function upsertObjectType(name: string, kind: "text" | "file"): string {
 /** Tool 契约（ADR-0017）按公名查找（展示名可改，公名是身份），任一字段不同就走 writer 重写。 */
 function upsertTool(desired: ToolPayload): string {
   const existing = db.select().from(tools).where(eq(tools.publicName, desired.publicName)).get();
-  if (!existing) return unwrap(createTool(desired)).id;
+  if (!existing) {
+    // 公名不在库里、展示名却已被另一个 Tool 占用：不按展示名猜身份（会把别人的契约整份覆盖），
+    // 也不让 UNIQUE(name) 以一句 constraint failed 收场；点名冲突让人自己处理。
+    const taken = db.select({ publicName: tools.publicName }).from(tools).where(eq(tools.name, desired.name)).get();
+    if (taken) {
+      throw new Error(
+        `种子 Tool「${desired.name}」（公名 ${desired.publicName}）在库里找不到，但展示名已被公名为 ${taken.publicName} 的 Tool 占用：改掉或删掉那个 Tool 再重跑种子`,
+      );
+    }
+    return unwrap(createTool(desired)).id;
+  }
   const current: ToolPayload = {
     name: existing.name,
     publicName: existing.publicName,

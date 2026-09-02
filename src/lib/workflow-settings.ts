@@ -46,6 +46,19 @@ export interface WorkflowSettings {
 
 export const EMPTY_WORKFLOW_SETTINGS: WorkflowSettings = { toggles: {}, mcpServers: [] };
 
+/** 工作流指令（workspace/AGENTS.md）与全局默认指令（<run>/home/AGENTS.md）各自的上限：64 KiB。 */
+export const WORKFLOW_INSTRUCTIONS_MAX_BYTES = 64 * 1024;
+export const DEFAULT_INSTRUCTIONS_MAX_BYTES = 64 * 1024;
+
+/**
+ * 每运行组合里 agent-instructions 的整批预算。上游把 $DSH_HOME/AGENTS.md（全局默认指令）与
+ * workspace/AGENTS.md（工作流指令）合在一起算，超限时先整份省略排在前面的用户级文件——两份
+ * 各 64 KiB 的写入口上限合计超过上游 base 的 65536 时，全局默认指令会被静默丢掉。预算盖过
+ * 两份之和再留帧余量（system-reminder 框、每个文件的段落头与预算标记），超限只可能在编辑期出现。
+ */
+export const INSTRUCTIONS_BATCH_MAX_BYTES =
+  DEFAULT_INSTRUCTIONS_MAX_BYTES + WORKFLOW_INSTRUCTIONS_MAX_BYTES + 4_096;
+
 /** 合成生效开关：工作流覆盖压在全局默认之上。 */
 export function effectiveToggles(
   global: CompositionToggles,
@@ -102,7 +115,7 @@ export function estimateTokens(text: string): number {
   return Math.ceil(cjk / 1.5 + other / 4);
 }
 
-/** 五个开关在界面上的名字与一句说明；设置页、工作流设置页与运行快照共用。 */
+/** 五个开关在界面上的名字与一句说明；工作流设置页与运行页的设置快照共用。全局设置页自带更长的 TOGGLE_COPY，不用这份。 */
 export const COMPOSITION_TOGGLE_LABELS: Record<
   CompositionToggleKey,
   { label: string; hint: string }

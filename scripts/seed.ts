@@ -433,6 +433,16 @@ function upsertSkill(input: {
 }
 
 /** Tool 契约（ADR-0017）：按展示名查找，契约字段整体覆盖。 */
+/** 展示名已被别的公名占用时点名报错：种子只认公名，不按展示名猜身份。 */
+function assertToolNameFree(name: string, publicName: string): void {
+  const taken = db.select({ publicName: tools.publicName }).from(tools).where(eq(tools.name, name)).get();
+  if (taken && taken.publicName !== publicName) {
+    throw new Error(
+      `种子 Tool「${name}」（公名 ${publicName}）在库里找不到，但展示名已被公名为 ${taken.publicName} 的 Tool 占用：改掉或删掉那个 Tool 再重跑种子`,
+    );
+  }
+}
+
 function upsertTool(input: {
   name: string;
   publicName: string;
@@ -451,15 +461,14 @@ function upsertTool(input: {
     code: input.code,
   };
   // 幂等键是模型可见的公名：展示名是可以改的中文，公名才是全库唯一的身份。
-  const existing = db
-    .select()
-    .from(tools)
-    .where(eq(tools.publicName, input.publicName))
-    .get();
+  const existing = db.select().from(tools).where(eq(tools.publicName, input.publicName)).get();
   if (existing) {
     db.update(tools).set({ name: input.name, ...values }).where(eq(tools.id, existing.id)).run();
     return existing.id;
   }
+  // 公名不在库里、展示名却已被另一个 Tool 占用：不能按展示名猜它就是种子（会把别人的契约整份
+  // 覆盖），也不能让 UNIQUE(name) 以一句 constraint failed 收场；点名冲突让人自己处理。
+  assertToolNameFree(input.name, input.publicName);
   const id = crypto.randomUUID();
   db.insert(tools)
     .values({ id, name: input.name, ...values })

@@ -35,8 +35,9 @@ const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/
 
 /**
  * 资源文件路径必须能原样落到 data/skills/<slug>/<path> 之下：绝对路径、`..`、空段、
- * 控制字符与反斜杠都拒绝；根下的 SKILL.md 由正文生成，资源文件不能顶替它
- * （macOS 文件系统不分大小写，所以按不区分大小写比较）。
+ * 控制字符与反斜杠都拒绝；根下的 SKILL.md 由正文生成，资源文件不能顶替它、也不能拿它当
+ * 根下目录名（macOS 文件系统不分大小写，按不区分大小写比较；重复与文件/目录冲突还要折叠
+ * Unicode 正规化，见 foldSkillPath）。
  */
 function skillFilePathProblem(path: string): string | null {
   if (path === "") return "资源文件路径不能为空";
@@ -55,6 +56,11 @@ function skillFilePathProblem(path: string): string | null {
   return null;
 }
 
+/** 文件系统眼里的同一路径：折叠大小写与 Unicode 正规化（APFS / HFS+ 两者都不区分）。 */
+function foldSkillPath(path: string): string {
+  return path.normalize("NFC").toLowerCase();
+}
+
 function parseSkillFiles(raw: unknown): WriteResult<SkillFilePayload[]> {
   if (raw === undefined) return writeOk([]);
   if (!Array.isArray(raw)) return writeFail(400, "files 必须是数组");
@@ -70,9 +76,10 @@ function parseSkillFiles(raw: unknown): WriteResult<SkillFilePayload[]> {
     const path = typeof file.path === "string" ? file.path : "";
     const problem = skillFilePathProblem(path);
     if (problem) return writeFail(400, problem);
-    // macOS 默认文件系统不分大小写：Readme.md 与 readme.md 会落到同一个文件，按折叠后的键查重
-    if (paths.has(path.toLowerCase()))
-      return writeFail(400, `资源文件路径重复（不区分大小写）：「${path}」`);
+    // macOS 默认文件系统不分大小写、也不分 Unicode 正规化形式：Readme.md 与 readme.md、NFC 与 NFD
+    // 的 café.md 都会落到同一个文件，按折叠后的键查重
+    if (paths.has(foldSkillPath(path)))
+      return writeFail(400, `资源文件路径重复（不区分大小写与 Unicode 正规化）：「${path}」`);
     const encoded = typeof file.contentBase64 === "string" ? file.contentBase64 : null;
     if (encoded === null) return writeFail(400, `资源文件「${path}」缺少 contentBase64`);
     if (!BASE64_PATTERN.test(encoded))
@@ -80,7 +87,7 @@ function parseSkillFiles(raw: unknown): WriteResult<SkillFilePayload[]> {
     const content = Buffer.from(encoded, "base64");
     if (content.length > SKILL_FILE_MAX_BYTES)
       return writeFail(400, `资源文件「${path}」超过 1 MiB（${content.length} 字节）`);
-    paths.add(path.toLowerCase());
+    paths.add(foldSkillPath(path));
     files.push({ path, content });
   }
 

@@ -926,6 +926,41 @@ describe("运行输入物化", () => {
     );
   });
 
+  it("输入节点叫 AGENTS 时物化文件名加「输入-」前缀，不被上游当作该目录的指令文件", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    fs.rmSync(runnerTestRoot, { recursive: true, force: true });
+    controls.resolveWorkflow.mockResolvedValue(materializationWorkflow("AGENTS"));
+
+    let capturedInputs: Record<string, PortValue[]> | undefined;
+    controls.runActionNode.mockImplementation(
+      async (ctx: { inputs: Record<string, PortValue[]> }) => {
+        capturedInputs = ctx.inputs;
+        return {
+          outputs: { 结果: { kind: "text", text: "完成" } },
+          selectedExit: null,
+        };
+      },
+    );
+
+    const startedRun = await startRun("workflow-materialization", {
+      "text-input": { kind: "text", text: "正文" },
+      "json-input": { kind: "json", json: { ok: true } },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string };
+      expect(run.status).toBe("success");
+    });
+
+    const value = capturedInputs?.题目?.[0];
+    expect(value?.kind).toBe("file");
+    if (value?.kind !== "file") return;
+    expect(value.file.name).toBe("输入-AGENTS.md");
+  });
+
   it("节点名中的 NUL 在写文件前稳定替换", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     fs.rmSync(runnerTestRoot, { recursive: true, force: true });

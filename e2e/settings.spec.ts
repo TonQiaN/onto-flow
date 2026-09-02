@@ -14,7 +14,9 @@ test.describe("全局设置", () => {
   });
 
   test.afterAll(async ({ request }) => {
-    await request.put("/api/settings", { data: saved });
+    // 写回失败不能静默：整份文档是本 spec 唯一的清理手段，残留会污染后续运行的组合
+    const res = await request.put("/api/settings", { data: saved });
+    expect(res.ok(), `全局设置写回失败：HTTP ${res.status()}`).toBe(true);
   });
 
   test("七个分区与插件面板都在，面板列出下次运行会挂的 entry", async ({ page }) => {

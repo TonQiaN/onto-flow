@@ -30,11 +30,33 @@ describe("资源文件路径校验（与写入口同一套规则）", () => {
     expect(skillFilePathProblem("x".repeat(201))).toMatch(/超过 200 个字符/);
   });
 
-  it("SKILL.md 不能作为资源文件（不区分大小写）", () => {
+  it("SKILL.md 不能作为资源文件、也不能作为根下目录名（不区分大小写）", () => {
     expect(skillFilePathProblem("SKILL.md")).toMatch(/SKILL\.md 由正文生成/);
     expect(skillFilePathProblem("skill.MD")).toMatch(/SKILL\.md 由正文生成/);
+    expect(skillFilePathProblem("SKILL.md/x.md")).toMatch(/也不能作为目录名/);
     // 子目录下的 SKILL.md 是普通文件
     expect(skillFilePathProblem("sub/SKILL.md")).toBeNull();
+  });
+
+  it("重复与文件/目录冲突折叠大小写与 Unicode 正规化，与写入口同一规则", () => {
+    expect(
+      skillFilesProblem([
+        { path: "Readme.md", size: 1 },
+        { path: "readme.md", size: 1 },
+      ]),
+    ).toMatch(/重复（不区分大小写与 Unicode 正规化）/);
+    expect(
+      skillFilesProblem([
+        { path: "café.md", size: 1 },
+        { path: "café.md", size: 1 },
+      ]),
+    ).toMatch(/重复/);
+    expect(
+      skillFilesProblem([
+        { path: "docs", size: 1 },
+        { path: "DOCS/x.md", size: 1 },
+      ]),
+    ).toMatch(/既是文件又是/);
   });
 });
 

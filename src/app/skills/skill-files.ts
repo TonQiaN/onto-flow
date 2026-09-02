@@ -32,9 +32,14 @@ export function skillFilePathProblem(path: string): string | null {
     if (segment === "" || segment === "." || segment === "..")
       return `资源文件路径「${path}」不能含空段、. 或 ..`;
   }
-  if (path.toLowerCase() === "skill.md")
-    return "SKILL.md 由正文生成，不能作为资源文件上传";
+  if (path.split("/")[0]?.toLowerCase() === "skill.md")
+    return "SKILL.md 由正文生成，不能作为资源文件上传，也不能作为目录名";
   return null;
+}
+
+/** 文件系统眼里的同一路径：折叠大小写与 Unicode 正规化，与写入口同一规则 */
+function foldPath(path: string): string {
+  return path.normalize("NFC").toLowerCase();
 }
 
 /** 整份清单的问题：数量、单文件大小、路径合法性、重复与文件/目录冲突；合法返回 null */
@@ -47,16 +52,17 @@ export function skillFilesProblem(
   for (const file of files) {
     const problem = skillFilePathProblem(file.path);
     if (problem) return problem;
-    if (paths.has(file.path)) return `资源文件路径重复：「${file.path}」`;
+    if (paths.has(foldPath(file.path)))
+      return `资源文件路径重复（不区分大小写与 Unicode 正规化）：「${file.path}」`;
     if (file.size > SKILL_FILE_MAX_BYTES)
       return `资源文件「${file.path}」超过 1 MiB（${formatBytes(file.size)}）`;
-    paths.add(file.path);
+    paths.add(foldPath(file.path));
   }
-  // 同一个名字不能既是文件又是别的文件的目录：投影时 mkdir 会撞上已写好的文件
+  // 同一个名字不能既是文件又是别的文件的目录：投影时 mkdir 会撞上已写好的文件；同样按折叠后的键比较
   for (const path of paths) {
     for (const other of paths) {
       if (other !== path && other.startsWith(`${path}/`))
-        return `资源文件路径「${path}」既是文件又是「${other}」的目录`;
+        return `资源文件路径「${path}」既是文件又是「${other}」的目录（不区分大小写）`;
     }
   }
   return null;

@@ -68,6 +68,18 @@ describe("Skill 资源文件校验", () => {
     ).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("既是文件又是") });
   });
 
+  it("NFC 与 NFD 拼出的同一个名字算重复：APFS 对 Unicode 正规化同样不敏感", () => {
+    expect(
+      createSkill({
+        name: "正规化重复",
+        files: [
+          { path: "café.md", contentBase64: "" },
+          { path: "café.md", contentBase64: "" },
+        ],
+      }),
+    ).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("Unicode 正规化") });
+  });
+
   it("重复与文件/目录冲突按不区分大小写判断：macOS 默认文件系统会把它们投到同一处", () => {
     expect(
       createSkill({

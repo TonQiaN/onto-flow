@@ -9,11 +9,14 @@
  * 完成注册，才证明 tool-plugin.ts 与上游 ToolDefinition 的形状仍对得上（ADR-0017）。
  */
 import { rm } from "node:fs/promises";
+import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { createRunWorkspace, runDirPath, type RunWorkspace } from "./workspace";
 import { launchRun } from "./launch";
 import { runCompositionEntries, type RunCompositionOptions } from "./composition";
 import { materializeToolPlugin } from "./tool-plugin";
+import { PLUGIN_CATALOG } from "./catalog";
+import type { CompositionToggles } from "@/lib/workflow-settings";
 
 const WORKFLOW_ID = "composition-boot-test";
 const created: RunWorkspace[] = [];
@@ -31,6 +34,8 @@ async function bootAndDispose(ws: RunWorkspace, composition: RunCompositionOptio
 
 afterAll(async () => {
   for (const ws of created) await rm(ws.runDir, { recursive: true, force: true });
+  // 工作流目录只属于本测试，连它一起清掉，不给 data/runs/ 留空壳
+  await rm(path.dirname(runDirPath(WORKFLOW_ID, "x")), { recursive: true, force: true });
 });
 
 describe("每运行组合", () => {
@@ -74,6 +79,29 @@ describe("每运行组合", () => {
     const ids = runCompositionEntries(ws, { toolPlugins: [entry] }).map((e) => e.id);
     expect(ids).toContain("tool-boot-sample");
     await bootAndDispose(ws, { toolPlugins: [entry] });
+  }, 90_000);
+
+  it("四个默认开的开关全关也能 boot：被关掉的行没有别的行 inject 它们", async () => {
+    const ws = await createRunWorkspace({
+      workflowId: WORKFLOW_ID,
+      runId: `boot-all-off-${Date.now().toString(36)}`,
+      instructions: "# 组合启动测试\n",
+    });
+    created.push(ws);
+    const allOff: CompositionToggles = {
+      webSearch: false,
+      fsSearch: false,
+      strReplaceEditor: false,
+      todo: false,
+      compaction: false,
+    };
+    const ids = runCompositionEntries(ws, { toggles: allOff }).map((e) => e.id);
+    const toggledIds = PLUGIN_CATALOG.flatMap((row) =>
+      row.toggle !== undefined && row.entry !== undefined && "id" in row.entry ? [row.entry.id] : [],
+    );
+    expect(toggledIds.length).toBeGreaterThan(0);
+    for (const id of toggledIds) expect(ids, `开关全关时「${id}」不该在组合里`).not.toContain(id);
+    await bootAndDispose(ws, { toggles: allOff });
   }, 90_000);
 
   it("打开搜索开关后 web 三件套同样能 boot", async () => {

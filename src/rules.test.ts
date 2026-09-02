@@ -112,16 +112,36 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
    * @/server/monitor/types is the sanctioned exception.」
    */
   const SANCTIONED_TYPE_SOURCE = "@/server/monitor/types";
-  const clientFiles = sourceFiles.filter((file) => /["']use client["']/.test(read(file).slice(0, 600)));
+  // 客户端代码 = 含 "use client" 的文件 ∪ src/app（api/ 除外）与 src/components 下没有指令的共享模块：
+  // 后者被客户端页面 import，同样不能把 @/server 的运行时值带进浏览器包。
+  const clientFiles = sourceFiles.filter((file) => {
+    if (isTest(file)) return false;
+    if (/["']use client["']/.test(read(file).slice(0, 600))) return true;
+    const r = rel(file);
+    return (r.startsWith("src/app/") && !r.startsWith("src/app/api/")) || r.startsWith("src/components/");
+  });
+  // tool-form.ts 的 TOOL_EXECUTE_TEMPLATE 是给 Tool 作者的源码骨架，字符串里有一行
+  // `import type { ToolContext } from "@/server/harness/tool-contract"`（类型导入，运行时被擦掉）；
+  // 只扫它模板之前的真实导入。
+  const TEMPLATE_CARRIER = "src/app/tools/tool-form.ts";
+  const scanText = (file: string): string => {
+    const content = read(file);
+    if (rel(file) !== TEMPLATE_CARRIER) return content;
+    // 截在声明本身而不是第一次提到这个名字的地方：前面的注释提一句不该把盲区上移
+    const cut = content.indexOf("export const TOOL_EXECUTE_TEMPLATE = `");
+    expect(cut, `${TEMPLATE_CARRIER} 里找不到 TOOL_EXECUTE_TEMPLATE 的声明，豁免失效`).toBeGreaterThan(0);
+    return content.slice(0, cut);
+  };
   const SERVER_SPECIFIER = /^@\/(?:server|db)(?:\/|$)/;
   // `[^;]*?` 把匹配限制在同一条语句里：`export type { X };` 没有 from，不能吞到下一条 import 的 from。
   const IMPORT_FROM_RE = /^(?:import|export)\s+(type\s+)?[^;]*?\s+from\s+["']([^"']+)["']/gm;
   const SIDE_EFFECT_IMPORT_RE = /^import\s+["']([^"']+)["']/gm;
   const DYNAMIC_IMPORT_RE = /\bimport\(\s*["']([^"']+)["']/g;
 
-  it('含 "use client" 的文件不从 @/server 或 @/db 导入运行时值；import type 只允许来自 @/server/monitor/types', () => {
+  it('含 "use client" 的文件与 src/app、src/components 下的共享模块不从 @/server 或 @/db 导入运行时值；import type 只允许来自 @/server/monitor/types', () => {
     expect(clientFiles.length).toBeGreaterThan(0);
-    const found = violations(clientFiles, (content) => {
+    const found = violations(clientFiles, (raw, file) => {
+      const content = file === undefined ? raw : scanText(file);
       const out: string[] = [];
       for (const match of content.matchAll(IMPORT_FROM_RE)) {
         const [, typeOnly, specifier] = match;
@@ -279,21 +299,36 @@ describe("AGENTS.md · Conventions · library list GETs", () => {
 
 describe("AGENTS.md · Conventions · raw SQL", () => {
   /**
-   * 「Raw SQL goes through drizzle's sql tag and only where the query builder cannot express the
-   * aggregate」。允许范围按现状定：monitor/ 的聚合、writers/list.ts 的 LIKE 搜索、
-   * engine/events.ts 的 SUM 汇总。
+   * 「Raw SQL goes through drizzle's sql tag … and only where the query builder cannot express
+   * the aggregate」。允许范围按现状定：monitor/ 的聚合、writers/list.ts 的 LIKE 搜索、
+   * engine/action.ts 的按会话 SUM 汇总、engine/events.ts 的 json_extract 查工具名、
+   * revisions.ts 的 max(version_no)、api/runs/route.ts 的运行列表合计。
+   * 两种拼法都要抓：sql`…` 与 sql<T>`…`——只认前者时后三处漏网，本测试曾空绿。
    */
+  // 泛型参数里可以再套尖括号（sql<Record<string, number>>`…`），所以只在反引号与分号前停
+  const RAW_SQL = /\bsql(<[^`;]*>)?`/;
+  const ALLOWED_FILES = [
+    "src/server/writers/list.ts",
+    "src/server/engine/action.ts",
+    "src/server/engine/events.ts",
+    "src/server/revisions.ts",
+    "src/app/api/runs/route.ts",
+  ];
   const ALLOWED = (file: string): boolean =>
-    file.startsWith("src/server/monitor/") ||
-    file === "src/server/writers/list.ts" ||
-    file === "src/server/engine/events.ts";
+    file.startsWith("src/server/monitor/") || ALLOWED_FILES.includes(file);
 
-  it("sql` 标签只出现在 monitor/、writers/list.ts、engine/events.ts", () => {
+  it("sql` / sql<T>` 标签只出现在白名单：monitor/ 与五个点名文件", () => {
     const found = sourceFiles
-      .filter((file) => !isTest(file) && /\bsql`/.test(read(file)))
+      .filter((file) => !isTest(file) && RAW_SQL.test(read(file)))
       .map(rel)
       .filter((file) => !ALLOWED(file));
     expect(found).toEqual([]);
+  });
+
+  it("白名单点名的文件今天仍在用原生 SQL：改回查询构建器就把它从名单里删掉", () => {
+    const listed = sourceFiles.filter((file) => ALLOWED_FILES.includes(rel(file)));
+    expect(listed.map(rel).sort()).toEqual([...ALLOWED_FILES].sort());
+    expect(listed.filter((file) => !RAW_SQL.test(read(file))).map(rel)).toEqual([]);
   });
 
   it("「User input inside LIKE is escaped and paired with escape '\\'」——插值进 like 的那一行带 escape '\\'", () => {

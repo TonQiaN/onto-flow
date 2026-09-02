@@ -193,7 +193,7 @@ function CostConsole() {
           label="assistant 消息"
           value={formatTokens(totals.messages)}
           loading={loading}
-          hint="node_usage 行数"
+          hint="node_usage 行数，不含压缩摘要那次调用（variant = compaction，钱算、消息不算）"
         />
         <MetricCard
           label="日均费用"

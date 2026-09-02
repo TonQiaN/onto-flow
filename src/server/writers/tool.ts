@@ -1,6 +1,10 @@
 import { eq } from "drizzle-orm";
 import { db, tools } from "@/db";
-import { TOOL_PUBLIC_NAME_PATTERN } from "@/server/harness/tool-contract";
+import {
+  TOOL_PUBLIC_NAME_PATTERN,
+  TOOL_RESERVED_PUBLIC_NAME_PREFIX,
+  TOOL_RESERVED_PUBLIC_NAMES,
+} from "@/server/harness/tool-contract";
 import { recordRevision } from "@/server/revisions";
 import { objectSchemaProblem } from "./json-schema";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
@@ -37,6 +41,18 @@ export function parseToolPayload(raw: unknown): WriteResult<ToolPayload> {
     return writeFail(
       400,
       `模型可见的工具名「${publicName}」非法：小写字母开头，只含小写字母、数字与下划线，最长 64 位`,
+    );
+  }
+  if (TOOL_RESERVED_PUBLIC_NAMES.has(publicName)) {
+    return writeFail(
+      400,
+      `模型可见的工具名「${publicName}」是上游内建工具或会话数据面工具的名字，契约 Tool 不能占用`,
+    );
+  }
+  if (publicName.startsWith(TOOL_RESERVED_PUBLIC_NAME_PREFIX)) {
+    return writeFail(
+      400,
+      `模型可见的工具名「${publicName}」用了 MCP 工具的前缀 ${TOOL_RESERVED_PUBLIC_NAME_PREFIX}，契约 Tool 不能占用`,
     );
   }
 

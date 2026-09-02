@@ -717,7 +717,9 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
       label: `工具 ${t.tool}`,
       startMs: Math.max(0, t.start - runStart),
       durMs: Math.max(0, t.end - t.start),
-      status: t.status === "error" ? "failed" : t.status === "completed" ? "success" : "running",
+      // events.ts 写的状态词是 running / ok / error（没有 completed）：认错词会让每个成功的工具
+      // 调用永远显示「运行中」，与 callId 合并修好后仍如此。
+      status: t.status === "error" ? "failed" : t.status === "ok" ? "success" : "running",
       tokens: 0,
       cost: 0,
       detail: t.detail,
@@ -779,7 +781,7 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
       status: "success",
       tokens,
       cost,
-      detail: `${ctx.usage.length} 条 assistant 消息计费，但会话未产出文本`,
+      detail: `${assistantUsage.length} 条 assistant 消息计费，但会话未产出文本`,
     });
   }
 
