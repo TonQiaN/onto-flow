@@ -188,17 +188,20 @@ export function materializeSkill(
       fs.writeFileSync(target, file.content);
     }
     // 换链接：临时名建好新链接，再 rename 到 <slug>——rename 覆盖一个已有的符号链接是原子的，
-    // <slug> 没有不存在的瞬间。<slug> 若是旧式的真实目录（改成链接之前的投影），先整个移走：
-    // 这只会在进程启动重建时遇到，那时没有运行在跑。并发重写同一技能时后到者的链接覆盖先到者，
-    // 先到者的版本目录成为孤儿，下次启动重建收敛。
+    // <slug> 没有不存在的瞬间。并发重写同一技能时后到者的链接覆盖先到者，先到者的版本目录成为
+    // 孤儿，下次启动重建收敛。
     let current: fs.Stats | null = null;
     try {
       current = fs.lstatSync(dir);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
     }
-    if (current?.isSymbolicLink()) previous = currentVersionName(slug);
-    else if (current) fs.rmSync(dir, { recursive: true, force: true });
+    if (current !== null && !current.isSymbolicLink()) {
+      // 投影布局只有一种：<slug> 要么不存在、要么是链接。真实目录只可能是有人手动放的，启动重建
+      // 会把它清掉；这里不认第二种形态。
+      throw new Error(`技能目录 ${slug} 不是链接：投影布局已被改动，重启服务重建后再试`);
+    }
+    if (current !== null) previous = currentVersionName(slug);
     fs.symlinkSync(path.posix.join(VERSIONS_DIR_NAME, versionName), tempLink, "dir");
     fs.renameSync(tempLink, dir);
   } catch (err) {
@@ -308,12 +311,14 @@ export function rebuildSkillLibrary(): void {
   const rows = db.select().from(skills).all();
   const wanted = new Set(rows.map(skillSlug));
   for (const entry of fs.readdirSync(SKILL_LIBRARY_DIR, { withFileTypes: true })) {
-    if (entry.name === VERSIONS_DIR_NAME || wanted.has(entry.name)) continue;
-    if (!SLUG_PATTERN.test(entry.name)) {
-      // 上次进程中途倒下留下的临时链接或半成品：不是任何技能，直接清掉。
+    if (entry.name === VERSIONS_DIR_NAME) continue;
+    if (!SLUG_PATTERN.test(entry.name) || !entry.isSymbolicLink()) {
+      // 不属于链接布局的项（上次进程中途倒下留下的临时链接、半成品、手动放的真实目录）：不是任何
+      // 技能的投影，直接清掉——投影完全由数据库导出，启动时也没有存活的运行需要它。
       fs.rmSync(path.join(SKILL_LIBRARY_DIR, entry.name), { recursive: true, force: true });
       continue;
     }
+    if (wanted.has(entry.name)) continue;
     if (isHeld(entry.name)) {
       pendingRemovals.add(entry.name);
     } else {
