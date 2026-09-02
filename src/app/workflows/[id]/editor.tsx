@@ -1,4 +1,5 @@
 "use client";
+import { fetchAllPages } from "@/components/library/fetch-all-pages";
 
 /**
  * 画布编辑器主体：@xyflow/react v12。
@@ -174,34 +175,29 @@ function EditorInner({ workflowId }: { workflowId: string }) {
     let cancelled = false;
     (async () => {
       try {
-        // 库列表是分页信封（DESIGN-V2 第一节），画布要全量，故显式取大页
+        // 库列表是分页信封（DESIGN-V2 第一节），画布要全量，翻到底而不是只取第一页
         const [wfRes, actRes, typeRes, modelRes, skillRes, toolRes] =
           await Promise.all([
             fetch(`/api/workflows/${workflowId}`),
-            fetch("/api/actions?pageSize=100&sort=name_asc"),
-            fetch("/api/object-types?pageSize=100&sort=name_asc"),
+            fetchAllPages<ActionItem>("/api/actions?sort=name_asc"),
+            fetchAllPages<ObjectTypeRow>("/api/object-types?sort=name_asc"),
             fetch("/api/models"),
-            fetch("/api/skills?pageSize=100&sort=name_asc"),
-            fetch("/api/tools?pageSize=100&sort=name_asc"),
+            fetchAllPages<SkillRow>("/api/skills?sort=name_asc"),
+            fetchAllPages<ToolRow>("/api/tools?sort=name_asc"),
           ]);
         if (!wfRes.ok) throw new Error(await readError(wfRes));
-        if (!actRes.ok) throw new Error(await readError(actRes));
-        if (!typeRes.ok) throw new Error(await readError(typeRes));
+        if (!actRes.ok) throw new Error(`Action 库读取失败（HTTP ${actRes.status}）`);
+        if (!typeRes.ok) throw new Error(`对象类型库读取失败（HTTP ${typeRes.status}）`);
 
         const wf = (await wfRes.json()) as WorkflowDetail;
-        const acts = ((await actRes.json()) as { items: ActionItem[] }).items;
-        const types = ((await typeRes.json()) as { items: ObjectTypeRow[] })
-          .items;
+        const acts = actRes.items;
+        const types = typeRes.items;
         // 模型 / Skill / Tool 只服务于检查器，取不到也不该拦住画布
         const modelRows = modelRes.ok
           ? ((await modelRes.json()) as ModelRow[])
           : [];
-        const skillRows = skillRes.ok
-          ? ((await skillRes.json()) as { items: SkillRow[] }).items
-          : [];
-        const toolRows = toolRes.ok
-          ? ((await toolRes.json()) as { items: ToolRow[] }).items
-          : [];
+        const skillRows = skillRes.ok ? skillRes.items : [];
+        const toolRows = toolRes.ok ? toolRes.items : [];
         if (cancelled) return;
 
         setActions(acts);

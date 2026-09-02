@@ -67,6 +67,27 @@ describe("Skill 资源文件校验", () => {
       }),
     ).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("既是文件又是") });
   });
+
+  it("重复与文件/目录冲突按不区分大小写判断：macOS 默认文件系统会把它们投到同一处", () => {
+    expect(
+      createSkill({
+        name: "大小写重复",
+        files: [
+          { path: "Readme.md", contentBase64: "" },
+          { path: "readme.md", contentBase64: "" },
+        ],
+      }),
+    ).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("不区分大小写") });
+    expect(
+      createSkill({
+        name: "大小写目录冲突",
+        files: [
+          { path: "docs", contentBase64: "" },
+          { path: "DOCS/x.md", contentBase64: "" },
+        ],
+      }),
+    ).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("既是文件又是") });
+  });
 });
 
 describe("Skill 写入", () => {

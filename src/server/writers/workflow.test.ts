@@ -162,6 +162,39 @@ describe("Workflow 技能集与 Tool 集", () => {
     });
   });
 
+  it("只发设置不发图时沿用库里当前的图：⊆ 仍按它校验，图不被改写，修订载荷带当前图", () => {
+    const actionId = seedAction();
+    const created = createWorkflow({ name: "设置页保存", description: "" });
+    if (!created.ok) throw new Error(created.error);
+    const withGraph = writeWorkflow(created.data.id, {
+      skillIds: ["skill-a"],
+      toolIds: ["tool-1"],
+      nodes: [actionNode(actionId)],
+      edges: [],
+    });
+    expect(withGraph.ok).toBe(true);
+
+    // 把被预载的技能移出集合：图缺省，但校验对库里的图做，仍要 400 指名
+    const removed = writeWorkflow(created.data.id, { skillIds: [], toolIds: ["tool-1"] });
+    expect(removed).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("预载") });
+
+    // 只改指令：图原样保留，修订载荷带的是库里当前的图
+    const onlySettings = writeWorkflow(created.data.id, { instructions: "# 只改指令" });
+    expect(onlySettings.ok).toBe(true);
+    expect(
+      sqlite.prepare("select count(*) as c from workflow_nodes where workflow_id = ?").get(created.data.id),
+    ).toEqual({ c: 1 });
+    const latest = sqlite
+      .prepare(
+        "select payload from revisions where entity_kind = 'workflow' and entity_id = ? order by version_no desc limit 1",
+      )
+      .get(created.data.id) as { payload: string };
+    expect(JSON.parse(latest.payload)).toMatchObject({ instructions: "# 只改指令", nodes: [actionNode(actionId)] });
+
+    // 只给一半图是形状错误
+    expect(writeWorkflow(created.data.id, { nodes: [] })).toMatchObject({ ok: false, status: 400 });
+  });
+
   it("只发图不发集合时沿用现有集合，画布保存不会把技能集清空", () => {
     const actionId = seedAction();
     const created = createWorkflow({

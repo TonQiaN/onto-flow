@@ -30,6 +30,10 @@ describe("Tool 契约校验", () => {
     [{ output: { type: "array" } }, "对象根"],
     [{ timeoutMs: 0 }, "正整数"],
     [{ timeoutMs: 1.5 }, "正整数"],
+    // 畸形关键字形状要在写入口拦下：output 在插件注册时才炸会拖倒整个运行
+    [{ parameters: { type: "object", required: "x" } }, "子集"],
+    [{ output: { type: "object", properties: "no" } }, "子集"],
+    [{ parameters: { type: "object", properties: { n: { type: "integer", enum: "1" } } } }, "子集"],
     [{ code: "   " }, "不能为空"],
     [{ code: 'import { x } from "@deepseek-ai/dsh-core";' }, "@deepseek-ai"],
   ])("拒绝 %j", (patch, fragment) => {

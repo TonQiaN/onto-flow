@@ -336,6 +336,37 @@ function revisionPayload(definition: WorkflowDefinition): Record<string, unknown
 }
 
 /** 工作流当前的技能集与 Tool 集 id，按 position 排序；GET 与部分更新都从这里取。 */
+/** 库里当前的图，按 PUT 载荷的形状返回：图缺省的 PUT 用它做 ⊆ 校验与修订载荷。 */
+function loadCurrentGraph(workflowId: string): { nodes: unknown[]; edges: unknown[] } {
+  const nodes = db
+    .select()
+    .from(workflowNodes)
+    .where(eq(workflowNodes.workflowId, workflowId))
+    .all()
+    .map((n) => ({
+      id: n.id,
+      kind: n.kind,
+      actionId: n.actionId,
+      objectTypeId: n.objectTypeId,
+      label: n.label,
+      x: n.x,
+      y: n.y,
+    }));
+  const edges = db
+    .select()
+    .from(workflowEdges)
+    .where(eq(workflowEdges.workflowId, workflowId))
+    .all()
+    .map((e) => ({
+      id: e.id,
+      sourceNodeId: e.sourceNodeId,
+      sourcePort: e.sourcePort,
+      targetNodeId: e.targetNodeId,
+      targetPort: e.targetPort,
+    }));
+  return { nodes, edges };
+}
+
 export function loadWorkflowSets(workflowId: string): { skillIds: string[]; toolIds: string[] } {
   return {
     skillIds: db
@@ -446,7 +477,15 @@ export function writeWorkflow(
   if (!settingsPayload.ok) return settingsPayload;
   const { instructions, settings, skillIds, toolIds } = settingsPayload.data;
 
-  const graph = parseGraphPayload(body, { skillIds, toolIds });
+  // 图可以整体缺省：设置页只提交设置与集合，不读改写整图，画布并发保存的图不会被旧图覆盖。
+  // 缺省时 ⊆ 校验仍对库里当前的图做，修订载荷也带当前图。
+  if ((body.nodes === undefined) !== (body.edges === undefined))
+    return writeFail(400, "nodes 与 edges 必须同时提供或同时省略");
+  const graphProvided = body.nodes !== undefined;
+  const graph = parseGraphPayload(
+    graphProvided ? body : { ...body, ...loadCurrentGraph(id) },
+    { skillIds, toolIds },
+  );
   if (!graph.ok) return graph;
   const { nodes, edges } = graph.data;
 
@@ -464,16 +503,18 @@ export function writeWorkflow(
       .returning()
       .get();
     replaceSets(tx, id, { skillIds, toolIds });
-    tx.delete(workflowEdges).where(eq(workflowEdges.workflowId, id)).run();
-    tx.delete(workflowNodes).where(eq(workflowNodes.workflowId, id)).run();
-    if (nodes.length > 0)
-      tx.insert(workflowNodes)
-        .values(nodes.map((n) => ({ ...n, workflowId: id })))
-        .run();
-    if (edges.length > 0)
-      tx.insert(workflowEdges)
-        .values(edges.map((e) => ({ ...e, workflowId: id })))
-        .run();
+    if (graphProvided) {
+      tx.delete(workflowEdges).where(eq(workflowEdges.workflowId, id)).run();
+      tx.delete(workflowNodes).where(eq(workflowNodes.workflowId, id)).run();
+      if (nodes.length > 0)
+        tx.insert(workflowNodes)
+          .values(nodes.map((n) => ({ ...n, workflowId: id })))
+          .run();
+      if (edges.length > 0)
+        tx.insert(workflowEdges)
+          .values(edges.map((e) => ({ ...e, workflowId: id })))
+          .run();
+    }
     recordRevision(
       "workflow",
       id,

@@ -11,6 +11,7 @@
  * 画布可能在另一个标签页里改了节点，不能用进页面时的旧图覆盖它。
  * 与全局设置同一条纪律：改动在下一次运行生效，在跑的运行持有受理时的快照。
  */
+import { fetchAllPages } from "@/components/library/fetch-all-pages";
 import Link from "next/link";
 import { use, useCallback, useEffect, useMemo, useState } from "react";
 import { readError } from "@/components/library";
@@ -108,13 +109,13 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
     let cancelled = false;
     (async () => {
       try {
-        // 库列表是分页信封（DESIGN-V2 第一节），集合要全量，故显式取大页
+        // 库列表是分页信封（DESIGN-V2 第一节），集合要全量，翻到底而不是只取第一页
         const [wfRes, settingsRes, skillRes, toolRes, actRes] = await Promise.all([
           fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, { cache: "no-store" }),
           fetch("/api/settings", { cache: "no-store" }),
-          fetch("/api/skills?pageSize=100&sort=name_asc", { cache: "no-store" }),
-          fetch("/api/tools?pageSize=100&sort=name_asc", { cache: "no-store" }),
-          fetch("/api/actions?pageSize=100&sort=name_asc", { cache: "no-store" }),
+          fetchAllPages<SkillRow>("/api/skills?sort=name_asc", { cache: "no-store" }),
+          fetchAllPages<ToolRow>("/api/tools?sort=name_asc", { cache: "no-store" }),
+          fetchAllPages<ActionDto>("/api/actions?sort=name_asc", { cache: "no-store" }),
         ]);
         if (!wfRes.ok) throw new Error(await readError(wfRes));
         const wf = (await wfRes.json()) as WorkflowDetail;
@@ -137,17 +138,11 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
         } else {
           nextNotes.push("全局设置读取失败：「继承」显示的是出厂默认值，MCP 登记表为空。");
         }
-        const skillRows = skillRes.ok
-          ? ((await skillRes.json()) as { items: SkillRow[] }).items
-          : [];
+        const skillRows = skillRes.ok ? skillRes.items : [];
         if (!skillRes.ok) nextNotes.push("Skill 库读取失败，技能集清单为空；已有集合保存时原样保留。");
-        const toolRows = toolRes.ok
-          ? ((await toolRes.json()) as { items: ToolRow[] }).items
-          : [];
+        const toolRows = toolRes.ok ? toolRes.items : [];
         if (!toolRes.ok) nextNotes.push("Tool 库读取失败，Tool 集清单为空；已有集合保存时原样保留。");
-        const actionRows = actRes.ok
-          ? ((await actRes.json()) as { items: ActionDto[] }).items
-          : [];
+        const actionRows = actRes.ok ? actRes.items : [];
         if (!actRes.ok) nextNotes.push("Action 库读取失败，无法标出画布上哪些 Action 在预载 / 使用集合项。");
         if (cancelled) return;
 
@@ -219,14 +214,8 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
     setSaving(true);
     setError(null);
     try {
-      const detailRes = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
-        cache: "no-store",
-      });
-      if (!detailRes.ok) {
-        setError(await readError(detailRes));
-        return;
-      }
-      const detail = (await detailRes.json()) as WorkflowDetail;
+      // 只发设置与集合：图整体缺省时服务端沿用库里当前的图，画布并发保存的图不会被这里
+      // 读来的旧图覆盖（评审指出的读-改-写竞争）。
       const res = await fetch(`/api/workflows/${encodeURIComponent(workflowId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -235,8 +224,6 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
           settings: { toggles: pruneToggles(toggles), mcpServers },
           skillIds,
           toolIds,
-          nodes: detail.nodes ?? [],
-          edges: detail.edges ?? [],
         }),
       });
       const body = (await res.json().catch(() => null)) as

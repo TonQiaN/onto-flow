@@ -70,7 +70,9 @@ function parseSkillFiles(raw: unknown): WriteResult<SkillFilePayload[]> {
     const path = typeof file.path === "string" ? file.path : "";
     const problem = skillFilePathProblem(path);
     if (problem) return writeFail(400, problem);
-    if (paths.has(path)) return writeFail(400, `资源文件路径重复：「${path}」`);
+    // macOS 默认文件系统不分大小写：Readme.md 与 readme.md 会落到同一个文件，按折叠后的键查重
+    if (paths.has(path.toLowerCase()))
+      return writeFail(400, `资源文件路径重复（不区分大小写）：「${path}」`);
     const encoded = typeof file.contentBase64 === "string" ? file.contentBase64 : null;
     if (encoded === null) return writeFail(400, `资源文件「${path}」缺少 contentBase64`);
     if (!BASE64_PATTERN.test(encoded))
@@ -78,15 +80,16 @@ function parseSkillFiles(raw: unknown): WriteResult<SkillFilePayload[]> {
     const content = Buffer.from(encoded, "base64");
     if (content.length > SKILL_FILE_MAX_BYTES)
       return writeFail(400, `资源文件「${path}」超过 1 MiB（${content.length} 字节）`);
-    paths.add(path);
+    paths.add(path.toLowerCase());
     files.push({ path, content });
   }
 
   // 同一个名字不能既是文件又是别的文件的目录：投影时 mkdir 会撞上已写好的文件。
+  // 同样按折叠后的键比较：docs 与 DOCS/x 在不分大小写的文件系统上是同一个目录。
   for (const path of paths) {
     for (const other of paths) {
       if (other !== path && other.startsWith(`${path}/`))
-        return writeFail(400, `资源文件路径「${path}」既是文件又是「${other}」的目录`);
+        return writeFail(400, `资源文件路径「${path}」既是文件又是「${other}」的目录（不区分大小写）`);
     }
   }
   return writeOk(files);
