@@ -24,7 +24,11 @@ import {
   type McpServerSpec,
 } from "./entries";
 import type { RunWorkspace } from "./workspace";
-import { DEFAULT_COMPOSITION_TOGGLES, type CompositionToggles } from "@/lib/workflow-settings";
+import {
+  DEFAULT_COMPOSITION_TOGGLES,
+  INSTRUCTIONS_BATCH_MAX_BYTES,
+  type CompositionToggles,
+} from "@/lib/workflow-settings";
 
 /** 运行目录内的会话持久化根目录名。 */
 export const RUN_SESSIONS_SUBDIR = "sessions";
@@ -174,7 +178,10 @@ export function runCompositionEntries(
     {
       id: "agent-instructions",
       name: "@deepseek-ai/dsh-agent-instructions",
-      config: { maxBytes: 65536 },
+      // 上游的 maxBytes 是整批预算：$DSH_HOME/AGENTS.md（全局默认指令）与 workspace/AGENTS.md
+      // （工作流指令）合在一起算，超限时先整份省略排在前面的用户级文件。两份各有 64 KiB 的
+      // 写入口上限，预算必须盖过两份之和加帧余量，超限才只可能在编辑期出现。
+      config: { maxBytes: INSTRUCTIONS_BATCH_MAX_BYTES },
     },
     { id: "skill", name: "@deepseek-ai/dsh-skill" },
     {

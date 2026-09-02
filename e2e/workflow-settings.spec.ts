@@ -333,7 +333,7 @@ test.describe("工作流设置", () => {
     expect(detail.workflow.settings.toggles).toEqual({ webSearch: true, todo: false });
     expect(detail.workflow.skillIds).toEqual([fx.skillId]);
     expect(detail.workflow.toolIds).toEqual([fx.toolId]);
-    // 设置页保存的是整图 + 本页字段：画布上的节点原样保留
+    // 设置页只 PUT 设置与集合、不发图：服务端沿用库里当前的图，画布上的节点原样保留
     expect(detail.nodes).toHaveLength(3);
 
     // 取消勾选仍被 Action 预载的技能再保存：服务端按子集拒绝，页面显示指名文案

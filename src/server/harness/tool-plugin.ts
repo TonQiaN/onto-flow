@@ -115,7 +115,11 @@ const RUN_MAX_TIMEOUT_MS = ${TOOL_RUN_MAX_TIMEOUT_MS};
 type ExecuteModule = { default?: unknown };
 let loaded: Promise<ExecuteModule> | undefined;
 
-/** execute 模块成功后只 import 一次；失败不缓存，让模型下一次调用能重试，错误以工具错误结果呈现。 */
+/**
+ * execute 模块成功后只 import 一次。失败时不缓存 promise，但 ESM 会缓存模块求值错误：同一 URL
+ * 再次 import 直接重抛——所以「不缓存」只保证语法错、顶层抛错在首次调用才暴露、以工具错误结果
+ * 呈现而不拖倒运行，并不让下一次调用真的重试成功。
+ */
 function loadExecuteModule(): Promise<ExecuteModule> {
   loaded ??= (import(EXECUTE_MODULE_URL) as Promise<ExecuteModule>).catch((err: unknown) => {
     loaded = undefined;

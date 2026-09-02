@@ -8,6 +8,12 @@
  * 目录形态对齐上游 skill-filesystem：<root>/<slug>/SKILL.md 加 <root>/<slug>/<path> 的
  * 资源文件（ADR-0016），平铺 frontmatter 必填 name 与 description。
  *
+ * <root>/<slug> 本身是一个符号链接，指向 <root>/.versions/<slug>-<stamp>/ 里的一份完整投影。
+ * 重写技能时先把新版本整目录写好，再用一次 rename 把新链接换到 <slug> 上：路径没有任何
+ * 不存在的瞬间，运行工作区里指向 <slug> 的链接、受理检查、节点读投影、上游 pre-step 的技能
+ * 读取都不会撞上半成品或空档。旧版本目录在没有已受理运行持有该技能时立即删除，否则等最后
+ * 一个持有者收束后再删——上游若在发现技能时记住了真实路径，运行中途也不会读到已删的目录。
+ *
  * 目录名与 frontmatter 的 name 用的是**派生 slug**而不是库里的名字：上游的
  * 技能名必须匹配 /^[a-z0-9]+(?:-[a-z0-9]+)*$/，而本仓库的实体名一律是中文
  * （见 AGENTS.md 的 Conventions）。中文名会被上游静默忽略——只在日志里留一行
@@ -27,6 +33,8 @@ interface SkillLibraryGlobals {
   ontoflowSkillProjectionHolds?: Map<string, Set<string>>;
   /** 数据库行已删除，但投影仍被已受理运行持有；最后一个持有者释放后再删目录。 */
   ontoflowPendingSkillProjectionRemovals?: Set<string>;
+  /** slug -> 被新版本换下、但仍有已受理运行持有该技能的旧版本目录名；持有释放后再删。 */
+  ontoflowPendingSkillVersionRemovals?: Map<string, Set<string>>;
 }
 
 const g = globalThis as SkillLibraryGlobals;
@@ -35,9 +43,18 @@ g.ontoflowSkillProjectionHolds = projectionHolds;
 const pendingRemovals =
   g.ontoflowPendingSkillProjectionRemovals ?? new Set<string>();
 g.ontoflowPendingSkillProjectionRemovals = pendingRemovals;
+const pendingVersionRemovals =
+  g.ontoflowPendingSkillVersionRemovals ?? new Map<string, Set<string>>();
+g.ontoflowPendingSkillVersionRemovals = pendingVersionRemovals;
 
 /** 全局技能库根目录。 */
 export const SKILL_LIBRARY_DIR = path.join(DATA_DIR, "skills");
+
+/** 版本目录都在这一层；<slug> 链接指向其中一份。 */
+const VERSIONS_DIR_NAME = ".versions";
+const VERSIONS_DIR = path.join(SKILL_LIBRARY_DIR, VERSIONS_DIR_NAME);
+/** 换链接用的临时链接名后缀；重建时把残留一并清掉。 */
+const TEMP_LINK_SUFFIX = ".link.tmp";
 
 /** frontmatter 里的字符串值：用双引号包裹并转义，名字里有冒号也不会破坏 YAML。 */
 function quote(value: string): string {
@@ -53,6 +70,8 @@ export function skillSlug(skill: { id: string }): string {
   return `skill-${createHash("sha256").update(skill.id, "utf8").digest("hex").slice(0, 20)}`;
 }
 
+const SLUG_PATTERN = /^skill-[0-9a-f]{20}$/;
+
 function skillDir(slug: string): string {
   assertSafeName("技能目录名", slug);
   return path.join(SKILL_LIBRARY_DIR, slug);
@@ -62,11 +81,55 @@ function skillFile(slug: string): string {
   return path.join(skillDir(slug), "SKILL.md");
 }
 
-/** 投影临时目录都带这个后缀，落在库根、目录外；重建时把残留一并清掉。 */
-const TEMP_SUFFIX = ".tmp";
+/** 版本目录名 <slug>-<uuid>；slug 定长，所以按前缀归属不会串到别的技能。 */
+function versionDirName(slug: string, stamp: string): string {
+  return `${slug}-${stamp}`;
+}
 
-function isTempEntry(name: string): boolean {
-  return name.startsWith(".skill-") && name.endsWith(TEMP_SUFFIX);
+function slugOfVersion(name: string): string | null {
+  const slug = name.slice(0, "skill-".length + 20);
+  return SLUG_PATTERN.test(slug) && name.startsWith(`${slug}-`) ? slug : null;
+}
+
+function versionNamesOf(slug: string): string[] {
+  try {
+    return fs.readdirSync(VERSIONS_DIR).filter((name) => slugOfVersion(name) === slug);
+  } catch {
+    return [];
+  }
+}
+
+/** <slug> 链接当前指向的版本目录名；不是链接（不存在或旧式真实目录）时返回 null。 */
+function currentVersionName(slug: string): string | null {
+  try {
+    return path.basename(fs.readlinkSync(skillDir(slug)));
+  } catch {
+    return null;
+  }
+}
+
+function isHeld(slug: string): boolean {
+  return (projectionHolds.get(slug)?.size ?? 0) > 0;
+}
+
+/** 删一个版本目录；技能仍被已受理运行持有时先记下，等释放后再删。 */
+function retireVersion(slug: string, versionName: string): void {
+  if (isHeld(slug)) {
+    const names = pendingVersionRemovals.get(slug) ?? new Set<string>();
+    names.add(versionName);
+    pendingVersionRemovals.set(slug, names);
+    return;
+  }
+  fs.rmSync(path.join(VERSIONS_DIR, versionName), { recursive: true, force: true });
+}
+
+function flushRetiredVersions(slug: string): void {
+  const names = pendingVersionRemovals.get(slug);
+  if (!names) return;
+  pendingVersionRemovals.delete(slug);
+  for (const name of names) {
+    fs.rmSync(path.join(VERSIONS_DIR, name), { recursive: true, force: true });
+  }
 }
 
 export interface SkillProjectionFile {
@@ -77,7 +140,7 @@ export interface SkillProjectionFile {
 
 /**
  * 把一个 Skill 写进磁盘投影：正文成为 SKILL.md，资源文件按相对路径落在同一目录。
- * 目录只由 id 决定，改名、正文与资源文件更新都在同一路径内整目录换名，已经受理的
+ * 目录只由 id 决定，改名、正文与资源文件更新都在同一路径内换版本，已经受理的
  * 运行所持活链接不会失效。
  */
 export function materializeSkill(
@@ -91,7 +154,7 @@ export function materializeSkill(
 ): void {
   const slug = skillSlug(skill);
   const dir = skillDir(slug);
-  fs.mkdirSync(SKILL_LIBRARY_DIR, { recursive: true });
+  fs.mkdirSync(VERSIONS_DIR, { recursive: true });
   // 描述里带上库里的中文名：模型只按描述选技能，slug 对它没有信息量。
   const description = `${skill.name}：${skill.description || skill.name}`;
   const frontmatter = [
@@ -101,52 +164,53 @@ export function materializeSkill(
     "---",
     "",
   ].join("\n");
-  // 整目录换名：运行启动时的 digestDirectory 在线程池里读技能目录，与这次写入在
-  // OS 层任意交错；临时目录必须放在技能目录外，否则摘要枚举会把半成品算成技能内容。
-  // 同库根、异目录仍在同一文件系统，rename 保持原子性；并发写同一技能时后到者的换名会失败
-  // 并把旧目录换回，磁盘停在最先就位的那份，直到下次写入或启动重建收敛。
-  // POSIX 的 rename 不能覆盖非空目录，所以是「旧目录挪开 → 新目录就位 → 删旧目录」
-  // 两次 rename：中间有一个 <slug> 不存在的微秒级窗口，受理检查撞上会报投影不可读，
-  // 重试即可；这比留 SKILL.md 单文件替换、资源文件逐个覆盖的不一致窗口小得多。
+  // 新版本整目录写在 .versions/ 下：在链接换过去之前，<slug> 路径下看不到任何半成品——
+  // 运行启动时的 digestDirectory 在线程池里经工作区链接读技能目录，与这次写入在 OS 层任意交错。
   const stamp = crypto.randomUUID();
-  const staging = path.join(SKILL_LIBRARY_DIR, `.skill-${slug}-${stamp}${TEMP_SUFFIX}`);
-  const retired = path.join(SKILL_LIBRARY_DIR, `.skill-${slug}-${stamp}-old${TEMP_SUFFIX}`);
+  const versionName = versionDirName(slug, stamp);
+  const version = path.join(VERSIONS_DIR, versionName);
+  const tempLink = path.join(SKILL_LIBRARY_DIR, `.${versionName}${TEMP_LINK_SUFFIX}`);
+  let previous: string | null = null;
   try {
-    fs.mkdirSync(staging);
-    fs.writeFileSync(path.join(staging, "SKILL.md"), `${frontmatter}${skill.content}\n`, "utf8");
+    fs.mkdirSync(version);
+    fs.writeFileSync(path.join(version, "SKILL.md"), `${frontmatter}${skill.content}\n`, "utf8");
     for (const file of files) {
-      const target = path.join(staging, ...file.path.split("/"));
+      const target = path.join(version, ...file.path.split("/"));
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, file.content);
     }
-    let hadPrevious = true;
+    // 换链接：临时名建好新链接，再 rename 到 <slug>——rename 覆盖一个已有的符号链接是原子的，
+    // <slug> 没有不存在的瞬间。<slug> 若是旧式的真实目录（改成链接之前的投影），先整个移走：
+    // 这只会在进程启动重建时遇到，那时没有运行在跑。并发重写同一技能时后到者的链接覆盖先到者，
+    // 先到者的版本目录成为孤儿，下次启动重建收敛。
+    let current: fs.Stats | null = null;
     try {
-      fs.renameSync(dir, retired);
+      current = fs.lstatSync(dir);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-      hadPrevious = false;
     }
-    try {
-      fs.renameSync(staging, dir);
-    } catch (err) {
-      // 新目录就位失败（例如另一次写入抢先占了 <slug>）：把旧目录换回去，磁盘至少
-      // 停在上一份完整投影，而不是 <slug> 消失；数据库已提交的新内容留给下次写入或
-      // 进程启动的 rebuildSkillLibrary 收敛。
-      if (hadPrevious && !fs.existsSync(dir)) fs.renameSync(retired, dir);
-      throw err;
-    }
-    if (hadPrevious) fs.rmSync(retired, { recursive: true, force: true });
-    // 同 id 的修订恢复会重新建立数据库行；成功写回后取消先前的延迟删除意图。
-    pendingRemovals.delete(slug);
-  } finally {
-    fs.rmSync(staging, { recursive: true, force: true });
-    fs.rmSync(retired, { recursive: true, force: true });
+    if (current?.isSymbolicLink()) previous = currentVersionName(slug);
+    else if (current) fs.rmSync(dir, { recursive: true, force: true });
+    fs.symlinkSync(path.posix.join(VERSIONS_DIR_NAME, versionName), tempLink, "dir");
+    fs.renameSync(tempLink, dir);
+  } catch (err) {
+    fs.rmSync(tempLink, { force: true });
+    fs.rmSync(version, { recursive: true, force: true });
+    throw err;
   }
+  // 成功写回后取消先前的延迟删除意图（启动重建会对库里仍存在的行再走一遍这里）。
+  pendingRemovals.delete(slug);
+  if (previous !== null && previous !== versionName) retireVersion(slug, previous);
 }
 
+/** 删掉 <slug> 链接（或旧式真实目录）与它的全部版本目录。 */
 export function removeSkillDir(slug: string): void {
   try {
     fs.rmSync(skillDir(slug), { recursive: true, force: true });
+    for (const name of versionNamesOf(slug)) {
+      fs.rmSync(path.join(VERSIONS_DIR, name), { recursive: true, force: true });
+    }
+    pendingVersionRemovals.delete(slug);
   } catch (err) {
     // 投影删不掉不该让删除失败：数据库才是真相，下次重建投影会收敛。
     console.error("[skills] 移除技能目录失败", slug, err);
@@ -155,7 +219,7 @@ export function removeSkillDir(slug: string): void {
 
 export function removeSkill(skill: { id: string; name: string }): void {
   const slug = skillSlug(skill);
-  if ((projectionHolds.get(slug)?.size ?? 0) > 0) {
+  if (isHeld(slug)) {
     pendingRemovals.add(slug);
     return;
   }
@@ -203,8 +267,8 @@ export function retainSkillProjections(
 }
 
 /**
- * 运行完全静止后释放投影；若网页已删除该 Skill，最后一个运行释放时才真正删目录。
- * 清理投影失败只记日志，不能把已经写好的运行终态改坏。
+ * 运行完全静止后释放投影；若网页已删除该 Skill，最后一个运行释放时才真正删目录，
+ * 否则只删运行期间被换下的旧版本。清理投影失败只记日志，不能把已经写好的运行终态改坏。
  */
 export function releaseSkillProjections(
   runId: string,
@@ -215,7 +279,15 @@ export function releaseSkillProjections(
     holders?.delete(runId);
     if ((holders?.size ?? 0) > 0) continue;
     projectionHolds.delete(slug);
-    if (pendingRemovals.delete(slug)) removeSkillDir(slug);
+    if (pendingRemovals.delete(slug)) {
+      removeSkillDir(slug);
+      continue;
+    }
+    try {
+      flushRetiredVersions(slug);
+    } catch (err) {
+      console.error("[skills] 清理旧版本目录失败", slug, err);
+    }
   }
 }
 
@@ -224,17 +296,17 @@ export function releaseSkillProjections(
  * 直接改过数据库、或投影目录被人手删过，都靠这一步收敛。
  */
 export function rebuildSkillLibrary(): void {
-  fs.mkdirSync(SKILL_LIBRARY_DIR, { recursive: true });
+  fs.mkdirSync(VERSIONS_DIR, { recursive: true });
   const rows = db.select().from(skills).all();
   const wanted = new Set(rows.map(skillSlug));
   for (const entry of fs.readdirSync(SKILL_LIBRARY_DIR, { withFileTypes: true })) {
-    if (!entry.isDirectory() || wanted.has(entry.name)) continue;
-    if (isTempEntry(entry.name)) {
-      // 上次进程中途倒下留下的半成品：不是任何技能，直接清掉。
+    if (entry.name === VERSIONS_DIR_NAME || wanted.has(entry.name)) continue;
+    if (!SLUG_PATTERN.test(entry.name)) {
+      // 上次进程中途倒下留下的临时链接或半成品：不是任何技能，直接清掉。
       fs.rmSync(path.join(SKILL_LIBRARY_DIR, entry.name), { recursive: true, force: true });
       continue;
     }
-    if ((projectionHolds.get(entry.name)?.size ?? 0) > 0) {
+    if (isHeld(entry.name)) {
       pendingRemovals.add(entry.name);
     } else {
       removeSkillDir(entry.name);
@@ -248,5 +320,21 @@ export function rebuildSkillLibrary(): void {
       .orderBy(asc(skillFiles.path))
       .all();
     materializeSkill(row, files);
+  }
+  // 版本目录的收敛：不被任何 <slug> 链接指向的版本是孤儿（并发重写的输家、上次进程中途倒下），
+  // 技能没被持有就删掉；被持有的留到释放时一起清。
+  const live = new Set<string>();
+  for (const slug of wanted) {
+    const name = currentVersionName(slug);
+    if (name !== null) live.add(name);
+  }
+  for (const name of fs.readdirSync(VERSIONS_DIR)) {
+    if (live.has(name)) continue;
+    const slug = slugOfVersion(name);
+    if (slug !== null && wanted.has(slug) && isHeld(slug)) {
+      retireVersion(slug, name);
+      continue;
+    }
+    fs.rmSync(path.join(VERSIONS_DIR, name), { recursive: true, force: true });
   }
 }

@@ -38,12 +38,20 @@ function previewWorkspace(): RunWorkspace {
   };
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 describe("插件目录 ↔ 组合", () => {
   it("默认组合的每个 entry 都被目录声明为默认挂载", () => {
     const ids = runCompositionEntries(previewWorkspace()).map((e) => e.id);
     for (const id of ids) {
       const row = catalogRowForEntryId(id);
       expect(row, `组合 entry「${id}」在目录里没有对应行`).toBeDefined();
+      expect(
+        row?.entry !== undefined && "id" in row.entry,
+        `组合 entry「${id}」只被前缀行兜住：预览组合没有按运行生成的 entry，固定行必须在目录里点名`,
+      ).toBe(true);
       expect(
         row?.decision,
         `组合 entry「${id}」的目录决定是「${row?.decision}」，不是挂载类`,
@@ -133,9 +141,11 @@ describe("插件目录 ↔ 文档", () => {
       docs.set(id, fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "");
     }
     for (const row of PLUGIN_CATALOG) {
+      // 整词匹配：dsh-web 不能靠 dsh-web-search-deepseek 的出现蒙混过关
+      const whole = new RegExp(`${escapeRegExp(row.package)}(?![\\w.-])`);
       expect(
-        docs.get(row.group)?.includes(row.package),
-        `「${row.package}」没有出现在 docs/harness/${PLUGIN_GROUPS[row.group].file}`,
+        whole.test(docs.get(row.group) ?? ""),
+        `「${row.package}」没有以整词出现在 docs/harness/${PLUGIN_GROUPS[row.group].file}`,
       ).toBe(true);
     }
   });
@@ -145,10 +155,18 @@ describe("插件目录 ↔ 文档", () => {
     expect(readme.includes(UPSTREAM_VERSION), `docs/harness/README.md 没有出现 ${UPSTREAM_VERSION}`).toBe(true);
     const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as {
       dependencies: Record<string, string>;
+      overrides?: Record<string, string>;
     };
+    const overrides = pkg.overrides ?? {};
     for (const [name, version] of Object.entries(pkg.dependencies)) {
       if (!name.startsWith("@deepseek-ai/dsh-")) continue;
       expect(version, `${name} 的钉版不是 ${UPSTREAM_VERSION}`).toBe(UPSTREAM_VERSION);
+      // 直接依赖也要进 overrides：没有 lockfile 的 npm install 才不会把它的传递依赖解析到别的一代
+      expect(overrides[name], `${name} 没有进 package.json 的 overrides`).toBe(UPSTREAM_VERSION);
+    }
+    for (const [name, version] of Object.entries(overrides)) {
+      if (!name.startsWith("@deepseek-ai/dsh-")) continue;
+      expect(version, `overrides 里 ${name} 的钉版不是 ${UPSTREAM_VERSION}`).toBe(UPSTREAM_VERSION);
     }
   });
 

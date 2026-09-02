@@ -12,7 +12,7 @@ CREATE TABLE runs (
 );
 CREATE TABLE run_nodes (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, label TEXT NOT NULL,
-  status TEXT NOT NULL, snapshot TEXT,
+  status TEXT NOT NULL, error TEXT, snapshot TEXT,
   input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
   reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0,
@@ -34,7 +34,7 @@ CREATE TABLE node_usage (
 `);
 (globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
 
-const { getLiveSessions, getOverview } = await import("./metrics");
+const { getLiveSessions, getOverview, getTrace } = await import("./metrics");
 
 beforeEach(() => {
   sqlite.exec("DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM runs;");
@@ -65,5 +65,48 @@ describe("监控 token 汇总", () => {
     const overview = getOverview();
     expect(overview.today.tokens).toBe(37);
     expect(overview.series.reduce((sum, point) => sum + point.tokens, 0)).toBe(37);
+  });
+});
+
+describe("运行 Trace 的 step span", () => {
+  it("工具调用按 callId 合并成一个 span，events.ts 写的 ok 显示为成功、error 为失败", () => {
+    const now = Date.now();
+    const insert = sqlite.prepare(
+      "INSERT INTO run_events (run_id, node_id, ts, type, payload) VALUES ('run-1', 'node-1', ?, 'tool', ?)",
+    );
+    insert.run(now - 400, JSON.stringify({ tool: "read", status: "running", callId: "call-1" }));
+    insert.run(now - 300, JSON.stringify({ tool: "read", status: "ok", callId: "call-1" }));
+    insert.run(now - 200, JSON.stringify({ tool: "bash", status: "running", callId: "call-2" }));
+    insert.run(now - 100, JSON.stringify({ tool: "bash", status: "error", callId: "call-2" }));
+
+    const trace = getTrace("run-1");
+    const toolSpans = (trace?.spans ?? []).filter((s) => s.label.startsWith("工具 "));
+    expect(toolSpans.map((s) => [s.label, s.status])).toEqual([
+      ["工具 read", "success"],
+      ["工具 bash", "failed"],
+    ]);
+  });
+
+  it("压缩摘要调用单独成 span，钱与 token 不并进模型输出", () => {
+    const now = Date.now();
+    sqlite
+      .prepare(
+        "INSERT INTO run_events (run_id, node_id, ts, type, payload) VALUES ('run-1', 'node-1', ?, 'text', ?)",
+      )
+      .run(now - 300, JSON.stringify({ text: "正文" }));
+    sqlite
+      .prepare(
+        "INSERT INTO node_usage (id, run_id, node_id, session_id, message_id, provider_id, model_id, variant, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, cost, ts) VALUES ('usage-c', 'run-1', 'node-1', 'node-1', 'compaction:7', 'deepseek-official', 'deepseek-v4-flash', 'compaction', 5, 6, 0, 0, 0, 0.02, ?)",
+      )
+      .run(now - 100);
+
+    const spans = getTrace("run-1")?.spans ?? [];
+    expect(spans.find((s) => s.label === "上下文压缩（摘要）")).toMatchObject({
+      status: "success",
+      tokens: 11,
+      cost: 0.02,
+    });
+    // beforeEach 那条 assistant 用量（10+20+3+4，reasoning 不另加）归模型输出；压缩那条不归
+    expect(spans.find((s) => s.label === "模型输出")).toMatchObject({ tokens: 37, cost: 0.1 });
   });
 });

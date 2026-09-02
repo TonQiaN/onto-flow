@@ -7,8 +7,9 @@
  * （400 指名 Action 与技能 / Tool），这里只在勾选框旁标出画布上哪些 Action 正预载 / 看见它，
  * 提醒取消勾选会让保存被拒。
  *
- * 保存 = 先 GET /api/workflows/[id] 拿最新整图，再 PUT 整图 + 本页字段：PUT 是整图替换，
- * 画布可能在另一个标签页里改了节点，不能用进页面时的旧图覆盖它。
+ * 保存只发本页字段（指令、开关覆盖、MCP 子集、两个集合），不发图：图整体缺省的 PUT 由服务端
+ * 沿用库里当前的图做 ⊆ 校验与修订，画布在另一个标签页里的保存不会被这里读来的旧图覆盖。
+ * GET 带回的 issues（图校验 + ⊆ 违反）在页顶列出：越界的预载 / 可见项要么勾回集合、要么去改 Action。
  * 与全局设置同一条纪律：改动在下一次运行生效，在跑的运行持有受理时的快照。
  */
 import { fetchAllPages } from "@/components/library/fetch-all-pages";
@@ -73,6 +74,8 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   /** 库清单或全局设置读不到时的旁注：页面照常可用，只是候选或「继承」值不全 */
   const [notes, setNotes] = useState<string[]>([]);
+  /** GET 带回的图校验与 ⊆ 违反：受理会 422，保存整图会 400；这里列出来让人当场修 */
+  const [issues, setIssues] = useState<string[]>([]);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -102,6 +105,7 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
     setMcpServers(wf.workflow.settings?.mcpServers ?? []);
     setSkillIds(wf.workflow.skillIds ?? []);
     setToolIds(wf.workflow.toolIds ?? []);
+    setIssues((wf.issues ?? []).map((issue) => issue.message));
   }, []);
 
   // ---------- 加载 ----------
@@ -197,11 +201,6 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
     () => outsideSet(mcpServers, global.mcpServers.map((s) => s.name)),
     [mcpServers, global.mcpServers],
   );
-  /** 集合里清单没列出的 id（库超过一页）：不在清单里就改不了，但保存时原样保留；清单读失败时旁注已说明 */
-  const hiddenSkillCount =
-    skills.length > 0 ? outsideSet(skillIds, skills.map((s) => s.id)).length : 0;
-  const hiddenToolCount =
-    tools.length > 0 ? outsideSet(toolIds, tools.map((t) => t.id)).length : 0;
   const instructionBytes = utf8Bytes(instructions);
   const instructionTooLong = instructionBytes > INSTRUCTIONS_MAX_BYTES;
 
@@ -300,6 +299,16 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
             <li key={note}>{note}</li>
           ))}
         </ul>
+      )}
+      {issues.length > 0 && (
+        <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+          <p className="font-medium">受理前要处理的问题（运行会被拒绝，画布保存整图也会被拒绝）：</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {issues.map((issue) => (
+              <li key={issue}>{issue}</li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* 指令 */}
@@ -455,18 +464,15 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
                   tokensHint="预载时进入会话首条消息的估算"
                   badge={
                     users && users.length > 0
-                      ? `被 Action「${users.join("」「")}」预载，移出后保存会被拒绝`
+                      ? skillIds.includes(skill.id)
+                        ? `被 Action「${users.join("」「")}」预载，移出后保存会被拒绝`
+                        : `被 Action「${users.join("」「")}」预载但不在技能集里：勾上它，或去改 Action`
                       : null
                   }
                 />
               );
             })}
           </div>
-        )}
-        {hiddenSkillCount > 0 && (
-          <p className="text-xs text-zinc-400">
-            集合里另有 {hiddenSkillCount} 项未在清单中列出（Skill 库超过 100 项），保存时原样保留。
-          </p>
         )}
       </Section>
 
@@ -501,18 +507,15 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
                   tokensHint="进入每个可见会话工具清单的估算"
                   badge={
                     users && users.length > 0
-                      ? `Action「${users.join("」「")}」可见，移出后保存会被拒绝`
+                      ? toolIds.includes(tool.id)
+                        ? `Action「${users.join("」「")}」可见，移出后保存会被拒绝`
+                        : `Action「${users.join("」「")}」可见但不在 Tool 集里：勾上它，或去改 Action`
                       : null
                   }
                 />
               );
             })}
           </div>
-        )}
-        {hiddenToolCount > 0 && (
-          <p className="text-xs text-zinc-400">
-            集合里另有 {hiddenToolCount} 项未在清单中列出（Tool 库超过 100 项），保存时原样保留。
-          </p>
         )}
       </Section>
 

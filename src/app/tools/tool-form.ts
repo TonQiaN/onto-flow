@@ -1,12 +1,31 @@
 /**
- * Tool 编辑器的纯函数：把表单文本解析成契约字段，并在客户端先做一遍与写入口
- * （src/server/writers/tool.ts、writers/json-schema.ts）相同的校验，让作者在编辑器里
- * 看到问题而不是在保存被 400 打回时。公名正则与 src/server/harness/tool-contract.ts
- * 的 TOOL_PUBLIC_NAME_PATTERN 是同一条——客户端不能从 @/server 导入运行时值，
- * 改一处必须同步另一处。
+ * Tool 编辑器的纯函数：把表单文本解析成契约字段，并在客户端先做一遍写入口
+ * （src/server/writers/tool.ts、harness/tool-schema.ts）的形状校验，让作者在编辑器里
+ * 看到问题而不是在保存被 400 打回时。这里只镜像了形状规则（对象根、type 数组、公名、超时、
+ * 保留名、@deepseek-ai 引用）；上游 assertObjectJsonSchema 的完整子集断言只在写入口跑，
+ * 所以门禁仍在服务端。公名正则与保留名清单与 src/server/harness/tool-contract.ts 是同一份
+ * ——客户端不能从 @/server 导入运行时值，tool-form.test.ts 钉住两边一致。
  */
 
 export const TOOL_PUBLIC_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** 与 tool-contract.ts 的 TOOL_RESERVED_PUBLIC_NAMES 同一份：上游内建工具名与会话数据面工具名 */
+export const TOOL_RESERVED_PUBLIC_NAMES: ReadonlySet<string> = new Set([
+  "bash",
+  "edit",
+  "read",
+  "read_image",
+  "write",
+  "glob",
+  "grep",
+  "skill",
+  "str_replace_editor",
+  "todo_write",
+  "web_search",
+  "web_fetch",
+  "run_code",
+  "structured_output",
+]);
 
 export type SchemaParse<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -78,8 +97,11 @@ export function parseTimeoutText(text: string): SchemaParse<number | null> {
 }
 
 export function publicNameProblem(publicName: string): string | null {
-  if (TOOL_PUBLIC_NAME_PATTERN.test(publicName)) return null;
-  return `模型可见的工具名「${publicName}」非法：小写字母开头，只含小写字母、数字与下划线，最长 64 位`;
+  if (!TOOL_PUBLIC_NAME_PATTERN.test(publicName))
+    return `模型可见的工具名「${publicName}」非法：小写字母开头，只含小写字母、数字与下划线，最长 64 位`;
+  if (TOOL_RESERVED_PUBLIC_NAMES.has(publicName))
+    return `模型可见的工具名「${publicName}」是上游内建工具或会话数据面工具的名字，契约 Tool 不能占用`;
+  return null;
 }
 
 /** execute 模块：非空，且不得引用上游闭包（那是又在写裸插件） */

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  TOOL_PUBLIC_NAME_PATTERN as SERVER_PUBLIC_NAME_PATTERN,
+  TOOL_RESERVED_PUBLIC_NAMES as SERVER_RESERVED_PUBLIC_NAMES,
+} from "@/server/harness/tool-contract";
+import {
   formatSchema,
   parseObjectSchemaText,
   parseOptionalObjectSchemaText,
@@ -7,8 +11,24 @@ import {
   publicNameProblem,
   TOOL_EXECUTE_TEMPLATE,
   TOOL_PARAMETERS_TEMPLATE,
+  TOOL_PUBLIC_NAME_PATTERN,
+  TOOL_RESERVED_PUBLIC_NAMES,
   toolCodeProblem,
 } from "./tool-form";
+
+describe("与写入口同一份规则", () => {
+  it("公名正则与保留名清单和 src/server/harness/tool-contract.ts 一致", () => {
+    expect(TOOL_PUBLIC_NAME_PATTERN.source).toBe(SERVER_PUBLIC_NAME_PATTERN.source);
+    expect([...TOOL_RESERVED_PUBLIC_NAMES].sort()).toEqual([...SERVER_RESERVED_PUBLIC_NAMES].sort());
+  });
+
+  it("保留名与非法形状各报一句", () => {
+    expect(publicNameProblem("bash")).toMatch(/内建/);
+    expect(publicNameProblem("structured_output")).toMatch(/内建/);
+    expect(publicNameProblem("Bash")).toMatch(/非法/);
+    expect(publicNameProblem("my_tool")).toBeNull();
+  });
+});
 
 describe("参数 schema 文本框", () => {
   it("合法的对象根 schema 解析成对象", () => {

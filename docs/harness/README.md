@@ -31,13 +31,13 @@
 `PluginDecision` 四值加两个特殊值：
 
 - **必挂**：没有它运行起不来。包括不是组合行的库（`@deepseek-ai/cordis`、`dsh-scope`、`schemastery`）——它们没有 `entry`，由 runner 或上游插件在代码里装载。永远不可切换。
-- **挂**：进入组合。`mountedByDefault` 省略时默认组合里就有；写 `mountedByDefault: false` 时目录**仍视它为「挂」**，但只在对应开关（`CompositionToggles`，今天只有 `webSearch`）打开时才进入组合——测试核对默认组合里没有它、开关全开后有它。
+- **挂**：进入组合。`mountedByDefault` 省略时默认组合里就有；写 `mountedByDefault: false` 时目录**仍视它为「挂」**，但只在对应开关（行上的 `toggle` 键，`CompositionToggles` 五键之一；今天只有搜索三件套的 `webSearch` 默认关）打开时才进入组合——测试核对默认组合里没有它、开关全开后有它。
 - **不挂**：不进组合。一句话理由在目录，完整论证在组文档。
 - **待定**：审过但结论未定。今天没有任何行用它；一旦出现就是待办，不该长期停留。
 - **备选**：同一 seam 里不挂但值得记的替代实现，组 9 专用；换实现时从这里找。
 - **自有**：本项目自己写的部分，不存在「挂不挂」的问题，组 10 专用。
 
-另有两个正交标记：`entry` 记组合里的 entry id（固定行写 `id`，按运行生成的 MCP 与 Tool 插件写 `idPrefix`）；`workflowToggle` 记能否由单个工作流覆盖全局默认（ADR-0016），只允许出现在组 2、3，骨架、沙箱、审批、记录一律 `false`，测试钉死。
+另有三个正交标记：`entry` 记组合里的 entry id（固定行写 `id`，按运行生成的 MCP 与 Tool 插件写 `idPrefix`）；`toggle` 记控制这一行挂载的开关键（`CompositionToggles` 五键之一，测试对每个键验开与关都只动它那些行）；`workflowToggle` 记能否由单个工作流覆盖全局默认（ADR-0016），只允许出现在组 2、3，骨架、沙箱、审批、记录一律 `false`，测试钉死。
 
 ## 定制方式三阶
 

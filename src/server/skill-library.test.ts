@@ -1,4 +1,4 @@
-/** 技能投影测试：半成品必须留在技能目录之外，避免并发摘要把它纳入内容；整目录换名保持 <slug> 路径稳定。 */
+/** 技能投影测试：半成品只在 .versions/ 下、换链接不换路径；旧版本随持有释放而删；旧式真实目录被换成链接。 */
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -24,7 +24,7 @@ afterAll(() => {
 });
 
 describe("技能磁盘投影", () => {
-  it("在库根的临时目录里写全部文件，再整目录换名到技能目录", () => {
+  it("全部文件写在 .versions/ 下的版本目录里，<slug> 是指向它的链接", () => {
     const written: string[] = [];
     const original = fs.writeFileSync.bind(fs);
     const spy = vi.spyOn(fs, "writeFileSync").mockImplementation((file, data, options) => {
@@ -48,13 +48,67 @@ describe("技能磁盘投影", () => {
     const dir = path.join(SKILL_LIBRARY_DIR, slug);
     expect(written).toHaveLength(2);
     for (const file of written) {
-      // 半成品全部落在 <root>/.skill-<slug>-<uuid>.tmp/ 之下，不在技能目录里
-      expect(file.startsWith(`${dir}${path.sep}`)).toBe(false);
-      expect(path.relative(SKILL_LIBRARY_DIR, file).split(path.sep)[0]).toMatch(/^\.skill-.*\.tmp$/);
+      // 半成品全部落在 <root>/.versions/<slug>-<uuid>/ 之下，链接换过去之前 <slug> 下看不到
+      const segments = path.relative(SKILL_LIBRARY_DIR, file).split(path.sep);
+      expect(segments[0]).toBe(".versions");
+      expect(segments[1]).toMatch(new RegExp(`^${slug}-`));
     }
+    expect(fs.lstatSync(dir).isSymbolicLink()).toBe(true);
     expect(fs.readdirSync(dir).sort()).toEqual(["SKILL.md", "scripts"]);
     expect(fs.readFileSync(path.join(dir, "scripts", "check.py"), "utf8")).toBe("print('ok')");
     expect(fs.readdirSync(SKILL_LIBRARY_DIR).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("重写只换链接不换路径：旧版本无人持有时立即删，被持有时等释放后再删", () => {
+    const skill = {
+      id: "version-switch-skill",
+      name: "换版本技能",
+      description: "验证链接切换",
+      content: "第一版",
+    };
+    const slug = skillSlug(skill);
+    const dir = path.join(SKILL_LIBRARY_DIR, slug);
+    const versionsDir = path.join(SKILL_LIBRARY_DIR, ".versions");
+    const versionsOf = () => fs.readdirSync(versionsDir).filter((name) => name.startsWith(`${slug}-`));
+
+    materializeSkill(skill);
+    const first = path.basename(fs.readlinkSync(dir));
+    materializeSkill({ ...skill, content: "第二版" });
+    const second = path.basename(fs.readlinkSync(dir));
+    expect(second).not.toBe(first);
+    // 无人持有：旧版本目录立即消失，只剩当前版本
+    expect(versionsOf()).toEqual([second]);
+    expect(fs.readFileSync(path.join(dir, "SKILL.md"), "utf8")).toContain("第二版");
+
+    retainSkillProjections("run-holding", [skill]);
+    materializeSkill({ ...skill, content: "第三版" });
+    const third = path.basename(fs.readlinkSync(dir));
+    // 被持有：换下的第二版留着，等运行收束
+    expect(versionsOf().sort()).toEqual([second, third].sort());
+    expect(fs.readFileSync(path.join(dir, "SKILL.md"), "utf8")).toContain("第三版");
+    releaseSkillProjections("run-holding", [skill]);
+    expect(versionsOf()).toEqual([third]);
+    removeSkill(skill);
+    expect(versionsOf()).toEqual([]);
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  it("旧式的真实目录被换成链接，内容以库为准", () => {
+    const skill = {
+      id: "legacy-dir-skill",
+      name: "旧式目录技能",
+      description: "升级前的投影",
+      content: "新投影",
+    };
+    const dir = path.join(SKILL_LIBRARY_DIR, skillSlug(skill));
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "SKILL.md"), "旧投影", "utf8");
+
+    materializeSkill(skill);
+
+    expect(fs.lstatSync(dir).isSymbolicLink()).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "SKILL.md"), "utf8")).toContain("新投影");
+    removeSkill(skill);
   });
 
   it("重写时不再声明的资源文件从投影里消失", () => {

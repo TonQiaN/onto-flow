@@ -19,5 +19,8 @@ digest pin 纳入工作流设置。
 `AGENTS.md`），Action 是会话里的 agent——工作流作者的心智模型就是"在某个目录里起 dsh 一段段聊"。
 技能与 Tool 的不对称是有意的：技能是指令，看见无害；Tool 是能力，评委不该看见归档工具。
 代价：三个设置界面、`references.ts` 与删除保护重写、种子与 e2e 跟着改、技能编辑器要管资源文件；
-预载有真实成本（正文进每个会话首条消息），编辑器必须把 token 量摆在开关旁边。本决定在第一批只落
-文档与目录字段，实现在第二批。
+预载有真实成本（正文进每个会话首条消息），编辑器必须把 token 量摆在开关旁边。
+
+第一批只落文档与目录字段；PR #16（合并提交 0b63a94，2026-09-02）落地实现：三层设置与工作流设置页、
+`workflow_skills` / `workflow_tools` / `action_preloads` / `skill_files`、`runs.settings_snapshot`，
+以及同批的 Tool 契约（ADR-0017）。

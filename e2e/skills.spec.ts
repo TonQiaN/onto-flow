@@ -5,14 +5,16 @@ import { cleanupByPrefix, cleanupRevisions, DATA_DIR } from "./helpers";
 
 const PREFIX = "e2e-技能-";
 
-/** 技能目录投影根（src/server/skill-library.ts）：data/skills/<slug>/ */
+/** 技能目录投影根（src/server/skill-library.ts）：data/skills/<slug>/ 是指向 .versions/ 下版本目录的链接 */
 const SKILLS_ROOT = path.join(DATA_DIR, "skills");
 
-/** 在投影根下找到含指定资源文件且内容一致的技能目录；找不到返回 null */
+/** 在投影根下找到含指定资源文件且内容一致的技能目录（经 <slug> 链接读，不看 .versions/）；找不到返回 null */
 function findProjectionDir(relativePath: string, content: string): string | null {
   if (!fs.existsSync(SKILLS_ROOT)) return null;
   for (const entry of fs.readdirSync(SKILLS_ROOT, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+    if (entry.name.startsWith(".")) continue;
+    // <slug> 是符号链接：Dirent.isDirectory() 为 false，要 stat 跟过去
+    if (!fs.statSync(path.join(SKILLS_ROOT, entry.name)).isDirectory()) continue;
     const candidate = path.join(SKILLS_ROOT, entry.name, relativePath);
     if (fs.existsSync(candidate) && fs.readFileSync(candidate, "utf8") === content)
       return path.join(SKILLS_ROOT, entry.name);

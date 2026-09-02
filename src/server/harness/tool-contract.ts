@@ -7,6 +7,30 @@
 /** 模型可见的工具名：小写字母开头，字母、数字、下划线，最长 64。 */
 export const TOOL_PUBLIC_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 
+/**
+ * 不能作为 Tool 公名的保留名。上游内建工具在全局层注册，同名的契约 Tool 包装在 boot 时以
+ * `tool "x" is already registered` 让整个运行起不来，而不是保存时 400；`structured_output` 是
+ * 每个会话自己注册的数据面工具，同名会在会话层遮蔽它、又被可见性守卫按裸名拒绝，Action 就交
+ * 不出结果；`web_fetch` / `run_code` 是目录里随开关挂载或备选的上游工具名，留给它们。
+ * 客户端在 src/app/tools/tool-form.ts 镜像了同一份清单（tool-form.test.ts 钉住两份一致）。
+ */
+export const TOOL_RESERVED_PUBLIC_NAMES: ReadonlySet<string> = new Set([
+  "bash",
+  "edit",
+  "read",
+  "read_image",
+  "write",
+  "glob",
+  "grep",
+  "skill",
+  "str_replace_editor",
+  "todo_write",
+  "web_search",
+  "web_fetch",
+  "run_code",
+  "structured_output",
+]);
+
 /** 单次 `ctx.run()` 的默认与上限超时（毫秒）；与 bash 工具同一上限。 */
 export const TOOL_RUN_DEFAULT_TIMEOUT_MS = 60_000;
 export const TOOL_RUN_MAX_TIMEOUT_MS = 120_000;

@@ -26,7 +26,7 @@
 - [ ] 名称冲突交给数据库：writer 没有预查名字，`handle()` 把 `UNIQUE constraint failed` 映射成 409；folders 是唯一例外（根级 parent 为 NULL 无法约束）
 - [ ] 实体体校验在 writer 的 `parse…Payload` 里，route 只窄化自己的非实体参数；仍是手写 `typeof` 窄化，没有引入 schema 库
 - [ ] 每次实体写入在**同一事务**里记一版修订，包含关系；回滚复用同一个 `write<Kind>()`
-- [ ] 原生 SQL 只经 `sql` 标签、只出现在查询构建器表达不了聚合的地方；`LIKE` 里的用户输入已转义并配 `escape '\'`
+- [ ] 原生 SQL 只经 `sql` 标签（`sql\`…\`` 与 `sql<T>\`…\`` 两种拼法都算）、只出现在查询构建器表达不了聚合的地方；白名单是 AGENTS.md 那句点名的 `monitor/` 与五个文件，`src/rules.test.ts` 钉住并要求名单里的文件今天仍在用；`LIKE` 里的用户输入已转义并配 `escape '\'`
 - [ ] 全局设置仍是单行表里的一份 JSON 文档，整份在 `src/server/settings.ts` 写边界校验；凭据只以环境变量**名**出现，值从 Next 进程环境在 spawn 时取；插件开关是 `toggles` 五键、默认指令是 `defaultInstructions`，没有回到 `webSearchEnabled` 或硬编码指令
 - [ ] 三层归属没有越界（Settings have three tiers）：全局给基线；工作流拥有 `instructions` / `settings.toggles`（只写覆盖键）/ `settings.mcpServers` / 技能集 / Tool 集；Action 只有预载 ⊆ 技能集、可见 Tool ⊆ Tool 集。⊆ 在**工作流保存**（`parseGraphPayload` 400，指名 Action 与技能 / Tool）与**运行受理**（`resolveWorkflow` 抛 `WorkflowResolveError` → 422）两处校验，没有挪到 Action 保存，也没有只留一处
 - [ ] 工作流 PUT 对 `instructions` / `settings` / `skillIds` / `toolIds` 仍是「缺省沿用现值、出现即整体替换」；画布只发图的保存没有清空集合
@@ -42,7 +42,7 @@
 
 - [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/monitor/stream`、`api/runs/[id]/events`（原生 SSE）与 `api/models`、`api/documents`（早于规则的单语句 GET）是仅有的四个例外，没有被复制
 - [ ] 每个 route `export const dynamic = "force-dynamic"`
-- [ ] 客户端代码没有从 `@/server` 或 `@/db` 导入运行时值；`import type` 只从 `@/server/monitor/types`。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
+- [ ] 客户端代码（含 `"use client"` 文件与 `src/app`（`api/` 除外）、`src/components` 下没有指令的共享模块）没有从 `@/server` 或 `@/db` 导入运行时值；`import type` 只从 `@/server/monitor/types`。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
 - [ ] 能到达修订还原的 route 带 `import "@/server/writers";`，否则 restore 静默答 501
 - [ ] 五个库的列表 GET 仍返回 `{ items, total, page, pageSize }`，由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出；其它 GET 各自定形
 - [ ] 五个库页复用 `src/components/library/`，没有长出自己的树、工具栏、文件夹选择器或修订面板；筛选状态在 URL（`use-library-query`）不在组件 state
@@ -60,6 +60,10 @@
 - [ ] 用量按 chunk 求和、`outputTokens` 已含推理，没有把推理另算一桶；费用在写入时按到达时刻定价，未知模型为 0 而不是猜价
 - [ ] 每运行组合没有 stdout logger（stdout 属于协议）；`dshHome` / `agentsHome` 钉在运行目录内；节点步数上限仍在
 - [ ] 声明的产物必须真在盘上；模型说写了不算证据（ADR-0008）
+- [ ] 压缩摘要的用量仍经 `compaction/summary` 记成 `node_usage` 行 `compaction:<seq>`、进 `run_nodes.cost`，Trace 与成本页不把它算成 assistant 消息；提交阶段失败那次无法计费是已知例外（Compaction summary usage arrives on `compaction/summary`）
+- [ ] 搜索三件套只在生效的 `toggles.webSearch` 为真时挂、全局默认关；改了别的开关行也只挂目录标了那个键的行（DeepSeek search is off by default）
+- [ ] `TMPDIR=<run>/tmp` 与 spill root `<run>/home/spill` 仍钉在运行目录内；`spill-policy.maxInlineBytes`、`tool-todo.allowParallelInProgress`、`tool-fs-search.sampleOverCapGlobResults` 三个隐性必填键没被删（`TMPDIR` is pinned / Every composition row is decided in three places）
+- [ ] `agent-instructions.maxBytes` 仍是 `INSTRUCTIONS_BATCH_MAX_BYTES`（两份 64 KiB 指令上限之和 + 帧余量），没有改回上游 base 的 65536——那会让全局默认指令在合计超限时被静默丢掉（Global settings are one JSON document）
 
 ## 6. 三方同步：组合 / 目录 / docs/harness（ADR-0013）
 
@@ -67,12 +71,14 @@
 - [ ] 新插件的 `decision` / `mountedByDefault` / `workflowToggle` / `reason` 与它在组合里的实际挂载一致
 - [ ] 新增 `models` 行走 `scripts/seed.ts` 的 `upsertModel`；新 provider 路由有 `runCompositionEntries` 里的 adapter；没有 route 写 `models`
 - [ ] Tool 仍是契约、包装仍归平台（A Tool is an OntoFlow contract）：库里的 `code` 只是 `export default async function execute(args, ctx)`，没有 `name` / `inject` / `apply`，不 import `@deepseek-ai/*`（写入口拒绝）；上游注册形状只出现在 `src/server/harness/tool-plugin.ts`，改了它就跑 `tool-plugin.test.ts` 与 `composition-boot.test.ts`（真 boot 带样例契约 Tool 的组合）；Tool 要围栏只经 `ctx.run()`，谨慎的 Tool 以 `sandbox.enforced && !sandbox.runnerFailed` 为门禁
-- [ ] JSON Schema 子集在**写入口**拦（`objectSchemaProblem`，`parameters` 与 `output` 都查，客户端 `tool-form.ts` 同款）；没有把 type 数组的拒绝寄托在插件加载上——上游 `register` 不校验 `parameters`
+- [ ] JSON Schema 子集在**写入口**拦（`objectSchemaProblem`，`parameters` 与 `output` 都查，客户端 `tool-form.ts` 镜像形状规则）；没有把 type 数组的拒绝寄托在插件加载上——上游 `register` 不校验 `parameters`
+- [ ] Tool 公名不在 `TOOL_RESERVED_PUBLIC_NAMES`（上游内建工具名 + `structured_output` / `run_code` / `web_fetch`）里，写入口拒绝；同名包装会让 boot 撞名倒下、或遮蔽会话的 `structured_output`（A Tool is an OntoFlow contract）
 
 ## 7. 专用付费入口的行为钉死（A specialized paid invocation pins behavior, not names）
 
 - [ ] 改了参与专用入口的 Action 的 prompt / rule / provider / model / 思考强度 / 重入策略 / 预载技能 / 可见 Tool，或工作流的指令 / 开关覆盖 / MCP 子集 / 技能集 / Tool 集，或校验 Tool 的任一契约字段 → 对应的三类 digest pin（`src/lib/resume-match.ts` 的 `RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256` / `RESUME_MATCH_ACTION_BEHAVIOR_SHA256` / `RESUME_MATCH_VALIDATOR_TOOL_SHA256`，经 `src/server/resume-match-*-integrity.ts` 与其测试）**显式**审阅并更新，PR 描述列出新旧值；种子改了而 pin 没动，种子与测试必须红。工作流描述与 Tool 展示名不进契约，改它们不该动 pin
 - [ ] 专用入口的业务结果仍写 `run_results`，没有塞进 `runs.imports`（运行列表 / 详情 API 会暴露它）
+- [ ] Skill 投影仍是 `data/skills/<slug>` 链接指向 `.versions/<slug>-<stamp>/`，重写只换链接、路径没有空档，旧版本等持有释放再删（A Skill is a directory…）
 - [ ] Skill 目录名仍是 id 稳定的 ASCII slug（`skillSlug()`），没有用中文库名；预载手势用的也是这个 slug。一定要生效的内容放进 Action 的 rule、工作流指令或全局默认指令，必定要用的技能由 Action 预载，不是靠模型「判断相关」；预载有 token 代价，编辑器旁的估算没有被拿掉
 
 ## 8. 测试（Checks / Test fixtures）

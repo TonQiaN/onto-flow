@@ -18,6 +18,7 @@ import {
   EMPTY_WORKFLOW_SETTINGS,
   type CompositionToggles,
   type WorkflowSettings,
+  WORKFLOW_INSTRUCTIONS_MAX_BYTES,
 } from "@/lib/workflow-settings";
 import { MCP_SERVER_NAME_PATTERN } from "@/server/harness/entries";
 import { assertSafeId } from "@/server/harness/ids";
@@ -43,7 +44,7 @@ export interface EdgePayload {
 }
 
 /** 工作流指令原样成为 workspace/AGENTS.md；上限按字节算，防止一份手册撑爆每个会话的首条消息。 */
-export const WORKFLOW_INSTRUCTIONS_MAX_BYTES = 64 * 1024;
+export { WORKFLOW_INSTRUCTIONS_MAX_BYTES };
 
 export type WorkflowRow = typeof workflows.$inferSelect;
 

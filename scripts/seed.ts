@@ -451,11 +451,11 @@ function upsertTool(input: {
     code: input.code,
   };
   // 幂等键是模型可见的公名：展示名是可以改的中文，公名才是全库唯一的身份。
-  const existing = db
-    .select()
-    .from(tools)
-    .where(eq(tools.publicName, input.publicName))
-    .get();
+  // 公名查不到时按展示名再查：有人在库里改过种子 Tool 的公名，直接插入会撞 UNIQUE(name)
+  // 把幂等种子变成报错；按展示名找到就连公名一起写回种子值。
+  const existing =
+    db.select().from(tools).where(eq(tools.publicName, input.publicName)).get() ??
+    db.select().from(tools).where(eq(tools.name, input.name)).get();
   if (existing) {
     db.update(tools).set({ name: input.name, ...values }).where(eq(tools.id, existing.id)).run();
     return existing.id;

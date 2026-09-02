@@ -154,7 +154,10 @@ function upsertObjectType(
 
 /** Tool 契约（ADR-0017）按公名查找（展示名可改，公名是身份），任一字段不同就走 writer 重写。 */
 function upsertTool(payload: ToolPayload): string {
-  const existing = db.select().from(tools).where(eq(tools.publicName, payload.publicName)).get();
+  // 公名查不到时按展示名再查：改过公名的种子 Tool 直接插入会撞 UNIQUE(name)；找到就连公名一起写回
+  const existing =
+    db.select().from(tools).where(eq(tools.publicName, payload.publicName)).get() ??
+    db.select().from(tools).where(eq(tools.name, payload.name)).get();
   if (!existing) return unwrap(createTool(payload)).id;
   const current: ToolPayload = {
     name: existing.name,

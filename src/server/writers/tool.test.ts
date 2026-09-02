@@ -23,6 +23,9 @@ describe("Tool 契约校验", () => {
     [{ publicName: "1abc" }, "工具名"],
     [{ publicName: "a-b" }, "工具名"],
     [{ publicName: "a".repeat(65) }, "工具名"],
+    // 保留名：与上游内建同名的包装在 boot 时撞名、整个运行起不来；structured_output 会遮蔽会话数据面
+    [{ publicName: "bash" }, "内建"],
+    [{ publicName: "structured_output" }, "内建"],
     [{ parameters: { type: "string" } }, "对象根"],
     [{ parameters: "{}" }, "parameters"],
     [{ parameters: { type: "object", properties: { n: { type: ["integer", "null"] } } } }, "type 数组"],

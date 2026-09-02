@@ -1163,10 +1163,10 @@ function materializeRunInputs(
     // 文字与 JSON 物化为文件（ADR-0012）：按节点名命名，路径本身就是语义，
     // 模型和事后翻工作区的人都能一眼认出这是什么。文字一字不差落盘，不加不减。
     const label = nodes.find((node) => node.id === nodeId)?.label.trim() ?? "";
-    // AGENTS / CLAUDE 是上游 agent-instructions 的指令文件名：模型读到 inputs/<节点>/AGENTS.md
-    // 时它会被当作该目录的附加指令；输入节点叫这个名字就加前缀避开。
+    // AGENTS / CLAUDE（含 .local 覆盖层）是上游 agent-instructions 的指令文件名：模型读到
+    // inputs/<节点>/AGENTS.md 时它会被当作该目录的附加指令；输入节点叫这个名字就加前缀避开。
     const rawStem = safeBasename(label || "value");
-    const stem = /^(agents|claude)$/i.test(rawStem) ? `输入-${rawStem}` : rawStem;
+    const stem = /^(agents|claude)(\.local)?$/i.test(rawStem) ? `输入-${rawStem}` : rawStem;
     const name = boundedInputFilename(value.kind === "text" ? `${stem}.md` : `${stem}.json`);
     const content = value.kind === "text" ? value.text : serializeJsonInput(value.json);
     if (content === null) {

@@ -11,7 +11,8 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET/PUT 共用的响应：workflow 全量定义（含指令、设置与两个集合，ADR-0016）+
- * NodeDto/EdgeDto + 校验 issues。设置页「先 GET 全量再 PUT 全量」靠的就是这份形状。
+ * NodeDto/EdgeDto + 校验 issues。这份形状服务于页面回显与画布：设置页只 PUT 设置与集合、
+ * 画布只 PUT 图，各自缺省的部分由 writeWorkflow 沿用现值，谁都不先 GET 全量再整体 PUT。
  */
 async function workflowResponse(id: string) {
   // 编辑面不因 ⊆ 违反而 500：问题随 issues 回到页面，人从设置页把技能/Tool 加进集合即可修复。
