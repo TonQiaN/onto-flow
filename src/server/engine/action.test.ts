@@ -209,6 +209,7 @@ function context(options?: {
       logsDir: workspaceRoot,
       homeDir: workspaceRoot,
       pluginsDir: workspaceRoot,
+      tmpDir: workspaceRoot,
       compositionPath: path.join(workspaceRoot, "cordis.yml"),
       imports: { instructionsDigest: "", items: [] },
     },

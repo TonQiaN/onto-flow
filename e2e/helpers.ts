@@ -1,4 +1,21 @@
+import path from "node:path";
 import type { APIRequestContext } from "@playwright/test";
+import Database from "better-sqlite3";
+
+/** 一切从仓库根解析：data/ 取自 process.cwd()，换目录就是另一个库（与 src/db/index.ts 同源） */
+export const DATA_DIR = path.join(process.cwd(), "data");
+export const DB_PATH = path.join(DATA_DIR, "ontoflow.db");
+
+/**
+ * 直接打开本地库写合成夹具行（runs.spec.ts / parallel-ui.spec.ts 的同款模式）。
+ * pragma 与 src/db/index.ts 一致：外键级联要生效，WAL 下与 dev server 并发写要等锁而不是立抛 BUSY。
+ */
+export function openDb(): Database.Database {
+  const database = new Database(DB_PATH);
+  database.pragma("foreign_keys = ON");
+  database.pragma("busy_timeout = 5000");
+  return database;
+}
 
 /**
  * 删除名称以指定前缀开头的测试自建实体（幂等）。

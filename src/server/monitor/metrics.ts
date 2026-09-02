@@ -418,7 +418,7 @@ interface TraceUsageRow {
  *
  * step 的推导规则（run_events 只有 text|tool|session.error|session.idle 四类）：
  * - 节点开始到首条事件之间 → 「会话准备与上下文注入」（覆盖建会话、noReply 注入规则技能、发 prompt）；
- * - tool 事件按 callID 聚合成一个 span（状态取最后一次更新）；
+ * - tool 事件按 callId 聚合成一个 span（状态取最后一次更新）；
  * - 连续的 text 事件合成一个「模型输出」span，session.idle 作为回合分界，
  *   第二回合起标注「JSON 解析重试」——引擎对结构化输出解析失败时正是同会话再发一轮 prompt；
  * - session.error 单独成一个失败 span。
@@ -660,7 +660,8 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
     // 工具事件不切断文本分组：一次模型回合里本来就可能「说几句 → 调工具 → 接着说」，
     // 切断会把同一回合的输出误标成「降级重试」。只有 idle / error 才是回合边界。
     if (ev.type === "tool") {
-      const callId = text(payload?.callID) || `${ev.id}`;
+      // events.ts 写的是 callId；曾拼成 callID，同一次工具调用的 running/ok 永远合不成一个 span。
+      const callId = text(payload?.callId) || `${ev.id}`;
       const status = text(payload?.status) || "pending";
       const existing = tools.get(callId);
       const detail =
@@ -835,6 +836,7 @@ export function getLogs(query: LogsQuery): LogsPayload {
     conds.push(sql`(
       run_events.type = 'session.error'
       or (run_events.type = 'tool' and json_extract(run_events.payload, '$.status') = 'error')
+      or (run_events.type = 'compaction' and json_extract(run_events.payload, '$.status') = 'error')
     )`);
   }
   if (query.cursor != null && Number.isFinite(query.cursor)) {

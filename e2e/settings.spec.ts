@@ -17,10 +17,17 @@ test.describe("全局设置", () => {
     await request.put("/api/settings", { data: saved });
   });
 
-  test("四个分区与插件面板都在，面板列出下次运行会挂的 entry", async ({ page }) => {
+  test("五个分区与插件面板都在，面板列出下次运行会挂的 entry", async ({ page }) => {
     await page.goto("/settings");
 
-    for (const section of ["模型与凭据", "凭据引用", "MCP 服务器", "默认停用的工具", "插件面板"]) {
+    for (const section of [
+      "模型与凭据",
+      "凭据引用",
+      "MCP 服务器",
+      "默认停用的工具",
+      "搜索",
+      "插件面板",
+    ]) {
       await expect(
         page.getByRole("heading", { name: section, exact: true }),
         `应有「${section}」分区`,
@@ -123,5 +130,96 @@ test.describe("全局设置", () => {
     const disabledSection = page.getByText("已停用的 MCP（不会进入组合）", { exact: true });
     await expect(disabledSection).toBeVisible();
     await expect(page.getByText("mcp-e2e-fs", { exact: true })).toBeVisible();
+  });
+
+  test("插件面板按目录分十组，组标题、默认方向与每组行数都与 API 一致", async ({ page }) => {
+    // 分组来自 catalog.ts 的 PLUGIN_GROUPS，经 /api/settings/composition 投影；
+    // 面板不得自己维护一份分组，所以这里逐组对齐 API 而不是写死组名。
+    const { groups } = (await (await page.request.get("/api/settings/composition")).json()) as {
+      groups: Array<{
+        id: number;
+        title: string;
+        defaultStance: string;
+        rows: Array<{ package: string; mounted: string }>;
+      }>;
+    };
+    expect(groups.length, "目录固定分十组").toBe(10);
+
+    await page.goto("/settings");
+    const panel = page.locator('section:has(h2:text-is("插件面板"))');
+    await expect(panel).toContainText("catalog.ts");
+    await expect(panel.locator("details[data-plugin-group]")).toHaveCount(groups.length);
+
+    for (const group of groups) {
+      const details = panel.locator(`details[data-plugin-group="${group.id}"]`);
+      const summary = details.locator("summary");
+      await expect(summary, `组 ${group.id} 的标题应与 API 一致`).toContainText(group.title);
+      await expect(summary).toContainText(group.defaultStance);
+      // 组 1–4 与组 10 默认展开，组 5–9 默认折叠只露组名与方向
+      if ([1, 2, 3, 4, 10].includes(group.id)) {
+        await expect(details).toHaveAttribute("open", "");
+      } else {
+        await expect(details).not.toHaveAttribute("open", "");
+      }
+      await expect(details.locator("tr[data-plugin-row]")).toHaveCount(group.rows.length);
+      for (const row of group.rows) {
+        await expect(
+          details.locator(`tr[data-plugin-row="${row.package}"]`),
+          `「${row.package}」的挂载状态应与 API 推导一致`,
+        ).toContainText(row.mounted);
+      }
+    }
+  });
+
+  test("搜索开关保存后进入设置文档，并把搜索三件套挂进下一次运行的组合", async ({ page, request }) => {
+    await page.goto("/settings");
+    // 说明文字必须点明这是账外支出
+    await expect(page.getByText("DeepSeek 搜索的费用不计入本站用量")).toBeVisible();
+    // 设置文档在 useEffect 里异步载入，分组渲染出来才说明文档已到位，此后勾选才不会被载入覆盖
+    await expect(page.locator("details[data-plugin-group]")).toHaveCount(10);
+
+    // 等 PUT 真正返回再读 API：「已保存」在点击的同一帧被清空又重设，肉眼可见但不可靠
+    const saveAndWait = async () => {
+      const put = page.waitForResponse(
+        (r) => r.url().endsWith("/api/settings") && r.request().method() === "PUT",
+      );
+      await page.getByRole("button", { name: "保存", exact: true }).click();
+      expect((await put).ok()).toBe(true);
+      await expect(page.getByText(/^已保存/)).toBeVisible();
+    };
+
+    const toggle = page.getByLabel("启用 DeepSeek 搜索");
+    await toggle.check();
+    await saveAndWait();
+
+    const doc = (await (await request.get("/api/settings")).json()) as {
+      webSearchEnabled: boolean;
+    };
+    expect(doc.webSearchEnabled).toBe(true);
+
+    // 面板与 API 同一份推导：开关打开后 tool-web 进入组合，目录行变成「按开关已挂」
+    const on = (await (await request.get("/api/settings/composition")).json()) as {
+      entries: Array<{ id: string }>;
+      groups: Array<{ rows: Array<{ package: string; mounted: string }> }>;
+    };
+    expect(on.entries.some((e) => e.id === "tool-web")).toBe(true);
+    const toolWeb = on.groups
+      .flatMap((g) => g.rows)
+      .find((r) => r.package === "@deepseek-ai/dsh-tool-web");
+    expect(toolWeb?.mounted).toBe("按开关已挂");
+    await expect(page.locator('tr[data-plugin-row="@deepseek-ai/dsh-tool-web"]')).toContainText(
+      "按开关已挂",
+    );
+
+    await toggle.uncheck();
+    await saveAndWait();
+    const off = (await (await request.get("/api/settings/composition")).json()) as {
+      entries: Array<{ id: string }>;
+    };
+    expect(off.entries.some((e) => e.id === "tool-web")).toBe(false);
+    expect(
+      ((await (await request.get("/api/settings")).json()) as { webSearchEnabled: boolean })
+        .webSearchEnabled,
+    ).toBe(false);
   });
 });

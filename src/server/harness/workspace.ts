@@ -28,6 +28,13 @@ export const RUN_WORKSPACE_SUBDIR = "workspace";
 export const RUN_HOME_SUBDIR = "home";
 /** 运行目录内 cordis 插件（Tool）的物化子目录名。 */
 export const RUN_PLUGINS_SUBDIR = "plugins";
+/**
+ * 运行目录内 agent 临时文件的子目录名：经 TMPDIR 注入子进程，bash 的 mktemp、
+ * Python 的 tempfile、Poppler 与上游沙箱围栏的 os.tmpdir() 三方因此对齐，运行
+ * 删除时一并清掉，磁盘统计按运行目录计时自动包含。它是工作区的兄弟目录，
+ * 不是子目录：上游 sandbox-local 断言临时根不得位于工作区内部。
+ */
+export const RUN_TMP_SUBDIR = "tmp";
 /** 运行输入落盘的工作区子目录名。 */
 export const WORKSPACE_INPUTS_SUBDIR = "inputs";
 
@@ -70,6 +77,8 @@ export interface RunWorkspace {
   homeDir: string;
   /** Tool 物化目录，进入组合配置的 include 面。 */
   pluginsDir: string;
+  /** 本运行独占的临时目录（TMPDIR）；agent 运行期的一切临时文件都落在这里。 */
+  tmpDir: string;
   compositionPath: string;
   /** 指令与各导入项的摘要，交由调用方写进运行记录。 */
   imports: { instructionsDigest: string; items: ImportRecord[] };
@@ -130,6 +139,7 @@ export async function createRunWorkspace(
   const logsDir = path.join(runDir, "logs");
   const homeDir = path.join(runDir, RUN_HOME_SUBDIR);
   const pluginsDir = path.join(runDir, RUN_PLUGINS_SUBDIR);
+  const tmpDir = path.join(runDir, RUN_TMP_SUBDIR);
 
   let exists = false;
   try {
@@ -145,6 +155,7 @@ export async function createRunWorkspace(
     await mkdir(logsDir, { recursive: true });
     await mkdir(homeDir, { recursive: true });
     await mkdir(pluginsDir, { recursive: true });
+    await mkdir(tmpDir, { recursive: true });
     await mkdir(path.join(workspaceDir, WORKSPACE_INPUTS_SUBDIR), { recursive: true });
     // 空 .git 标记把上游指令链与技能发现的 projectRoot 钉在工作区内，
     // 防止 data/ 位于某个 Git 仓库中时向上发现越出运行边界。
@@ -175,6 +186,7 @@ export async function createRunWorkspace(
       logsDir,
       homeDir,
       pluginsDir,
+      tmpDir,
       compositionPath: path.join(runDir, RUN_COMPOSITION_FILE),
       imports: {
         instructionsDigest: createHash("sha256")

@@ -119,10 +119,18 @@ token 与费用等脱敏指标，不回显岗位、简历或结果正文。
 ## 测试
 
 ```bash
-npm run check      # typecheck + 单测；提交前跑这个（仓库没有 CI、没有 hook）
+npm run check      # typecheck + 单测；提交前跑这个
 npm test           # vitest 单测
 npm run test:e2e   # Playwright E2E（复用 3592 端口的 dev server）
+npx vitest run src/rules.test.ts   # AGENTS.md 里能机械核对的约定
 ```
+
+仓库没有 git hook，门槛在 GitHub Actions：`.github/workflows/ci.yml` 在每个 PR 与 push `main` 上
+跑 `typecheck / test / build` 与 Playwright，不花钱；`.github/workflows/smoke.yml` 是付费冒烟，
+按需或每日定时跑 `smoke-harness` 与 `smoke-engine`，需要仓库 secret `DEEPSEEK_API_KEY`；在 issue
+或 PR 评论里 `@claude` 触发按需评审（需要 `ANTHROPIC_API_KEY` 与 Claude GitHub App）。评审清单在
+[.github/REVIEW.md](.github/REVIEW.md)，PR 描述按
+[.github/pull_request_template.md](.github/pull_request_template.md) 填三段。
 
 ## 执行语义速览
 

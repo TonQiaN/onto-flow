@@ -14,3 +14,7 @@ opencode server，而是把 DeepSeek Harness（`dsh`）作为唯一执行引擎�
 从配置替换的行，正是这个工作台需要的编排底座；同族的 `@earendil-works/pi-ai` 适配器还让
 OpenAI 兼容网关成为配置而非代码改动。代价是本仓库从此绑定一个处于 developer preview、明确
 声明会有破坏性变更的上游，升级要当作代码变更来评审。
+
+后续：组合的逐行取舍与"以 headless 会话为体验基线"的立场见 [ADR-0013](0013-explicit-composition-headless-baseline.md)；
+"技能不再是被引用即强制注入的 prompt 片段"一句由 [ADR-0016](0016-three-tier-settings.md) 修正——Action 可以预载
+技能，但只经上游的显式调用路径注入。

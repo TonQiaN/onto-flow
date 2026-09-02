@@ -1,0 +1,60 @@
+# 合并门槛：pull_request 与 push(main) 都跑。两个作业都不需要模型凭据，
+# 不花钱——含 Action 节点的运行只在 smoke.yml（按需 / 定时，非门槛）里跑。
+#
+# check：typecheck → vitest → build。vitest 里的 src/server/harness/composition-boot.test.ts
+# 会真起一个 harness 子进程 boot 默认组合（不调模型）；ubuntu 上 dsh 的 bash 沙箱
+# 走 npm 分发的 landlock-run，让它在 CI 上真跑，不做特殊处理。
+# e2e：db:push + db:seed 建一份干净的 data/ontoflow.db，playwright.config 自起 dev server。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck · vitest · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  e2e:
+    name: playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # 一切命令从仓库根运行：data/ 从 process.cwd() 解析，换目录就是另一个库
+      - run: npm run db:push
+      - run: npm run db:seed
+      - run: npx playwright test
+      - name: 上传失败现场（trace / 报告）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failure
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7

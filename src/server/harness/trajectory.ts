@@ -4,7 +4,9 @@
  * DSH 的 session.jsonl 是可恢复会话的事实源，run_events 只是面向全局日志的摘要，
  * 因此这里直接读持久化日志并投影出展示 DTO。投影只消费 durable event；token
  * chunk 会聚合成一条运行中或中断的模型响应，并提供首 token 时间与累计 usage，
- * 不会把流式碎片重复显示成数百条记录。
+ * 不会把流式碎片重复显示成数百条记录。上下文压缩（compaction/start → summary →
+ * 替换检查点 → end）合成一条 context 记录，工具结果裁剪（compaction/prune → 替换
+ * tool/result）另成一条；替换副本不覆盖原始消息，模型当时看到的全文仍在原记录里。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -15,6 +17,8 @@ import {
 } from "@deepseek-ai/dsh-session";
 // 注册 llm/retry 与 llm/retry-started 的 SessionEventMap 声明合并。
 import type {} from "@deepseek-ai/dsh-llm-retry";
+// 注册 compaction/start、compaction/summary、compaction/end、compaction/prune 的声明合并。
+import type {} from "@deepseek-ai/dsh-compaction/types";
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
 
 export interface TrajectoryDetail {
@@ -131,6 +135,34 @@ interface ToolResultFact {
   attachments: Record<string, unknown>[];
 }
 
+/**
+ * 一次上下文压缩的完整生命周期：start 开锁、summary 记录摘要与那次模型调用的事实、
+ * 紧随其后的 replace user/message 才是模型此后真正看到的检查点、end 释放锁。
+ * 四者合成一条记录，面板里前缀凭空变短这件事才有据可查。
+ */
+interface CompactionFact {
+  compactionId: string;
+  startSeq: number;
+  startTime: number;
+  turn: number | null;
+  step: number | null;
+  summary?: Extract<SessionEvent, { type: "compaction/summary" }>;
+  checkpoint?: { seq: number; time: number; content: string };
+  end?: Extract<SessionEvent, { type: "compaction/end" }>;
+}
+
+/** 一次不经模型的工具结果裁剪：影子价事件与紧随其后的替换 tool/result。 */
+interface PruneFact {
+  seq: number;
+  time: number;
+  turn: number | null;
+  step: number | null;
+  shadowedSeqs: number[];
+  shadowedTokenCount: number;
+  callId?: string;
+  prunedChars?: number;
+}
+
 type AssistantProjectionBlock =
   | { type: "text" | "reasoning"; text: string }
   | { type: "tool-call"; id: string; name: string; arguments: string }
@@ -168,6 +200,10 @@ const PROJECTED_EVENT_TYPES = new Set<string>([
   "request/header",
   "request/context",
   "llm/retry",
+  "compaction/start",
+  "compaction/summary",
+  "compaction/end",
+  "compaction/prune",
 ]);
 
 /** rc.2 已知但本精简视图不展示的 durable 事实；新增 required 类型必须显式审阅。 */
@@ -179,10 +215,6 @@ const IGNORED_EVENT_TYPES = new Set<string>([
   "approval/policy",
   "command/done",
   "command/run",
-  "compaction/end",
-  "compaction/prune",
-  "compaction/start",
-  "compaction/summary",
   "feedback/record",
   "goal/change",
   "hook/invoked",
@@ -457,6 +489,8 @@ export function projectSession(
     number,
     Extract<SessionEvent, { type: "turn/end" }>
   >();
+  const compactions = new Map<string, CompactionFact>();
+  const prunes: PruneFact[] = [];
 
   let currentTurn: number | null = null;
   let currentStep: number | null = null;
@@ -566,6 +600,20 @@ export function projectSession(
       case "user/message": {
         const source = event.data.source;
         const sourceKind = sourceKindOf(source);
+        const checkpointOf = compactionCheckpointId(event);
+        if (checkpointOf !== null && compactions.has(checkpointOf)) {
+          // 摘要事件与替换消息相邻是上游契约：两者合成一条压缩记录，检查点不再单独成行。
+          const fact = compactions.get(checkpointOf)!;
+          compactions.set(checkpointOf, {
+            ...fact,
+            checkpoint: {
+              seq: event.seq,
+              time: event.time,
+              content: blocksText(event.data.content),
+            },
+          });
+          break;
+        }
         const direct = sourceKind === "user";
         const content = blocksText(event.data.content);
         records.push({
@@ -633,9 +681,44 @@ export function projectSession(
       }
       case "tool/result": {
         const result = toolResultFact(event);
-        if (result !== null && !toolResults.has(result.callId)) {
-          toolResults.set(result.callId, result);
-        }
+        if (result === null) break;
+        if (isReplaceOp(event.surfaceOp)) pairPrune(prunes, event.seq, result);
+        // 先到先得：裁剪后的替换副本不覆盖原始结果，工具记录仍展示模型当时看到的全文。
+        if (!toolResults.has(result.callId)) toolResults.set(result.callId, result);
+        break;
+      }
+      case "compaction/start": {
+        const id = String(event.data.compactionId);
+        compactions.set(id, {
+          compactionId: id,
+          startSeq: event.seq,
+          startTime: event.time,
+          turn: event.data.turn,
+          step: currentStep,
+        });
+        break;
+      }
+      case "compaction/summary": {
+        const id = String(event.data.compactionId);
+        const fact = compactions.get(id) ?? openCompaction(id, event, currentTurn, currentStep);
+        compactions.set(id, { ...fact, summary: event });
+        break;
+      }
+      case "compaction/end": {
+        const id = String(event.data.compactionId);
+        const fact = compactions.get(id) ?? openCompaction(id, event, currentTurn, currentStep);
+        compactions.set(id, { ...fact, end: event });
+        break;
+      }
+      case "compaction/prune": {
+        prunes.push({
+          seq: event.seq,
+          time: event.time,
+          turn: currentTurn,
+          step: currentStep,
+          shadowedSeqs: [...event.data.shadowedSeqs],
+          shadowedTokenCount: event.data.shadowedTokenCount,
+        });
         break;
       }
       case "step/end": {
@@ -708,6 +791,20 @@ export function projectSession(
         header.id,
         active,
         finishedAt ?? lastEventTime,
+      ),
+    );
+  }
+
+  for (const fact of compactions.values()) {
+    records.push(compactionRecord(fact, scrubRoots, header.id, active, lastEventTime));
+  }
+  for (const prune of prunes) {
+    records.push(
+      pruneRecord(
+        prune,
+        prune.callId === undefined ? undefined : toolCalls.get(prune.callId)?.name,
+        scrubRoots,
+        header.id,
       ),
     );
   }
@@ -1059,6 +1156,191 @@ function toolRecord(
   };
 }
 
+/** 只见 summary/end 不见 start 的压缩（seed 截断）：以首个可见事件为起点补一条事实。 */
+function openCompaction(
+  compactionId: string,
+  event: { seq: number; time: number },
+  turn: number | null,
+  step: number | null,
+): CompactionFact {
+  return {
+    compactionId,
+    startSeq: event.seq,
+    startTime: event.time,
+    turn,
+    step,
+  };
+}
+
+/**
+ * 压缩检查点：source 带 `plugin: "compact"` 标记且以 replace 进入表层的 user/message
+ *（上游 dsh-compaction/checkpoint）。返回 compactionId；未带 id 的返回空串。
+ */
+function compactionCheckpointId(
+  event: Extract<SessionEvent, { type: "user/message" }>,
+): string | null {
+  const source: unknown = event.data.source;
+  if (!isRecord(source) || source.kind !== "plugin" || source.plugin !== "compact") {
+    return null;
+  }
+  if (!isReplaceOp(event.surfaceOp)) return null;
+  return typeof source.compactionId === "string" ? source.compactionId : "";
+}
+
+/** 剪枝替换紧随其影子价事件同步落盘（上游 compaction/prune 契约），只按相邻 seq 配对。 */
+function pairPrune(prunes: PruneFact[], seq: number, result: ToolResultFact): void {
+  const prune = prunes.at(-1);
+  if (prune === undefined || prune.callId !== undefined || prune.seq !== seq - 1) return;
+  prune.callId = result.callId;
+  prune.prunedChars = result.content.length;
+}
+
+function isReplaceOp(value: unknown): boolean {
+  return isRecord(value) && value.op === "replace";
+}
+
+function compactionRecord(
+  fact: CompactionFact,
+  scrubRoots: string[],
+  sessionId: string,
+  sessionActive: boolean,
+  lastEventTime: number,
+): TrajectoryRecord {
+  const summarized = fact.summary;
+  const failure = fact.end?.data.error;
+  // 摘要与替换同步落盘：见到 summary 就说明表层已经换掉，end 只是释放锁。
+  const open = summarized === undefined && fact.end === undefined;
+  const interrupted = open && !sessionActive;
+  const state: TrajectoryRecord["state"] =
+    failure !== undefined || interrupted ? "error" : open ? "running" : "complete";
+  const label =
+    failure !== undefined
+      ? "上下文压缩失败"
+      : interrupted
+        ? "上下文压缩中断"
+        : open
+          ? "上下文压缩中"
+          : "上下文已压缩";
+  const summaryText = summarized === undefined ? "" : blocksText(summarized.data.summary);
+  const usage =
+    summarized?.data.usage === undefined ? undefined : normalizeUsage(summarized.data.usage);
+  const finishedAt =
+    fact.end?.time ??
+    fact.checkpoint?.time ??
+    summarized?.time ??
+    (interrupted ? lastEventTime : null);
+
+  const details: TrajectoryDetail[] = [];
+  if (summaryText) details.push(detail("摘要", summaryText, "text", scrubRoots));
+  if (fact.checkpoint !== undefined) {
+    details.push(detail("替换后的检查点", fact.checkpoint.content, "text", scrubRoots));
+  }
+  details.push(
+    detail(
+      "压缩事实",
+      {
+        compactionId: fact.compactionId,
+        turn: fact.turn,
+        ...(summarized === undefined
+          ? {}
+          : {
+              provider: summarized.data.provider,
+              model: summarized.data.model,
+              ...(summarized.data.maxTokens === undefined
+                ? {}
+                : { maxTokens: summarized.data.maxTokens }),
+              llmStreamCall: summarized.data.llmStreamCall === true,
+              shadowedRange: summarized.data.shadowedRange,
+              shadowedSeqs: summarized.data.shadowedSeqs,
+              shadowedTokenCount: summarized.data.shadowedTokenCount,
+              ...(summarized.data.sourceCommandId === undefined
+                ? {}
+                : { sourceCommandId: summarized.data.sourceCommandId }),
+            }),
+      },
+      "json",
+      scrubRoots,
+    ),
+  );
+  if (usage) details.push(detail("用量", usage, "json", scrubRoots));
+  if (failure !== undefined) details.push(detail("错误", failure, "text", scrubRoots));
+  details.push(
+    detail(
+      "时序",
+      {
+        startedAt: fact.startTime,
+        finishedAt,
+        durationMs: finishedAt === null ? null : Math.max(0, finishedAt - fact.startTime),
+      },
+      "json",
+      scrubRoots,
+    ),
+  );
+
+  const line =
+    failure !== undefined
+      ? failure
+      : interrupted
+        ? "会话结束前压缩没有完成"
+        : open
+          ? `正在压缩上下文${fact.turn === null ? "" : `（回合 ${fact.turn}）`}`
+          : summarized === undefined
+            ? "压缩已结束"
+            : `${summarized.data.provider}/${summarized.data.model} · 摘要 ${summaryText.length} 字，替换 ${summarized.data.shadowedSeqs.length} 条消息（约 ${summarized.data.shadowedTokenCount.toLocaleString()} tokens）`;
+  return {
+    id: `${sessionId}:compaction:${fact.compactionId}`,
+    seq: fact.startSeq,
+    kind: "context",
+    lane: "input",
+    label,
+    summary: summary(line, scrubRoots),
+    turn: fact.turn,
+    step: fact.step,
+    startedAt: fact.startTime,
+    finishedAt,
+    state,
+    details,
+    ...(usage === undefined ? {} : { usage }),
+  };
+}
+
+function pruneRecord(
+  prune: PruneFact,
+  toolName: string | undefined,
+  scrubRoots: string[],
+  sessionId: string,
+): TrajectoryRecord {
+  const line = `${toolName === undefined ? "" : `${toolName} · `}裁剪 ${prune.shadowedSeqs.length} 条工具结果（约 ${prune.shadowedTokenCount.toLocaleString()} tokens）`;
+  return {
+    id: `${sessionId}:prune:${prune.seq}`,
+    seq: prune.seq,
+    kind: "context",
+    lane: "tools",
+    label: "工具结果已裁剪",
+    summary: summary(line, scrubRoots),
+    turn: prune.turn,
+    step: prune.step,
+    startedAt: prune.time,
+    finishedAt: prune.time,
+    state: "complete",
+    ...(prune.callId === undefined ? {} : { callId: prune.callId }),
+    ...(toolName === undefined ? {} : { toolName }),
+    details: [
+      detail(
+        "裁剪事实",
+        {
+          ...(prune.callId === undefined ? {} : { callId: prune.callId }),
+          shadowedSeqs: prune.shadowedSeqs,
+          shadowedTokenCount: prune.shadowedTokenCount,
+          ...(prune.prunedChars === undefined ? {} : { prunedChars: prune.prunedChars }),
+        },
+        "json",
+        scrubRoots,
+      ),
+    ],
+  };
+}
+
 function toolResultFact(
   event: Extract<SessionEvent, { type: "tool/result" }>,
 ): ToolResultFact | null {
@@ -1229,6 +1511,10 @@ function isContentBlock(value: unknown): value is { type: string; [key: string]:
 function contextLabel(sourceKind: string, source: unknown): string {
   if (sourceKind === "agent-instructions") return "工作区指令";
   if (sourceKind === "skill") return "Skill 上下文";
+  // 日志里没有配对 compaction/summary 的检查点（未知后端）仍单独成行，只是换个名字。
+  if (sourceKind === "plugin" && isRecord(source) && source.plugin === "compact") {
+    return "上下文检查点";
+  }
   if (sourceKind === "plugin" && isRecord(source) && typeof source.plugin === "string") {
     return `上下文 · ${source.plugin}`;
   }

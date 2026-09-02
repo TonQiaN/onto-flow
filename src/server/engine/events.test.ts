@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
+import { usageCostCny } from "../pricing";
 
 const sqlite = new Database(":memory:");
 sqlite.exec(`
@@ -144,5 +145,196 @@ describe("用量明细写入失败兜底", () => {
     recordSessionEvent({ ...context, modelId: "deepseek-v4-flash" }, event);
     expect(sqlite.prepare("select count(*) as count from node_usage").get()).toEqual({ count: 1 });
     expect(unpersistedUsageForSession(context).chunks).toBe(0);
+  });
+});
+
+describe("上下文压缩记账", () => {
+  // 2026-08-30 是周日，北京时间 10:00 属空闲时段；摘要费用必须按事件到达时刻取半价。
+  const summaryTime = Date.UTC(2026, 7, 30, 2);
+  const summaryEvent = {
+    type: "compaction/summary",
+    seq: 9,
+    time: summaryTime,
+    data: {
+      compactionId: "c-1",
+      summary: [{ type: "text", text: "摘要正文" }],
+      rawOutput: [{ type: "text", text: "摘要正文" }],
+      llmStreamCall: true,
+      shadowedRange: { start: 2, end: 6 },
+      shadowedSeqs: [2, 4, 6],
+      shadowedTokenCount: 1200,
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      maxTokens: 8192,
+      usage: { inputTokens: 1000, outputTokens: 100, reasoningTokens: 20, cacheReadTokens: 500 },
+    },
+  };
+
+  it("摘要用量落成一条 node_usage 明细并按到达时刻计价，重放不重复计费", () => {
+    recordSessionEvent(context, summaryEvent);
+    recordSessionEvent(context, summaryEvent);
+
+    const rows = sqlite
+      .prepare(
+        "select message_id as messageId, provider_id as providerId, model_id as modelId, variant, input_tokens as inputTokens, output_tokens as outputTokens, reasoning_tokens as reasoningTokens, cache_read_tokens as cacheReadTokens, cost from node_usage",
+      )
+      .all() as Array<Record<string, unknown>>;
+    const expectedCost = usageCostCny(
+      "deepseek-official",
+      "deepseek-v4-flash",
+      { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 500 },
+      new Date(summaryTime),
+    );
+    expect(expectedCost).toBeGreaterThan(0);
+    expect(rows).toEqual([
+      {
+        messageId: "compaction:9",
+        providerId: "deepseek-official",
+        modelId: "deepseek-v4-flash",
+        variant: "compaction",
+        inputTokens: 1000,
+        outputTokens: 100,
+        reasoningTokens: 20,
+        cacheReadTokens: 500,
+        cost: expectedCost,
+      },
+    ]);
+    expect(unpersistedUsageForSession(context).chunks).toBe(0);
+
+    const events = sqlite
+      .prepare("select type, payload from run_events order by id")
+      .all() as Array<{ type: string; payload: string }>;
+    expect(events.map((row) => row.type)).toEqual(["compaction", "compaction"]);
+    const payload = JSON.parse(events[0]!.payload) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      op: "summary",
+      status: "ok",
+      compactionId: "c-1",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      summaryChars: 4,
+      shadowedNodes: 3,
+      shadowedTokenCount: 1200,
+      inputTokens: 1000,
+      outputTokens: 100,
+      reasoningTokens: 20,
+      cacheReadTokens: 500,
+      cacheWriteTokens: 0,
+      costCny: Math.round(expectedCost * 1e6) / 1e6,
+    });
+    expect(events[0]!.payload).not.toContain("摘要正文");
+  });
+
+  it("压缩开始与失败关闭各落一条事件；不带 usage 的摘要回退到会话路由且不落明细", () => {
+    recordSessionEvent(context, {
+      type: "compaction/start",
+      seq: 8,
+      time: summaryTime,
+      data: { compactionId: "c-2", turn: 3 },
+    });
+    recordSessionEvent(context, {
+      type: "compaction/summary",
+      seq: 9,
+      time: summaryTime,
+      data: {
+        compactionId: "c-2",
+        summary: [{ type: "text", text: "无用量的摘要" }],
+        shadowedRange: { start: 2, end: 2 },
+        shadowedSeqs: [2],
+        shadowedTokenCount: 300,
+        provider: "",
+        model: "",
+      },
+    });
+    recordSessionEvent(context, {
+      type: "compaction/end",
+      seq: 11,
+      time: summaryTime,
+      data: { compactionId: "c-2", turn: 3 },
+    });
+    recordSessionEvent(context, {
+      type: "compaction/end",
+      seq: 12,
+      time: summaryTime,
+      data: { compactionId: "c-2", turn: 3, error: "summary is not smaller than the shadowed content" },
+    });
+
+    expect(sqlite.prepare("select count(*) as count from node_usage").get()).toEqual({ count: 0 });
+    const payloads = (
+      sqlite.prepare("select payload from run_events order by id").all() as Array<{ payload: string }>
+    ).map((row) => JSON.parse(row.payload) as Record<string, unknown>);
+    expect(payloads).toEqual([
+      { op: "summary", status: "running", compactionId: "c-2", turn: 3 },
+      {
+        op: "summary",
+        status: "ok",
+        compactionId: "c-2",
+        provider: "deepseek-official",
+        model: "test-model",
+        summaryChars: 6,
+        shadowedNodes: 1,
+        shadowedTokenCount: 300,
+        usageReported: false,
+      },
+      {
+        op: "summary",
+        status: "error",
+        compactionId: "c-2",
+        error: "summary is not smaller than the shadowed content",
+      },
+    ]);
+  });
+
+  it("裁剪替换的 tool/result 不重复落工具事件，compaction/prune 落一条裁剪事件", () => {
+    recordSessionEvent(context, {
+      type: "tool/call",
+      seq: 3,
+      data: { callId: "call-1", name: "read", arguments: "{}" },
+    });
+    recordSessionEvent(context, {
+      type: "tool/result",
+      seq: 4,
+      surfaceOp: "append",
+      data: {
+        message: {
+          content: [
+            { type: "tool-result", toolCallId: "call-1", content: [{ type: "text", text: "原始结果" }] },
+          ],
+        },
+      },
+    });
+    recordSessionEvent(context, {
+      type: "compaction/prune",
+      seq: 5,
+      data: { shadowedRange: { start: 4, end: 4 }, shadowedSeqs: [4], shadowedTokenCount: 900 },
+    });
+    recordSessionEvent(context, {
+      type: "tool/result",
+      seq: 6,
+      surfaceOp: { op: "replace", start: 4, end: 4 },
+      sourceEventSeqs: [4],
+      data: {
+        message: {
+          content: [
+            { type: "tool-result", toolCallId: "call-1", content: [{ type: "text", text: "[已裁剪]" }] },
+          ],
+        },
+      },
+    });
+
+    const rows = (
+      sqlite.prepare("select type, payload from run_events order by id").all() as Array<{
+        type: string;
+        payload: string;
+      }>
+    ).map((row) => ({ type: row.type, payload: JSON.parse(row.payload) as Record<string, unknown> }));
+    expect(rows).toEqual([
+      { type: "tool", payload: expect.objectContaining({ tool: "read", status: "running" }) },
+      { type: "tool", payload: expect.objectContaining({ tool: "read", status: "ok", output: "原始结果" }) },
+      {
+        type: "compaction",
+        payload: { op: "prune", status: "ok", shadowedNodes: 1, shadowedTokenCount: 900 },
+      },
+    ]);
   });
 });

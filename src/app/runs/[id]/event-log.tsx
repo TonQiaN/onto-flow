@@ -1,7 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { formatClock, toMillis, type RunEventRow } from "../lib";
+import {
+  compactionEventLine,
+  formatClock,
+  toMillis,
+  type RunEventRow,
+} from "../lib";
 
 const SUMMARY_LIMIT = 200;
 
@@ -66,7 +71,9 @@ export function EventLog({
                 </span>{" "}
                 {label && <span className="text-zinc-400">{label} · </span>}
                 <span className="font-semibold text-zinc-700">{ev.type}</span>{" "}
-                {payloadSummary(ev.payload)}
+                {ev.type === "compaction"
+                  ? compactionEventLine(ev.payload)
+                  : payloadSummary(ev.payload)}
               </div>
             );
           })

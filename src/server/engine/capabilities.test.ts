@@ -33,6 +33,7 @@ function workspace(): RunWorkspace {
     logsDir: path.join(runDir, "logs"),
     homeDir: path.join(runDir, "home"),
     pluginsDir,
+    tmpDir: path.join(runDir, "tmp"),
     compositionPath: path.join(runDir, "cordis.yml"),
     imports: { instructionsDigest: "", items: [] },
   };

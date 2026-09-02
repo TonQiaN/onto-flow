@@ -1,0 +1,48 @@
+# 按需评审：在 issue 评论、PR 评论、PR review 里 @claude 才触发。
+# 需要仓库 secret ANTHROPIC_API_KEY；评论以 Claude GitHub App 的身份发出，
+# 所以这个仓库要装好该 App（claude 终端里 /install-github-app），或改传 github_token。
+#
+# 不传 prompt：传了 prompt 会切成自动化模式（每个事件都跑），这里只要 @claude 应答。
+# 指令经 --append-system-prompt 追加：先读 .github/REVIEW.md 再行动。
+# 先 npm ci 是为了让它能真的跑 npm run check 而不是只读代码。
+name: Claude
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          additional_permissions: |
+            actions: read
+          claude_args: >-
+            --append-system-prompt "行动之前先完整读取仓库里的 .github/REVIEW.md，再读根 AGENTS.md。评审按 REVIEW.md 逐条核对，只报告带文件与行号的具体问题，不复述 diff、不夸奖；能跑 npm run check 就跑并引用结果；一律用中文回复。"
+            --allowedTools "Bash(npm run check),Bash(npm run typecheck),Bash(npm test),Bash(npm run build),Bash(npx vitest run:*)"

@@ -78,7 +78,13 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `workspace/.agents/skills/`，由 `skill-filesystem` 按描述发现，不强制拼进提示。Tool 以 ASCII id
   物化为 `<run>/plugins/tool-<id>.ts` cordis 插件；工作流并集进入全局工具面后，每个 Action
   会话再按自己的 `action_tools` 引用收窄可见面。`DSH_HOME`、`dshHome` 与 `agentsHome` 全部钉在
-  运行目录内，避免发现机器所有者的个人能力。
+  运行目录内，避免发现机器所有者的个人能力；spawn 时另注入 `TMPDIR=<run>/tmp`——上游沙箱围栏
+  允许写的临时根是 `os.tmpdir()`，它认 `TMPDIR`——于是 bash 的 `mktemp`、Python 的 `tempfile`、
+  Poppler 的临时文件与 `subprocess-local` 的完整输出文件全部落在运行目录内，随运行清理并计入磁盘
+  统计；`<run>/tmp` 是工作区的兄弟目录，不在工作区内部。`spill-local` 的 root 钉为
+  `<run>/home/spill`：不钉时它落在 `os.tmpdir()` 下的进程级私有目录，钉在 `home/` 而不是工作区是
+  因为 spill 文件不是产物，不该被 `glob` 扫进或被下游当成上游写的文件。Skill 目录化与 Tool
+  契约化已经决定（ADR-0016 / ADR-0017），第二批实现；本节写的是今天的行为。
 - **提示与产物**：Action 的任务、规则、上游取用说明、产物路径和出口要求组成一条文本消息。
   文件输入与上游产物都只给工作区相对路径；实质内容不沿边复制。循环第 N 轮的产物写进
   `rounds/N/`，不覆盖前一轮（ADR-0008 / ADR-0009）。
@@ -89,6 +95,50 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `llm-deepseek` 提供。思考强度经会话 scope 上的 `agent/request` waterfall 无条件覆盖到调用配置；
   每节点最多 40 步、墙钟 15 分钟。图与全局设置在运行准入时冻结并传给执行器；网页保存只影响
   下一次运行。全局停用工具从会话工具面移除，晚注册工具另由 guard 兜底。
+- **组合清单**：每运行的 `cordis.yml` 由 `composition.ts` 逐行生成，是显式平铺清单，不叠上游
+  bundle、不用 patch（ADR-0013）。每一行的决定、分组、开关与定制标记记在 `catalog.ts` 的
+  `PLUGIN_CATALOG`，散文论证按十组记在 `docs/harness/`；`catalog.test.ts` 钉死三方——默认组合
+  的 entry 与目录里默认挂载的行一一对应，`mountedByDefault: false` 的行只在开关打开时进入组合，
+  每行的 package 字符串原样出现在它那组的文档里，`docs/harness/README.md` 的上游版本等于
+  `package.json` 钉版与每个定制行记的版本。`composition-boot.test.ts` 真起子进程 boot 默认组合与
+  开搜索的组合（不调模型、不需凭据）：必填配置缺失、裸名不是直接依赖、provider 顺序错都在这里
+  现形，而不是等到第一次付费运行整棵树起不来。
+- **上下文预算**：`session-checkpoint-policy` 在每次模型请求前与顶层工具执行前把会话 JSONL
+  刷盘，子进程崩溃不丢轨迹尾部。`token-meter` 折叠会话压力；`compaction-basic`（上游默认：阈值
+  0.8、保留 0.16、摘要上限 8192 token、压缩与溢出重试各 1 次、自动）越过阈值时先让
+  `tool-result-pruner`（8192 码点以上的工具结果改写为前 4096 + 后 1024）无模型剪枝，仍超才以一次
+  独立的 `llm/stream` 调用把最旧的完整单元摘要成 `<compacted-summary>` 检查点；摘要失败不替换、
+  带完整历史继续；摘要路由默认回退到 Action 自己的模型。摘要那次调用的用量不以 usage chunk
+  到达，按「事件、轨迹与用量」一条经 `compaction/summary` 计费，不是账外支出。任何工具的纯文本
+  结果超过 `spill-policy` 的 `maxInlineBytes`（50000 字节；必须显式写，上游省略该键等于整个策略
+  禁用）时替换为首尾预览加 spill 文件路径，模型用 `read` 的 offset/limit 回读；`read` 的结果本身
+  不经 spill。
+- **守卫与对等工具**：`timeout-policy` 只对在定义上声明了 `timeoutMs` 的工具生效——`tool-web`
+  60 秒、`glob` / `grep` 30 秒、声明了它的 Tool 插件——bash 的超时靠 `bash-sandbox` 自己的
+  120 秒与进程组终止。`repeat-tool-reminder` 在同一工具以完全相同参数连续调用第 3 / 5 / 8 次时
+  向模型追加提醒（参数预览 500 字符），只提醒不否决，是 40 步硬上限之前更便宜的止损。
+  `tool-fs-search` 给会话 `glob` / `grep`，走包内 ripgrep 的固定 argv、不经 shell，
+  `sampleOverCapGlobResults: false`（必填项）让超上限的结果保留确定性前缀并落 spill；
+  `tool-str-replace-editor`（`maxOutputChars` 16000）与 `read` / `write` / `edit` 并存，修改同样经
+  观察政策与沙箱策略；`tool-todo` 给模型 `todo_write`，`allowParallelInProgress: true`（必填项）。
+  `tool-bash` 关掉 `run_in_background`，后台作业、子 agent 与上游的 workflow / goal / schedule
+  一律不挂（ADR-0014）：编排只有人画的图。
+- **可切换插件**：目录里 `mountedByDefault: false` 的行（今天只有搜索三件套 web /
+  web-search-deepseek / tool-web）由 `CompositionToggles` 决定是否进入 cordis.yml。全局设置文档
+  `SettingsDocument`（`modelApiKeyEnv`、`modelBaseUrl`、`credentialRefs[]`、`mcpServers[]`、
+  `disabledTools[]`、`webSearchEnabled`）的 `webSearchEnabled`（布尔，缺省 false，非布尔值 400）
+  是它的全局默认值，受理时与凭据引用、MCP 服务器一起冻结成 `composition.toggles.webSearch` 交给
+  `launchRun`；工作流级覆盖属于第二批（ADR-0016）。搜索默认关是账目原因：DeepSeek 搜索是一次
+  独立的辅助模型请求，用量不经 `llm/stream`，本站 `node_usage` 与成本页收不到，属账外支出；
+  设置页的开关旁写明「DeepSeek 搜索的费用不计入本站用量」。打开后 `web-search-deepseek` 用与
+  模型同一把凭据引用名，`tool-web` 只开 search 不开 fetch。
+- **插件面板**：`GET /api/settings/composition` 返回 `entries`（按当前设置与开关推导的下次
+  组合）、`disabledEntries`（停用的 MCP）、`groups`（`catalog.ts` 十组的投影：每行 package /
+  decision / entryId（固定 id 或「前缀*」，无 entry 为 null）/ mounted / workflowToggle / reason /
+  customization）与 `lastComposition`（最近一次运行落盘的 cordis.yml）。`mounted` 六值：会挂载
+  （含按运行生成的 MCP / Tool 前缀行）、按开关未挂、按开关已挂、不挂（含待定）、备选、库（没有
+  entry 的库与自有模块）。面板是目录的投影而不是第二份清单：目录钉住组合（catalog.test.ts），
+  面板按组对齐 API（settings.spec.ts），三者不会各说各话。
 - **完成、取消与错误**：`session/prompt` 懒创建会话，Next 侧等待同一会话依次进入 running / idle；
   人工取消走 `session/cancel`，运行与节点进入独立的 `cancelled` 终态。节点完成后关闭会话，一次
   运行完成后关闭子进程；崩溃、超时与无产物都写入 run / run_node 的失败事实。无论发生在
@@ -99,8 +149,37 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   usage 事件；确认进程退出后再做最后一次刷新。节点累计或 usage 事件任一落库失败时，运行继续
   占用 active 所有权并定时重试，二者都持久化后才释放进程句柄与内存兜底。
 - **事件、轨迹与用量**：`session.event` 通知到达时立刻归一为 text / reasoning / tool /
-  session.idle / session.error 并落库。每个 step 的 usage chunk 是不累积值，按
-  `(sessionId, turn:step)` 唯一化后求和；完整原始会话另存 `<run>/sessions/**/session.jsonl`。
+  session.idle / session.error / compaction 六种并落库。每个 step 的 usage chunk 是不累积值，按
+  `(runId, sessionId, messageId)` 唯一化后求和，messageId 取 `turnN-stepM`；完整原始会话另存
+  `<run>/sessions/**/session.jsonl`。
+  上下文压缩的记账：摘要那次模型调用由 compaction-basic 直接经 `llm/stream` 发起、不经
+  agent-loop，没有 usage chunk，用量只挂在 `compaction/summary` 事件上。事件到达时落成
+  `node_usage` 一条明细：messageId 取 `compaction:<事件 seq>`（会话内唯一，不与 `turnN-stepM`
+  撞键，同一事件重放只落一行），provider/model 取事件自带的摘要路由（缺省回退会话路由），
+  variant 记 `compaction`（摘要不经思考强度 waterfall，不能冒充会话档位），费用按到达时刻计峰谷；
+  `action.ts` 按会话对 `node_usage` 求和，摘要费用随之进入 `run_nodes.cost` 与 usage 结算事件，
+  不另设桶、不重复计。`run_events` 的 compaction 事件：`compaction/start` 落
+  `{ op: "summary", status: "running", compactionId, turn }`；`compaction/summary` 落
+  `{ op: "summary", status: "ok", compactionId, provider, model, summaryChars, shadowedNodes,
+  shadowedTokenCount, inputTokens, outputTokens, reasoningTokens, cacheReadTokens,
+  cacheWriteTokens, costCny }`（上游未上报 usage 时改为 `usageReported: false`；摘要正文不进
+  run_events，正文在 sessions/*.jsonl 与轨迹面板）；带 `error` 的 `compaction/end` 落
+  `status: "error"`，正常关闭只是释放锁、不记；`compaction/prune` 落
+  `{ op: "prune", status: "ok", shadowedNodes, shadowedTokenCount }`。以 `surfaceOp.op === "replace"`
+  进入表层的 `tool/result` 是裁剪副本，原始结果已经落库，不再落第二条 tool 事件。运行详情事件
+  日志与监控日志把 compaction 渲染为一行「上下文已压缩：…」（`compactionEventLine`），画布运行条
+  忽略它。
+  轨迹投影把一次压缩的完整生命周期合成一条 context 记录：`compaction/start` 开锁、
+  `compaction/summary` 记录摘要与调用事实、紧随其后带 `source.plugin === "compact"` 的 replace
+  `user/message` 才是模型此后真正看到的检查点、`compaction/end` 释放锁；记录带摘要、替换后的
+  检查点、压缩事实（compactionId / shadowedRange / shadowedSeqs / shadowedTokenCount / provider /
+  model / maxTokens / llmStreamCall）、用量与时序，见到 summary 即视为表层已替换，未闭合的按会话
+  活跃度显示「上下文压缩中」或「上下文压缩中断」，带 error 的 end 显示「上下文压缩失败」。
+  `compaction/prune` 与紧随其后（seq 相邻，上游 `compaction/prune` 契约）的替换 `tool/result`
+  合成一条「工具结果已裁剪」记录；
+  `tool/result` 先到先得，替换副本不覆盖原始消息，工具记录仍是模型当时看到的全文。没有配对
+  摘要事件的检查点单独成行（「上下文检查点」）。`todo/write` 快照不投影：`todo_write` 已作为
+  工具调用与结果可见。
   正常会话与隔离会话都用会话前节点基线幂等结算；节点累计与 usage 事件任一写入失败，
   都保留结算状态并在子进程退出后持续重试，不能只留数字而永久缺失事件。
   DeepSeek 的 `outputTokens` 已含 reasoning；运行详情、历史 API、画布运行条、轨迹与监控汇总

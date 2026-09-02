@@ -1,5 +1,6 @@
 /**
- * 全局设置：模型默认值、凭据引用、MCP 服务器、默认停用的工具。
+ * 全局设置：模型默认值、凭据引用、MCP 服务器、默认停用的工具、可切换插件的
+ * 全局默认值（今天只有搜索开关）。
  *
  * 单行表存整份 JSON 文档，读写都全量校验（写入口是唯一的校验点，见 AGENTS.md
  * 的「Entity-body validation lives in the writer」）。
@@ -35,6 +36,12 @@ export interface SettingsDocument {
   mcpServers: McpServerSpec[];
   /** 默认对所有 Action 停用的工具公名 */
   disabledTools: string[];
+  /**
+   * DeepSeek 搜索（web_search）的全局默认值：受理时变成组合的 toggles.webSearch，
+   * 打开才挂 web / web-search-deepseek / tool-web 三行（ADR-0013、ADR-0016）。
+   * 默认关：搜索用量不经 llm/stream，本站 node_usage 收不到，是账外支出。
+   */
+  webSearchEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: SettingsDocument = {
@@ -43,6 +50,7 @@ export const DEFAULT_SETTINGS: SettingsDocument = {
   credentialRefs: [],
   mcpServers: [],
   disabledTools: [],
+  webSearchEnabled: false,
 };
 
 /** 凭据形键名：出现在 MCP stdio env 里就拒绝；HTTP headers 暂不接受非空值。 */
@@ -178,12 +186,20 @@ export function parseSettings(raw: unknown): WriteResult<SettingsDocument> {
     }
   }
 
+  // 缺省即关：旧文档与只发部分字段的调用方都不会因此把搜索悄悄打开。
+  const rawWebSearch = body.webSearchEnabled;
+  if (rawWebSearch !== undefined && typeof rawWebSearch !== "boolean") {
+    return writeFail(400, "webSearchEnabled 必须是布尔值");
+  }
+  const webSearchEnabled = rawWebSearch === true;
+
   return writeOk({
     modelApiKeyEnv,
     modelBaseUrl: str(body.modelBaseUrl),
     credentialRefs,
     mcpServers,
     disabledTools,
+    webSearchEnabled,
   });
 }
 

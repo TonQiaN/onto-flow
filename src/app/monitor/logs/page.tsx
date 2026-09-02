@@ -18,6 +18,7 @@ import {
   formatClock,
   formatDateTime,
   toMillis,
+  compactionEventLine,
   type RunListItem,
   type RunNodeRow,
 } from "@/app/runs/lib";
@@ -32,6 +33,7 @@ const EVENT_TYPES: Array<{ value: string; label: string }> = [
   { value: "tool", label: "工具调用" },
   { value: "session.error", label: "会话错误" },
   { value: "session.idle", label: "会话结束" },
+  { value: "compaction", label: "上下文压缩" },
 ];
 
 const TYPE_CHIP: Record<string, string> = {
@@ -39,6 +41,7 @@ const TYPE_CHIP: Record<string, string> = {
   tool: "border-sky-500/40 text-sky-300",
   "session.error": "border-red-500/40 text-red-300",
   "session.idle": "border-emerald-500/40 text-emerald-300",
+  compaction: "border-teal-500/40 text-teal-300",
 };
 
 async function readError(res: Response): Promise<string> {
@@ -72,6 +75,9 @@ function summarize(row: LogItem, limit = 200): string {
       break;
     case "session.idle":
       out = "会话结束（session.idle）";
+      break;
+    case "compaction":
+      out = compactionEventLine(p);
       break;
     default:
       out = text(p);
