@@ -330,7 +330,7 @@ export function rebuildSkillLibrary(): void {
     materializeSkill(row, files);
   }
   // 版本目录的收敛：不被任何 <slug> 链接指向的版本是孤儿（并发重写的输家、上次进程中途倒下），
-  // 技能没被持有就删掉；被持有的留到释放时一起清。
+  // 技能没被持有就删掉；被持有的（含库里已删但运行仍持有的）留到释放时一起清。
   const live = new Set<string>();
   for (const slug of wanted) {
     const name = currentVersionName(slug);
@@ -339,7 +339,9 @@ export function rebuildSkillLibrary(): void {
   for (const name of fs.readdirSync(VERSIONS_DIR)) {
     if (live.has(name)) continue;
     const slug = slugOfVersion(name);
-    if (slug !== null && wanted.has(slug) && isHeld(slug)) {
+    // 被已受理运行持有的技能——不管库里还有没有它的行——版本目录都留到释放时再清：上一遍已把
+    // 库里没有的持有中链接记为待删，这里再删版本就会让链接悬空、付费运行读不到技能。
+    if (slug !== null && isHeld(slug)) {
       retireVersion(slug, name);
       continue;
     }

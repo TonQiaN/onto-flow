@@ -1,6 +1,7 @@
 /** 启动重建：旧式真实目录换成链接、临时链接与孤儿版本清掉、悬空链接重指、库里没有的技能目录删掉。 */
 import fs from "node:fs";
 import path from "node:path";
+import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createTestDb } from "./writers/test-db";
 
@@ -12,7 +13,8 @@ vi.mock("@/server/fs-safety", () => ({ DATA_DIR: testPaths.dataDir }));
 
 const { db } = await createTestDb();
 const { skillFiles, skills } = await import("@/db/schema");
-const { rebuildSkillLibrary, skillSlug, SKILL_LIBRARY_DIR } = await import("./skill-library");
+const { rebuildSkillLibrary, releaseSkillProjections, retainSkillProjections, skillSlug, SKILL_LIBRARY_DIR } =
+  await import("./skill-library");
 
 afterAll(() => {
   fs.rmSync(testPaths.dataDir, { recursive: true, force: true });
@@ -60,5 +62,23 @@ describe("启动重建技能投影", () => {
       path.basename(fs.readlinkSync(path.join(root, skillSlug(skill)))),
     );
     expect(fs.readdirSync(versions).sort()).toEqual([...live].sort());
+  });
+
+  it("被已受理运行持有、库里已删的技能：重建不删它的链接与版本，最后一个持有者释放后才删", () => {
+    const held = { id: "rebuild-held-deleted", name: "持有中已删技能", description: "d3", content: "持有中的正文" };
+    db.insert(skills).values(held).run();
+    rebuildSkillLibrary();
+    retainSkillProjections("run-holding", [held]);
+    db.delete(skills).where(eq(skills.id, held.id)).run();
+
+    rebuildSkillLibrary();
+
+    const dir = path.join(SKILL_LIBRARY_DIR, skillSlug(held));
+    expect(fs.readFileSync(path.join(dir, "SKILL.md"), "utf8")).toContain("持有中的正文");
+
+    releaseSkillProjections("run-holding", [held]);
+    expect(fs.existsSync(dir)).toBe(false);
+    const versions = path.join(SKILL_LIBRARY_DIR, ".versions");
+    expect(fs.readdirSync(versions).filter((name) => name.startsWith(skillSlug(held)))).toEqual([]);
   });
 });
