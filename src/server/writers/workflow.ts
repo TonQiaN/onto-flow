@@ -43,8 +43,6 @@ export interface EdgePayload {
   targetPort: string;
 }
 
-/** 工作流指令原样成为 workspace/AGENTS.md；上限按字节算，防止一份手册撑爆每个会话的首条消息。 */
-
 export type WorkflowRow = typeof workflows.$inferSelect;
 
 /** 工作流的三层设置字段（ADR-0016）：指令、开关覆盖与 MCP 子集、技能集、Tool 集。 */

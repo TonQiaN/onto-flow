@@ -11,7 +11,7 @@
 - [ ] 用户可见的改动 → 跑了**对应的那一个** e2e spec 并写明是哪个，不是「跑了全套」也不是没跑（Checks）
 - [ ] 触及 harness 接缝（会话、事件、用量、取消、组合）→ 写明是否跑了付费冒烟（`smoke-harness` / `smoke-engine`）与结论；没跑要说为什么可以不跑（The harness seam）
 - [ ] 新增原生或 server-only 依赖 → `next.config.ts` 的 `serverExternalPackages` 有它；Turbopack `root` 钉住没动（Checks）
-- [ ] `@deepseek-ai/*` 版本精确钉死，没有 `^` / `~`；不是 `latest`（Pin `@deepseek-ai` versions exactly）
+- [ ] `@deepseek-ai/*` 版本精确钉死，没有 `^` / `~`；不是 `latest`；`@deepseek-ai/dsh-*` 直接与传递依赖同时在 `overrides` 里同版（Pin `@deepseek-ai` versions exactly）
 
 ## 1. 立场：不做兼容层（Stance: no compatibility layers）
 

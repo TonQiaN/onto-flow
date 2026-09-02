@@ -256,7 +256,7 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
 - **HMR 下的运行所有权**：取消标记与在跑子进程句柄挂在 `globalThis`，使开发期 HMR 不会丢失
   对现存运行的取消和收束能力；运行结束必须删除对应句柄与取消标记。
 
-## 首个案例种子（scripts/seed.ts，幂等：按 name upsert；内容取自 scratchpad research/erp-seed.json）
+## 首个案例种子（scripts/seed.ts，幂等：Action / Skill / 对象类型按 name upsert，Tool 按公名 upsert、展示名已被别的公名占用时点名报错；内容取自 scratchpad research/erp-seed.json）
 
 - Object Types：需求文件(file)、需求Prompt(text)、集采计划(text)、**审核评价(json+完整schema)**、
   **归档回执(text)** + 内置 text/file/json。

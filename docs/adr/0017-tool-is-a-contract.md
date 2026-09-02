@@ -8,7 +8,7 @@ Tool 改写为契约形态，专用调用入口的 digest pin 随之更新。外
 
 理由：一个 Tool 就是一整个 cordis 插件源码时，作者得懂 `name/inject/apply`、`ctx.tools.register`
 的形状、JSON Schema 子集、`output.render` 的参数顺序（AGENTS.md 现行仍为这个坑留着一句：包装里写
-`render: (_args, value) => JSON.stringify(value)`），种子里的
+`render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }]`），种子里的
 真实例子有 213 行；而上游每升一版这些 API 一动，库里每个 Tool 都可能在插件加载那一刻坏掉、整个运行
 起不来。契约保住了 cordis 工具的全部运行时价值——类型化调用、`tools/result` 事件（简历 API 那道
 "校验 Tool 回执带 SHA-256"的门禁靠它）、会话级收窄、`timeoutMs` 让 timeout-policy 生效——同时把

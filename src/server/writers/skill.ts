@@ -35,8 +35,9 @@ const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/
 
 /**
  * 资源文件路径必须能原样落到 data/skills/<slug>/<path> 之下：绝对路径、`..`、空段、
- * 控制字符与反斜杠都拒绝；根下的 SKILL.md 由正文生成，资源文件不能顶替它
- * （macOS 文件系统不分大小写，所以按不区分大小写比较）。
+ * 控制字符与反斜杠都拒绝；根下的 SKILL.md 由正文生成，资源文件不能顶替它、也不能拿它当
+ * 根下目录名（macOS 文件系统不分大小写，按不区分大小写比较；重复与文件/目录冲突还要折叠
+ * Unicode 正规化，见 foldSkillPath）。
  */
 function skillFilePathProblem(path: string): string | null {
   if (path === "") return "资源文件路径不能为空";

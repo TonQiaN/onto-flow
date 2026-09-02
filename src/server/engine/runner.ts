@@ -169,6 +169,9 @@ const INPUT_FILENAME_MAX_BYTES = 240;
  * 保留可辨认前缀与短扩展名，超长部分用内容散列稳定收敛；NUL 在进入文件系统
  * 前替换，长度按 UTF-8 字节而非 JS 字符数计，非法名称不会在运行受理后异步失败。
  */
+/** 上游 agent-instructions 的候选指令文件名（去掉扩展名）：AGENTS / CLAUDE 及各自的 .local 覆盖层。 */
+const INSTRUCTION_FILE_STEM = /^(agents|claude)(\.local)?$/i;
+
 function boundedInputFilename(candidate: string): string {
   const basename = safeBasename(candidate.replaceAll("\0", "_"));
   if (Buffer.byteLength(basename, "utf8") <= INPUT_FILENAME_MAX_BYTES) return basename;
@@ -1146,7 +1149,12 @@ function materializeRunInputs(
     fs.mkdirSync(destDir, { recursive: true });
 
     if (value.kind === "file") {
-      const name = boundedInputFilename(value.file.name || value.file.path);
+      // 上传的文件按原名落盘；名字恰好是指令文件名（AGENTS.md 等）时同样加前缀，见下面文字输入的说明。
+      const original = safeBasename((value.file.name || value.file.path).replaceAll("\0", "_"));
+      const originalStem = original.slice(0, original.length - path.extname(original).length);
+      const name = boundedInputFilename(
+        INSTRUCTION_FILE_STEM.test(originalStem) ? `输入-${original}` : original,
+      );
       const dest = path.join(destDir, name);
       const source = resolveWithinData(value.file.path);
       if (fs.statSync(source).size > MAX_FILE_INPUT_BYTES) {
@@ -1166,7 +1174,7 @@ function materializeRunInputs(
     // AGENTS / CLAUDE（含 .local 覆盖层）是上游 agent-instructions 的指令文件名：模型读到
     // inputs/<节点>/AGENTS.md 时它会被当作该目录的附加指令；输入节点叫这个名字就加前缀避开。
     const rawStem = safeBasename(label || "value");
-    const stem = /^(agents|claude)(\.local)?$/i.test(rawStem) ? `输入-${rawStem}` : rawStem;
+    const stem = INSTRUCTION_FILE_STEM.test(rawStem) ? `输入-${rawStem}` : rawStem;
     const name = boundedInputFilename(value.kind === "text" ? `${stem}.md` : `${stem}.json`);
     const content = value.kind === "text" ? value.text : serializeJsonInput(value.json);
     if (content === null) {

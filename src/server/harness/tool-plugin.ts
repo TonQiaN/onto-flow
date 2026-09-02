@@ -11,7 +11,8 @@
  *
  * 上游 ToolDefinition 的 `output` 是必填项（`packages/core/tools/src/index.ts`），
  * 契约的 output 省略时包装给一个无约束 schema（`{}`：上游子集允许注解空 schema
- * 表示任意 JSON），render 一律 `JSON.stringify(value)`；`timeoutMs` 与上游同名，
+ * 表示任意 JSON），render 一律返回一个文本块 `[{ type: "text", text: JSON.stringify(value) }]`；
+ * `timeoutMs` 与上游同名，
  * 声明了才由 tool-call-timeout-policy 强制。
  *
  * `ctx.run()` 走与 bash 工具同一道围栏：按会话解析 sandboxPolicy，经 `ctx.shell`
