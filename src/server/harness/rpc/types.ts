@@ -4,7 +4,7 @@
  * 与上游一致：newline 分隔的 JSON-RPC 2.0、initialize / session/prompt / shutdown
  * 三方法与 session.event / session.status 两通知。本项目补齐：session/cancel、
  * session/close、session/output 三方法，以及 prompt 懒创建时的按会话覆盖
- * （模型路由、工具子集、作用域技能与结构化输出 schema）。
+ * （模型路由、工具子集与结构化输出 schema）。
  * 上游协议无版本协商，本协议以 serverInfo.name 区分实现。
  *
  * 移植自 agent-workflow-studio 的 packages/harness/src/plugins/studio-rpc/types.ts。
@@ -30,17 +30,6 @@ export interface InitializeResult {
   serverInfo: { name: string; version: string };
 }
 
-/** 经 RPC 传入、注册进 Action 会话 scope 的运行时技能。 */
-export interface NodeSkillRegistration {
-  name: string;
-  description: string;
-  whenToUse?: string;
-  /** 去除 frontmatter 的技能正文。 */
-  content: string;
-  /** 技能目录的绝对路径，作为相对资源的解析根。 */
-  resourceDir?: string;
-}
-
 /** 工具子集：对继承面做 allow/deny 交集过滤，词汇对齐上游 tools.restrict。 */
 export interface NodeToolFilter {
   allow?: string[];
@@ -53,7 +42,6 @@ export interface NodeToolFilter {
  */
 export interface SessionNodeOptions {
   toolFilter?: NodeToolFilter;
-  skills?: NodeSkillRegistration[];
   /** 对象根 JSON Schema 子集；提供即挂载 structured_output 捕获工具与强制指令。 */
   outputSchema?: Record<string, unknown>;
   /**

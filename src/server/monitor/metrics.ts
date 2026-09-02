@@ -410,6 +410,8 @@ interface TraceUsageRow {
   ts: number;
   tokens: number;
   cost: number;
+  /** node_usage.variant：assistant 消息记会话的思考强度，压缩摘要调用记 "compaction" */
+  variant: string;
 }
 
 /**
@@ -418,7 +420,7 @@ interface TraceUsageRow {
  *
  * step 的推导规则（run_events 只有 text|tool|session.error|session.idle 四类）：
  * - 节点开始到首条事件之间 → 「会话准备与上下文注入」（覆盖建会话、noReply 注入规则技能、发 prompt）；
- * - tool 事件按 callID 聚合成一个 span（状态取最后一次更新）；
+ * - tool 事件按 callId 聚合成一个 span（状态取最后一次更新）；
  * - 连续的 text 事件合成一个「模型输出」span，session.idle 作为回合分界，
  *   第二回合起标注「JSON 解析重试」——引擎对结构化输出解析失败时正是同会话再发一轮 prompt；
  * - session.error 单独成一个失败 span。
@@ -454,7 +456,8 @@ export function getTrace(runId: string): TracePayload | null {
 
   const usage = db.all<TraceUsageRow>(sql`
     select node_id as nodeId, node_usage.ts as ts,
-      ${USAGE_TOKENS} as tokens, node_usage.cost as cost
+      ${USAGE_TOKENS} as tokens, node_usage.cost as cost,
+      coalesce(node_usage.variant, '') as variant
     from node_usage where run_id = ${runId} order by node_usage.ts asc
   `);
 
@@ -660,7 +663,8 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
     // 工具事件不切断文本分组：一次模型回合里本来就可能「说几句 → 调工具 → 接着说」，
     // 切断会把同一回合的输出误标成「降级重试」。只有 idle / error 才是回合边界。
     if (ev.type === "tool") {
-      const callId = text(payload?.callID) || `${ev.id}`;
+      // events.ts 写的是 callId；曾拼成 callID，同一次工具调用的 running/ok 永远合不成一个 span。
+      const callId = text(payload?.callId) || `${ev.id}`;
       const status = text(payload?.status) || "pending";
       const existing = tools.get(callId);
       const detail =
@@ -720,11 +724,30 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
     });
   }
 
+  // 压缩摘要调用不是 assistant 消息：它不经 agent-loop，也不属于任何一轮文本产出，
+  // 单独成 span 挂在它发生的时刻，钱与 token 仍计入本节点合计。
+  const compactionUsage = ctx.usage.filter((u) => u.variant === "compaction");
+  const assistantUsage = ctx.usage.filter((u) => u.variant !== "compaction");
+  for (const u of compactionUsage) {
+    spans.push({
+      id: nextId(),
+      parentId,
+      kind: "step",
+      label: "上下文压缩（摘要）",
+      startMs: Math.max(0, num(u.ts) - runStart),
+      durMs: 0,
+      status: "success",
+      tokens: num(u.tokens),
+      cost: num(u.cost),
+      detail: "compaction-basic 的一次摘要调用",
+    });
+  }
+
   // 用量归集：每条 assistant 消息（node_usage 一行）归给「开始时间不晚于它的最后一个模型输出
   // span」——消息完成时刻总在这一轮文本产出之后。这样各 step 的用量之和恒等于 node 的合计，
   // 不会有 token 凭空消失。
   if (outputSpans.length > 0) {
-    for (const u of ctx.usage) {
+    for (const u of assistantUsage) {
       const ts = num(u.ts);
       let target = outputSpans[0];
       for (const candidate of outputSpans) {
@@ -734,14 +757,14 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
       span.tokens += num(u.tokens);
       span.cost += num(u.cost);
     }
-  } else if (ctx.usage.length > 0) {
+  } else if (assistantUsage.length > 0) {
     // 一条 text 事件都没有（例如首轮就 session.error）→ 没有模型输出 span 可承接。
     // 直接丢弃会让「各 step 用量之和恒等于 node 合计」的承诺失效，所以补一个覆盖整段的
     // 模型调用 span 把这些用量兜住；末端夹到 session span 的收口时刻，不溢出父区间。
     let tokens = 0;
     let cost = 0;
     let lastTs = nodeStart;
-    for (const u of ctx.usage) {
+    for (const u of assistantUsage) {
       tokens += num(u.tokens);
       cost += num(u.cost);
       lastTs = Math.max(lastTs, num(u.ts));
@@ -835,6 +858,7 @@ export function getLogs(query: LogsQuery): LogsPayload {
     conds.push(sql`(
       run_events.type = 'session.error'
       or (run_events.type = 'tool' and json_extract(run_events.payload, '$.status') = 'error')
+      or (run_events.type = 'compaction' and json_extract(run_events.payload, '$.status') = 'error')
     )`);
   }
   if (query.cursor != null && Number.isFinite(query.cursor)) {
@@ -934,7 +958,8 @@ export function getCost(daysInput?: number): CostPayload {
     select
       node_usage.model_id as modelId,
       node_usage.provider_id as providerId,
-      count(*) as messages,
+      -- 压缩摘要那次调用也是一行 node_usage（variant = compaction），钱要算、消息数不算
+      sum(case when node_usage.variant = 'compaction' then 0 else 1 end) as messages,
       coalesce(sum(${USAGE_TOKENS}), 0) as tokens,
       coalesce(sum(node_usage.cost), 0) as cost
     from node_usage where node_usage.ts >= ${since}

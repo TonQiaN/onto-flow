@@ -4,11 +4,20 @@
  * 运行详情页与监控台的日志面都只读数据库（两条 SSE 端点各自轮询 SQLite，
  * 进程内没有 pubsub），所以事件必须在到达的当下就写进去，页面才有实时感。
  *
- * 事件词汇沿用既有的五种：text / reasoning / tool / session.idle / session.error；
- * 上游 dsh 的事件种类远多于这些，只有能落到这五种上的才记，其余丢弃——
- * 完整的会话记录本来就在运行目录的 sessions/*.jsonl 里，这里只是给人看的摘要。
+ * 事件词汇：text / reasoning / tool / session.idle / session.error 五种沿用既有，
+ * compaction 记录上下文压缩（摘要与工具结果裁剪）；上游 dsh 的事件种类远多于这些，
+ * 只有能落到这六种上的才记，其余丢弃——完整的会话记录本来就在运行目录的
+ * sessions/*.jsonl 里，这里只是给人看的摘要。
  * 另有一种引擎自产的 usage 结算事件：节点收束时由 action.ts 的 recordUsage 写入，
  * 载荷是该会话的 token 汇总与人民币费用，让事件日志里能看到每个 Action 花了多少钱。
+ *
+ * 压缩摘要那次模型调用不经过 agent-loop，因此没有 assistant/chunk 的 usage chunk；
+ * 它的用量只挂在 compaction/summary 事件上。这里把它落成 node_usage 一条明细，
+ * messageId 取 `compaction:<seq>`——会话内 seq 唯一，不会与 `turnN-stepM` 撞键，
+ * 同一事件重放也只落一行；action.ts 按会话对 node_usage 求和，摘要费用随之进入节点累计。
+ * 例外：摘要在提交阶段失败（中止、表层被并发改动、commit 抛错）时上游只写 compaction/end
+ * 的 error，不写带 usage 的 summary 事件，那一次已经付费的调用无法计费——这是上游事件模型的
+ * 限制，成本页会少算，不要把这里说成完整计费。
  */
 import { sql } from "drizzle-orm";
 import { db, nodeUsage, runEvents } from "@/db";
@@ -17,8 +26,11 @@ import { usageCostCny } from "@/server/pricing";
 /** 上游 SessionEvent 的结构在 wire 上是开放的，这里只narrow 出用得上的形状。 */
 interface RawEvent {
   type?: string;
+  seq?: number;
   time?: number;
   data?: Record<string, unknown>;
+  /** 只有表层事件带；`{ op: "replace" }` 表示这条消息顶替了更早的表层节点。 */
+  surfaceOp?: unknown;
 }
 
 interface ContentBlock {
@@ -54,6 +66,18 @@ export interface UsageTotals {
 interface UnpersistedUsage extends UsageSessionKey, UsageTotals {
   messageId: string;
 }
+
+/** 一条要落进 node_usage 的明细；provider/model 允许与会话路由不同（摘要可走别的模型）。 */
+interface UsageDetail {
+  messageId: string;
+  providerId: string;
+  modelId: string;
+  variant: string;
+  usage: Record<string, number>;
+}
+
+/** 压缩摘要的用量明细在 variant 列上的标记：它不经过思考强度 waterfall，不能冒充会话的档位。 */
+const COMPACTION_VARIANT = "compaction";
 
 // 明细写入偶发失败时不能把已经发生的付费用量一起丢掉。这里只保留失败条目，
 // 成功落库仍以 node_usage 为事实源；挂在 globalThis 上避免 HMR 丢失待结算条目。
@@ -129,6 +153,9 @@ export function recordSessionEvent(ctx: EventSinkContext, event: unknown): void 
       return;
     }
     case "tool/result": {
+      // 表层替换的 tool/result 是裁剪后的副本（紧随 compaction/prune），原始结果
+      // 已经落库；再记一行会让同一个 callId 在日志里出现两次完成。
+      if (isReplaceOp(raw.surfaceOp)) return;
       const message = data.message as
         | {
             content?: Array<{
@@ -171,12 +198,103 @@ export function recordSessionEvent(ctx: EventSinkContext, event: unknown): void 
         | { type?: string; usage?: Record<string, number> }
         | undefined;
       if (chunk?.type !== "usage" || !chunk.usage) return;
-      recordUsage(ctx, ts, data, chunk.usage);
+      persistUsageDetail(ctx, ts, {
+        messageId: `turn${num(data.turn)}-step${num(data.step)}`,
+        providerId: ctx.providerId,
+        modelId: ctx.modelId,
+        variant: ctx.reasoningEffort,
+        usage: chunk.usage,
+      });
+      return;
+    }
+    case "compaction/start": {
+      insert(ctx, ts, "compaction", {
+        op: "summary",
+        status: "running",
+        compactionId: str(data.compactionId),
+        turn: typeof data.turn === "number" ? data.turn : null,
+      });
+      return;
+    }
+    case "compaction/summary": {
+      recordCompactionSummary(ctx, ts, raw, data);
+      return;
+    }
+    case "compaction/end": {
+      // 正常关闭只是释放锁，摘要事件已经说明压缩完成；只有带 error 的关闭值得记。
+      if (typeof data.error !== "string") return;
+      insert(ctx, ts, "compaction", {
+        op: "summary",
+        status: "error",
+        compactionId: str(data.compactionId),
+        error: data.error,
+      });
+      return;
+    }
+    case "compaction/prune": {
+      insert(ctx, ts, "compaction", {
+        op: "prune",
+        status: "ok",
+        shadowedNodes: Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs.length : 0,
+        shadowedTokenCount: num(data.shadowedTokenCount),
+      });
       return;
     }
     default:
       return;
   }
+}
+
+/**
+ * 摘要落地：先按事件自带的 provider/model 计价落 node_usage，再落一条 compaction 事件。
+ * 事件载荷只放摘要长度与用量，不放摘要正文——正文在 sessions/*.jsonl 与轨迹面板里。
+ */
+function recordCompactionSummary(
+  ctx: EventSinkContext,
+  ts: Date,
+  raw: RawEvent,
+  data: Record<string, unknown>,
+): void {
+  const providerId = str(data.provider) || ctx.providerId;
+  const modelId = str(data.model) || ctx.modelId;
+  const usage = isUsage(data.usage) ? data.usage : undefined;
+  const summaryChars = Array.isArray(data.summary)
+    ? (data.summary as ContentBlock[]).reduce(
+        (total, block) => total + (typeof block?.text === "string" ? block.text.length : 0),
+        0,
+      )
+    : 0;
+  let billed: Record<string, unknown> = { usageReported: false };
+  if (usage !== undefined) {
+    const cost = persistUsageDetail(ctx, ts, {
+      messageId: `compaction:${
+        Number.isSafeInteger(raw.seq) ? String(raw.seq) : str(data.compactionId) || "unknown"
+      }`,
+      providerId,
+      modelId,
+      variant: COMPACTION_VARIANT,
+      usage,
+    });
+    billed = {
+      inputTokens: usage.inputTokens ?? 0,
+      outputTokens: usage.outputTokens ?? 0,
+      reasoningTokens: usage.reasoningTokens ?? 0,
+      cacheReadTokens: usage.cacheReadTokens ?? 0,
+      cacheWriteTokens: usage.cacheWriteTokens ?? 0,
+      costCny: Math.round(cost * 1e6) / 1e6,
+    };
+  }
+  insert(ctx, ts, "compaction", {
+    op: "summary",
+    status: "ok",
+    compactionId: str(data.compactionId),
+    provider: providerId,
+    model: modelId,
+    summaryChars,
+    shadowedNodes: Array.isArray(data.shadowedSeqs) ? data.shadowedSeqs.length : 0,
+    shadowedTokenCount: num(data.shadowedTokenCount),
+    ...billed,
+  });
 }
 
 /** tool/call 先于 tool/result 到达；持久化关联让 HMR 与事件回放都不依赖进程内 Map。 */
@@ -214,18 +332,18 @@ function insert(
 }
 
 /**
- * 每个 step 一条用量明细。上游一个 step 只发一条 usage chunk 且不累积，
- * 按 (runId, sessionId, turn:step) 唯一化去重——会话 id 是画布节点 id，
+ * 一条用量明细。上游一个 step 只发一条 usage chunk 且不累积，按
+ * (runId, sessionId, messageId) 唯一化去重——会话 id 是画布节点 id，
  * 同一工作流的多次运行会撞出相同 (sessionId, messageId)，必须由 runId 区分。
- * 冲突目标显式声明，只吞同键重放，不吞其他约束错误。
+ * 冲突目标显式声明，只吞同键重放，不吞其他约束错误。费用按这条明细的到达时刻计峰谷。
+ * @returns 这条明细的人民币费用（未知模型为 0）
  */
-function recordUsage(
+function persistUsageDetail(
   ctx: EventSinkContext,
   ts: Date,
-  data: Record<string, unknown>,
-  usage: Record<string, number>,
-): void {
-  const messageId = `turn${num(data.turn)}-step${num(data.step)}`;
+  detail: UsageDetail,
+): number {
+  const { messageId, providerId, modelId, variant, usage } = detail;
   const key = usageKey(ctx, messageId);
   const sample: UnpersistedUsage = {
     runId: ctx.runId,
@@ -238,8 +356,8 @@ function recordUsage(
     cacheReadTokens: usage.cacheReadTokens ?? 0,
     cacheWriteTokens: usage.cacheWriteTokens ?? 0,
     cost: usageCostCny(
-      ctx.providerId,
-      ctx.modelId,
+      providerId,
+      modelId,
       {
         inputTokens: usage.inputTokens ?? 0,
         outputTokens: usage.outputTokens ?? 0,
@@ -256,9 +374,9 @@ function recordUsage(
         nodeId: ctx.nodeId,
         sessionId: ctx.sessionId,
         messageId,
-        providerId: ctx.providerId,
-        modelId: ctx.modelId,
-        variant: ctx.reasoningEffort,
+        providerId,
+        modelId,
+        variant,
         inputTokens: sample.inputTokens,
         outputTokens: sample.outputTokens,
         reasoningTokens: sample.reasoningTokens,
@@ -277,6 +395,7 @@ function recordUsage(
     unpersistedUsage.set(key, sample);
     console.error("[engine] 用量落库失败", ctx.runId, ctx.nodeId, err);
   }
+  return sample.cost;
 }
 
 function usageKey(ctx: UsageSessionKey, messageId: string): string {
@@ -293,6 +412,23 @@ function emptyUsageTotals(): UsageTotals {
     cost: 0,
     chunks: 0,
   };
+}
+
+function isReplaceOp(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { op?: unknown }).op === "replace"
+  );
+}
+
+function isUsage(value: unknown): value is Record<string, number> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { inputTokens?: unknown }).inputTokens === "number" &&
+    typeof (value as { outputTokens?: unknown }).outputTokens === "number"
+  );
 }
 
 function str(value: unknown): string {

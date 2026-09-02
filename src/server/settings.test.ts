@@ -89,3 +89,26 @@ describe("设置比较替换", () => {
     expect(readSettings()).toEqual(userVersion);
   });
 });
+
+describe("搜索开关", () => {
+  it("缺省即关：旧文档与只发部分字段的调用方都不会把搜索悄悄打开", () => {
+    const result = parseSettings({});
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.webSearchEnabled).toBe(false);
+    expect(DEFAULT_SETTINGS.webSearchEnabled).toBe(false);
+  });
+
+  it("布尔值原样进出，非布尔值 400", () => {
+    expect(writeSettings({ ...DEFAULT_SETTINGS, webSearchEnabled: true }).ok).toBe(true);
+    expect(readSettings().webSearchEnabled).toBe(true);
+
+    for (const bad of ["true", 1, null, {}]) {
+      const result = parseSettings({ ...DEFAULT_SETTINGS, webSearchEnabled: bad });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.status).toBe(400);
+        expect(result.error).toContain("webSearchEnabled 必须是布尔值");
+      }
+    }
+  });
+});

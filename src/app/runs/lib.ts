@@ -344,3 +344,31 @@ export function asPortValue(value: unknown): PortValue | null {
   }
   return null;
 }
+
+/**
+ * run_events 里 compaction 事件的一行中文摘要（引擎侧出处：src/server/engine/events.ts）。
+ * 载荷只有长度与用量，没有摘要正文；正文看 Action 轨迹面板。
+ */
+export function compactionEventLine(payload: Record<string, unknown> | null): string {
+  const p = payload ?? {};
+  const n = (value: unknown): number => (typeof value === "number" ? value : 0);
+  const s = (value: unknown): string => (typeof value === "string" ? value : "");
+  if (p.op === "prune") {
+    return `工具结果已裁剪：${n(p.shadowedNodes)} 条（约 ${formatTokens(n(p.shadowedTokenCount))} tokens）`;
+  }
+  if (p.status === "running") {
+    return `上下文压缩中${typeof p.turn === "number" ? `（回合 ${p.turn}）` : ""}…`;
+  }
+  if (p.status === "error") {
+    return `上下文压缩失败：${s(p.error) || "未知错误"}`;
+  }
+  const route = [s(p.provider), s(p.model)].filter(Boolean).join("/");
+  const usage =
+    typeof p.inputTokens === "number"
+      ? `用量 ${formatTokens(n(p.inputTokens))} 入 / ${formatTokens(n(p.outputTokens))} 出 · ${formatCost(n(p.costCny))}`
+      : "用量未上报";
+  return (
+    `上下文已压缩：${route ? `${route} · ` : ""}摘要 ${n(p.summaryChars)} 字，` +
+    `替换 ${n(p.shadowedNodes)} 条消息（约 ${formatTokens(n(p.shadowedTokenCount))} tokens）· ${usage}`
+  );
+}

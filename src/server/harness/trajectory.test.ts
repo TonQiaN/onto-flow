@@ -729,3 +729,252 @@ function toolResultMessageWithBlocks(callId: string, content: unknown[]) {
     ],
   };
 }
+
+describe("上下文压缩轨迹", () => {
+  it("压缩生命周期与替换检查点合成一条记录，裁剪不覆盖原始工具结果", () => {
+    const summaryText = "用户要求整理文档，已读取 README。";
+    const session = projectSession(
+      parseSessionJsonl(
+        jsonl(
+          header("node-a", 100),
+          event("turn/start", 0, 101, { turn: 1 }),
+          event("step/start", 1, 102, { turn: 1, step: 1 }),
+          event("user/message", 2, 103, userMessage("请整理文档", { kind: "user" })),
+          event("assistant/message", 3, 104, {
+            turn: 1,
+            step: 1,
+            message: assistantMessage([
+              { type: "tool-call", id: "call-1", name: "read", arguments: "{}" },
+            ]),
+            usage: { inputTokens: 30, outputTokens: 6 },
+          }),
+          event("tool/call", 4, 105, {
+            turn: 1,
+            step: 1,
+            callId: "call-1",
+            name: "read",
+            arguments: "{}",
+          }),
+          event("tool/result", 5, 106, {
+            turn: 1,
+            step: 1,
+            message: toolResultMessage("call-1", "很长的原始结果"),
+          }),
+          event("compaction/prune", 6, 107, {
+            shadowedRange: { start: 5, end: 5 },
+            shadowedSeqs: [5],
+            shadowedTokenCount: 900,
+          }),
+          surfaceEvent(
+            "tool/result",
+            7,
+            108,
+            { turn: 1, step: 1, message: toolResultMessage("call-1", "[已裁剪]") },
+            { op: "replace", start: 5, end: 5 },
+            [5],
+          ),
+          event("step/end", 8, 109, { turn: 1, step: 1 }),
+          event("compaction/start", 9, 110, { compactionId: "c-1", turn: 1 }),
+          event("compaction/summary", 10, 120, {
+            compactionId: "c-1",
+            summary: [{ type: "text", text: summaryText }],
+            rawOutput: [{ type: "text", text: summaryText }],
+            llmStreamCall: true,
+            shadowedRange: { start: 2, end: 7 },
+            shadowedSeqs: [2, 3, 7],
+            shadowedTokenCount: 1200,
+            provider: "deepseek-official",
+            model: "v4-flash",
+            maxTokens: 8192,
+            usage: { inputTokens: 800, outputTokens: 40, reasoningTokens: 5, cacheReadTokens: 300 },
+          }),
+          surfaceEvent(
+            "user/message",
+            11,
+            121,
+            {
+              role: "user",
+              id: "checkpoint",
+              source: { kind: "plugin", plugin: "compact", compactionId: "c-1" },
+              content: [
+                { type: "text", text: "This is an automatically generated checkpoint.\n\n<compacted-summary>" },
+                { type: "text", text: summaryText },
+                { type: "text", text: "</compacted-summary>" },
+              ],
+            },
+            { op: "replace", start: 2, end: 7 },
+            [9, 10, 2, 3, 7],
+          ),
+          event("compaction/end", 12, 123, { compactionId: "c-1", turn: 1 }),
+          event("step/start", 13, 124, { turn: 1, step: 2 }),
+          event("assistant/message", 14, 130, {
+            turn: 1,
+            step: 2,
+            message: assistantMessage([{ type: "text", text: "完成" }]),
+            usage: { inputTokens: 50, outputTokens: 3 },
+          }),
+          event("step/end", 15, 131, { turn: 1, step: 2 }),
+          event("turn/end", 16, 132, { turn: 1, reason: { kind: "completed" } }),
+        ),
+      ),
+      1,
+    );
+
+    expect(session).toMatchObject({ status: "completed", steps: 2, calls: 1 });
+    expect(session.records.map((record) => record.kind)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "context",
+      "context",
+      "assistant",
+    ]);
+    expect(session.records.some((record) => record.label.includes("compact"))).toBe(false);
+    expect(session.records.some((record) => record.label === "上下文检查点")).toBe(false);
+
+    const compaction = session.records.find((record) => record.id === "node-a:compaction:c-1");
+    expect(compaction).toMatchObject({
+      kind: "context",
+      lane: "input",
+      label: "上下文已压缩",
+      state: "complete",
+      seq: 9,
+      turn: 1,
+      step: null,
+      startedAt: 110,
+      finishedAt: 123,
+      usage: {
+        inputTokens: 800,
+        outputTokens: 40,
+        reasoningTokens: 5,
+        cacheReadTokens: 300,
+        cacheWriteTokens: 0,
+      },
+    });
+    expect(compaction?.summary).toContain("deepseek-official/v4-flash");
+    expect(compaction?.summary).toContain("替换 3 条消息");
+    expect(compaction?.details.map((detail) => detail.label)).toEqual([
+      "摘要",
+      "替换后的检查点",
+      "压缩事实",
+      "用量",
+      "时序",
+    ]);
+    expect(compaction?.details[0]?.content).toBe(summaryText);
+    expect(compaction?.details[1]?.content).toContain("<compacted-summary>");
+    expect(compaction?.details[2]?.content).toContain('"shadowedTokenCount": 1200');
+    expect(compaction?.details[4]?.content).toContain('"durationMs": 13');
+
+    const tool = session.records.find((record) => record.kind === "tool");
+    expect(tool).toMatchObject({ callId: "call-1", state: "complete" });
+    expect(tool?.details.find((detail) => detail.label === "结果")?.content).toBe("很长的原始结果");
+
+    const prune = session.records.find((record) => record.id === "node-a:prune:6");
+    expect(prune).toMatchObject({
+      kind: "context",
+      lane: "tools",
+      label: "工具结果已裁剪",
+      state: "complete",
+      callId: "call-1",
+      toolName: "read",
+      turn: 1,
+      step: 1,
+      startedAt: 107,
+      finishedAt: 107,
+    });
+    expect(prune?.summary).toContain("read · 裁剪 1 条工具结果");
+    expect(prune?.details[0]?.content).toContain('"prunedChars": 5');
+  });
+
+  it("未闭合的压缩按会话活跃度投影为进行中或中断，带 error 的关闭投影为失败", () => {
+    const openLog = jsonl(
+      header("node-a", 100),
+      event("turn/start", 0, 101, { turn: 1 }),
+      event("step/start", 1, 102, { turn: 1, step: 1 }),
+      event("compaction/start", 2, 103, { compactionId: "c-open", turn: 1 }),
+    );
+    const running = projectSession(parseSessionJsonl(openLog), 1, "", true);
+    expect(running.records.find((record) => record.kind === "context")).toMatchObject({
+      label: "上下文压缩中",
+      state: "running",
+      summary: "正在压缩上下文（回合 1）",
+      step: 1,
+      finishedAt: null,
+    });
+    const interrupted = projectSession(parseSessionJsonl(openLog), 1);
+    expect(interrupted.records.find((record) => record.kind === "context")).toMatchObject({
+      label: "上下文压缩中断",
+      state: "error",
+      summary: "会话结束前压缩没有完成",
+      finishedAt: 103,
+    });
+
+    const failed = projectSession(
+      parseSessionJsonl(
+        jsonl(
+          header("node-a", 100),
+          event("turn/start", 0, 101, { turn: 1 }),
+          event("compaction/start", 1, 102, { compactionId: "c-fail", turn: 1 }),
+          event("compaction/end", 2, 110, {
+            compactionId: "c-fail",
+            turn: 1,
+            error: "summary is not smaller than the shadowed content",
+          }),
+          event("turn/end", 3, 111, { turn: 1, reason: { kind: "completed" } }),
+        ),
+      ),
+      1,
+    );
+    const failure = failed.records.find((record) => record.kind === "context");
+    expect(failure).toMatchObject({
+      label: "上下文压缩失败",
+      state: "error",
+      summary: "summary is not smaller than the shadowed content",
+      startedAt: 102,
+      finishedAt: 110,
+    });
+    expect(failure?.details.map((detail) => detail.label)).toEqual(["压缩事实", "错误", "时序"]);
+  });
+
+  it("没有配对摘要事件的检查点仍单独成行", () => {
+    const session = projectSession(
+      parseSessionJsonl(
+        jsonl(
+          header("node-a", 100),
+          event("turn/start", 0, 101, { turn: 1 }),
+          event("user/message", 1, 102, userMessage("旧对话", { kind: "user" })),
+          surfaceEvent(
+            "user/message",
+            2,
+            103,
+            {
+              role: "user",
+              id: "checkpoint",
+              source: { kind: "plugin", plugin: "compact", compactionId: "c-elsewhere" },
+              content: [{ type: "text", text: "<compacted-summary>旧对话摘要</compacted-summary>" }],
+            },
+            { op: "replace", start: 1, end: 1 },
+            [1],
+          ),
+          event("turn/end", 3, 104, { turn: 1, reason: { kind: "completed" } }),
+        ),
+      ),
+      1,
+    );
+    expect(session.records.map((record) => [record.kind, record.label])).toEqual([
+      ["user", "用户"],
+      ["context", "上下文检查点"],
+    ]);
+  });
+});
+
+function surfaceEvent(
+  type: string,
+  seq: number,
+  time: number,
+  data: unknown,
+  surfaceOp: { op: "replace"; start: number; end: number },
+  sourceEventSeqs: number[],
+): Record<string, unknown> {
+  return { ...event(type, seq, time, data), surfaceOp, sourceEventSeqs };
+}

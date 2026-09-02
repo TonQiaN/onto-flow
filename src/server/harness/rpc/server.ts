@@ -4,7 +4,7 @@
  * 上游 dsh 的 packages/sdk/server/src/server.ts 是原型（MIT，见
  * THIRD_PARTY_NOTICES.md）。相对上游的差异：补齐 session/cancel、session/close
  * 与 session/output；prompt 支持懒创建时的 agentOptions 覆盖与 nodeOptions 会话
- * 组合（结构化输出、工具子集、作用域技能）；不转发 subagent 通知。
+ * 组合（结构化输出、工具子集）；不转发 subagent 通知。
  *
  * 移植自 agent-workflow-studio 的 packages/harness/src/plugins/studio-rpc/server.ts。
  */
@@ -17,8 +17,6 @@ import { SessionId } from "@deepseek-ai/dsh-session";
 import * as LlmDeepSeek from "@deepseek-ai/dsh-llm-deepseek";
 import type { JsonRpcTransportPeer } from "@deepseek-ai/dsh-sdk-protocol";
 import { assertObjectJsonSchema } from "@deepseek-ai/dsh-tools";
-// 仅为 Context.skills 的声明合并；运行时技能注册走该服务。
-import type {} from "@deepseek-ai/dsh-skill";
 import { attachStructuredRuntime, type StructuredAttachment } from "./structured";
 import {
   RPC_SERVER_NAME,
@@ -246,7 +244,7 @@ export class OntoflowRpcServer {
 
   /**
    * 在会话创建窗口（setup）内组合 Action 会话的 scope：结构化输出运行时、
-   * 工具子集与作用域技能。任一步失败使创建整体回滚，不发布半成品会话。
+   * 工具子集。任一步失败使创建整体回滚，不发布半成品会话。
    */
   private composeNodeScope(
     agentCtx: Context,
@@ -264,14 +262,6 @@ export class OntoflowRpcServer {
       throw new Error("组合未加载 systemPrompt 服务，无法挂载结构化输出指令");
     }
     // 属性代理受 inject 声明门控，本插件只注入 agents；服务一律经 ctx.get 取用。
-    const skillsService = agentCtx.get("skills");
-    if (
-      nodeOptions.skills !== undefined &&
-      nodeOptions.skills.length > 0 &&
-      skillsService === undefined
-    ) {
-      throw new Error("组合未加载 skills 服务，无法注册 Action 技能");
-    }
     let structured: StructuredAttachment | undefined;
     if (nodeOptions.outputSchema !== undefined) {
       structured = attachStructuredRuntime(agentCtx, nodeOptions.outputSchema);
@@ -319,22 +309,10 @@ export class OntoflowRpcServer {
         // guard 与本会话 scope 同生命周期，随会话关闭一并释放。
         toolsService?.guard((execution) =>
           denySet.has(execution.name)
-            ? `工具 ${execution.name} 已被全局设置默认停用`
+            ? `工具 ${execution.name} 不在本 Action 的可见工具面内（全局停用或未被本 Action 引用）`
             : undefined,
         );
       }
-    }
-    for (const skill of nodeOptions.skills ?? []) {
-      skillsService?.register({
-        name: skill.name,
-        description: skill.description,
-        ...(skill.whenToUse === undefined ? {} : { whenToUse: skill.whenToUse }),
-        content: skill.content,
-        source: "runtime",
-        ...(skill.resourceDir === undefined
-          ? {}
-          : { resourceBase: { kind: "directory" as const, path: skill.resourceDir } }),
-      });
     }
     return structured;
   }

@@ -30,6 +30,7 @@ const workspace: RunWorkspace = {
   logsDir: "/tmp/ontoflow-launch-test/run/logs",
   homeDir: "/tmp/ontoflow-launch-test/run/home",
   pluginsDir: "/tmp/ontoflow-launch-test/run/plugins",
+  tmpDir: "/tmp/ontoflow-launch-test/run/tmp",
   compositionPath: "/tmp/ontoflow-launch-test/run/cordis.yml",
   imports: { instructionsDigest: "test", items: [] },
 };

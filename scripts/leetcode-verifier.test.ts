@@ -13,6 +13,8 @@ afterEach(() => {
 
 describe("LeetCode 独立验收沙箱", () => {
   it("模型脚本不能写出本次运行工作区", async () => {
+    // CI 的 check 作业没有 data/（gitignored，也不跑 db:push）；沙箱根自己建。
+    fs.mkdirSync(path.join(process.cwd(), "data"), { recursive: true });
     const root = fs.mkdtempSync(path.join(process.cwd(), "data", "verifier-sandbox-test-"));
     roots.push(root);
     const workspace = path.join(root, "workspace");
