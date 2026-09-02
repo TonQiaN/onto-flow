@@ -102,7 +102,7 @@ export class RunWorkspaceError extends Error {}
  */
 async function digestDirectory(
   sourceDir: string,
-): Promise<{ digest: string; fileCount: number }> {
+): Promise<{ digest: string; fileCount: number; root: string }> {
   const root = await realpath(sourceDir);
   const files: string[] = [];
   async function walk(dir: string): Promise<void> {
@@ -122,7 +122,7 @@ async function digestDirectory(
     hash.update(await readFile(file));
     hash.update("\0");
   }
-  return { digest: hash.digest("hex"), fileCount: files.length };
+  return { digest: hash.digest("hex"), fileCount: files.length, root };
 }
 
 export function runDirPath(workflowId: string, runId: string): string {
@@ -189,10 +189,23 @@ export async function createRunWorkspace(
     }
     for (const item of options.skills ?? []) {
       const target = path.join(workspaceDir, WORKSPACE_SKILLS_SUBDIR, item.name);
-      // 摘要先于建链：源目录读不到就该在这里失败，而不是留下一条断链。
-      const { digest, fileCount } = await digestDirectory(item.sourceDir);
-      await symlink(item.sourceDir, target, "dir");
-      items.push({ name: item.name, digest, fileCount, sourceDir: item.sourceDir });
+      // 摘要先于建链：源目录读不到就该在这里失败，而不是留下一条断链。摘要钉在真实路径（版本目录）
+      // 上，链接却指向逻辑路径 <slug>：两步之间技能被重写，链接会解析到新版本而摘要记的是旧版本，
+      // runs.imports 就记下了一份没导入过的内容。所以建链后核对逻辑路径仍解析到被摘要的版本，
+      // 变了就拆掉链接重来一遍（重写极少，循环几乎总是一次结束）。
+      let digested = await digestDirectory(item.sourceDir);
+      for (;;) {
+        await symlink(item.sourceDir, target, "dir");
+        if ((await realpath(item.sourceDir)) === digested.root) break;
+        await rm(target);
+        digested = await digestDirectory(item.sourceDir);
+      }
+      items.push({
+        name: item.name,
+        digest: digested.digest,
+        fileCount: digested.fileCount,
+        sourceDir: item.sourceDir,
+      });
     }
 
     return {
