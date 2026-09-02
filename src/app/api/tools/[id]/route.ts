@@ -15,7 +15,7 @@ export async function GET(_request: Request, { params }: Params) {
   return handle(async () => {
     const { id } = await params;
     const row = db.select().from(tools).where(eq(tools.id, id)).get();
-    if (!row) return jsonError(404, "工具不存在");
+    if (!row) return jsonError(404, "Tool 不存在");
     return NextResponse.json(row);
   });
 }
@@ -31,11 +31,11 @@ export async function DELETE(_request: Request, { params }: Params) {
   return handle(async () => {
     const { id } = await params;
     const row = db.select().from(tools).where(eq(tools.id, id)).get();
-    if (!row) return jsonError(404, "工具不存在");
+    if (!row) return jsonError(404, "Tool 不存在");
 
     const usedBy = usedByNames("tool", id);
     if (usedBy.length > 0)
-      return jsonError(409, "该工具正被 Action 引用，无法删除", { usedBy });
+      return jsonError(409, "该 Tool 正被工作流引用，无法删除", { usedBy });
 
     db.delete(tools).where(eq(tools.id, id)).run();
     return NextResponse.json({ ok: true });

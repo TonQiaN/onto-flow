@@ -75,7 +75,8 @@ function maxVersionNo(kind: EntityKind, entityId: string, conn = db): number {
 /**
  * 追加一版修订，versionNo = 该实体当前最大值 + 1（从 1 开始）。
  *
- * @param payload 实体的完整定义（Action 含 ports/skillIds/toolIds；Workflow 含 nodes/edges）
+ * @param payload 实体的完整定义（Action 含 ports/preloadSkillIds/toolIds；Skill 含 files；
+ *                Workflow 含 instructions/settings/skillIds/toolIds/nodes/edges）
  * @param tx 在调用方事务内记账时可传入；省略即用全局 db——better-sqlite3 单连接，
  *           省略时若外层已 BEGIN，插入同样落在该事务里。
  */

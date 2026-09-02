@@ -15,6 +15,7 @@ CREATE TABLE settings (
 (globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
 
 const {
+  DEFAULT_INSTRUCTIONS,
   DEFAULT_SETTINGS,
   parseSettings,
   readSettings,
@@ -90,25 +91,71 @@ describe("设置比较替换", () => {
   });
 });
 
-describe("搜索开关", () => {
-  it("缺省即关：旧文档与只发部分字段的调用方都不会把搜索悄悄打开", () => {
+describe("插件开关", () => {
+  it("缺省取出厂值：搜索关、其余开；只发部分键时其它键不受影响", () => {
     const result = parseSettings({});
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.webSearchEnabled).toBe(false);
-    expect(DEFAULT_SETTINGS.webSearchEnabled).toBe(false);
+    if (result.ok) {
+      expect(result.data.toggles).toEqual({
+        webSearch: false,
+        fsSearch: true,
+        strReplaceEditor: true,
+        todo: true,
+        compaction: true,
+      });
+    }
+    const partial = parseSettings({ toggles: { webSearch: true } });
+    expect(partial.ok).toBe(true);
+    if (partial.ok) {
+      expect(partial.data.toggles.webSearch).toBe(true);
+      expect(partial.data.toggles.todo).toBe(true);
+    }
   });
 
-  it("布尔值原样进出，非布尔值 400", () => {
-    expect(writeSettings({ ...DEFAULT_SETTINGS, webSearchEnabled: true }).ok).toBe(true);
-    expect(readSettings().webSearchEnabled).toBe(true);
+  it("布尔值原样进出，非布尔值与非对象 400", () => {
+    const toggles = { ...DEFAULT_SETTINGS.toggles, webSearch: true, todo: false };
+    expect(writeSettings({ ...DEFAULT_SETTINGS, toggles }).ok).toBe(true);
+    expect(readSettings().toggles).toEqual(toggles);
 
     for (const bad of ["true", 1, null, {}]) {
-      const result = parseSettings({ ...DEFAULT_SETTINGS, webSearchEnabled: bad });
+      const result = parseSettings({ ...DEFAULT_SETTINGS, toggles: { compaction: bad } });
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.status).toBe(400);
-        expect(result.error).toContain("webSearchEnabled 必须是布尔值");
+        expect(result.error).toContain("toggles.compaction 必须是布尔值");
       }
     }
+    const notObject = parseSettings({ ...DEFAULT_SETTINGS, toggles: [] });
+    expect(notObject.ok).toBe(false);
+    if (!notObject.ok) expect(notObject.error).toContain("toggles 必须是对象");
+  });
+});
+
+describe("默认指令", () => {
+  it("缺省取出厂四条约定；显式空串也接受", () => {
+    const result = parseSettings({});
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.defaultInstructions).toBe(DEFAULT_INSTRUCTIONS);
+      expect(result.data.defaultInstructions).toContain("声明了的产物必须真的写出来");
+    }
+    const empty = parseSettings({ defaultInstructions: "" });
+    expect(empty.ok).toBe(true);
+    if (empty.ok) expect(empty.data.defaultInstructions).toBe("");
+  });
+
+  it("非字符串 400，超过 64 KiB 400，正常正文原样进出", () => {
+    for (const bad of [1, null, {}, []]) {
+      const result = parseSettings({ ...DEFAULT_SETTINGS, defaultInstructions: bad });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toContain("defaultInstructions 必须是字符串");
+    }
+    const huge = parseSettings({ ...DEFAULT_SETTINGS, defaultInstructions: "字".repeat(30_000) });
+    expect(huge.ok).toBe(false);
+    if (!huge.ok) expect(huge.error).toContain("64 KiB");
+
+    const text = "# 团队约定\n\n先读再写。\n";
+    expect(writeSettings({ ...DEFAULT_SETTINGS, defaultInstructions: text }).ok).toBe(true);
+    expect(readSettings().defaultInstructions).toBe(text);
   });
 });

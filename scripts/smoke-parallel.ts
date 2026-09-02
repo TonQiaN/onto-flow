@@ -102,7 +102,7 @@ function normalizedAction(payload: ActionPayload): ActionPayload {
         left.position - right.position ||
         left.name.localeCompare(right.name),
     ),
-    skillIds: [...payload.skillIds].sort(),
+    preloadSkillIds: [...payload.preloadSkillIds].sort(),
     toolIds: [...payload.toolIds].sort(),
   };
 }
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
         exitName: null,
       },
     ],
-    skillIds: [],
+    preloadSkillIds: [],
     toolIds: [],
   };
   const existing = db.select().from(actions).where(eq(actions.name, actionName)).get();
@@ -182,7 +182,7 @@ async function main(): Promise<void> {
         artifactPath: port.artifactPath,
         exitName: port.exitName,
       })),
-      skillIds: dto.skillIds,
+      preloadSkillIds: dto.preloadSkillIds,
       toolIds: dto.toolIds,
     };
     if (

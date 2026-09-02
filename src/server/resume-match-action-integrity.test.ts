@@ -29,22 +29,36 @@ function definition(): ResolvedActionDefinition {
       displayName: "显示名不进入模型行为摘要",
     },
     ports: { inputs: [], outputs: [] },
-    skills: [],
+    preloads: [],
   };
 }
 
 describe("简历评分 Action 行为摘要", () => {
   it("关系顺序不影响摘要，非执行描述也不进入摘要", () => {
     const original = definition();
-    const digest = resumeMatchActionBehaviorDigest(original, ["工具乙", "工具甲"]);
+    const digest = resumeMatchActionBehaviorDigest(original, ["tool_b", "tool_a"]);
     const renamedDescription: ResolvedActionDefinition = {
       ...original,
       action: { ...original.action, description: "仅供人看的新描述" },
       model: { ...original.model, displayName: "新的显示名" },
     };
 
-    expect(resumeMatchActionBehaviorDigest(renamedDescription, ["工具甲", "工具乙"]))
+    expect(resumeMatchActionBehaviorDigest(renamedDescription, ["tool_a", "tool_b"]))
       .toBe(digest);
+  });
+
+  it("预载技能的 slug 与 id 不进入摘要，名字进入", () => {
+    const withPreload: ResolvedActionDefinition = {
+      ...definition(),
+      preloads: [{ id: "skill-1", name: "编制规范", slug: "skill-aaaa" }],
+    };
+    const renamedSlug: ResolvedActionDefinition = {
+      ...definition(),
+      preloads: [{ id: "skill-2", name: "编制规范", slug: "skill-bbbb" }],
+    };
+    expect(resumeMatchActionBehaviorDigest(withPreload, [])).toBe(
+      resumeMatchActionBehaviorDigest(renamedSlug, []),
+    );
   });
 
   it.each([
@@ -76,22 +90,22 @@ describe("简历评分 Action 行为摘要", () => {
       ...value,
       action: { ...value.action, onExhausted: "accept" as const },
     })],
-    ["Skill 集合", (value: ResolvedActionDefinition) => ({
+    ["预载技能", (value: ResolvedActionDefinition) => ({
       ...value,
-      skills: [{ id: "skill-one", name: "额外 Skill" }],
+      preloads: [{ id: "skill-one", name: "额外技能", slug: "skill-one" }],
     })],
   ])("%s 变化会使固定摘要失效", (_field, mutate) => {
     const original = definition();
-    const expected = resumeMatchActionBehaviorDigest(original, ["校验工具"]);
-    expect(matchesResumeMatchActionBehavior(mutate(original), ["校验工具"], expected))
+    const expected = resumeMatchActionBehaviorDigest(original, ["validate_result"]);
+    expect(matchesResumeMatchActionBehavior(mutate(original), ["validate_result"], expected))
       .toBe(false);
   });
 
-  it("完整 Tool 集合变化会使固定摘要失效", () => {
+  it("可见 Tool 集合变化会使固定摘要失效", () => {
     const original = definition();
-    const expected = resumeMatchActionBehaviorDigest(original, ["校验工具"]);
+    const expected = resumeMatchActionBehaviorDigest(original, ["validate_result"]);
     expect(
-      matchesResumeMatchActionBehavior(original, ["校验工具", "额外工具"], expected),
+      matchesResumeMatchActionBehavior(original, ["validate_result", "extra_tool"], expected),
     ).toBe(false);
   });
 });

@@ -26,7 +26,16 @@ import {
 type Rec = Record<string, unknown>;
 
 const DEFINITION_KEYS: Record<EntityKind, readonly string[]> = {
-  workflow: ["name", "description", "nodes", "edges"],
+  workflow: [
+    "name",
+    "description",
+    "instructions",
+    "settings",
+    "skillIds",
+    "toolIds",
+    "nodes",
+    "edges",
+  ],
   action: [
     "name",
     "description",
@@ -34,18 +43,27 @@ const DEFINITION_KEYS: Record<EntityKind, readonly string[]> = {
     "rule",
     "modelId",
     "reasoningEffort",
+    "maxReentries",
+    "onExhausted",
     "ports",
-    "skillIds",
+    "preloadSkillIds",
     "toolIds",
   ],
-  skill: ["name", "description", "content"],
-  tool: ["name", "description", "code"],
+  skill: ["name", "description", "content", "files"],
+  tool: ["name", "publicName", "description", "parameters", "output", "timeoutMs", "code"],
   // builtin 不在 parseObjectTypePayload 的接受范围内（内置类型根本不可改），
   // 不属于定义；早期种子修订里带过它，这里一并裁掉，免得每次都报一条假删除。
   object_type: ["name", "kind", "description", "jsonSchema"],
 };
 
-const PORT_KEYS = ["direction", "name", "objectTypeId", "position"] as const;
+const PORT_KEYS = [
+  "direction",
+  "name",
+  "objectTypeId",
+  "position",
+  "artifactPath",
+  "exitName",
+] as const;
 const NODE_KEYS = [
   "id",
   "kind",
@@ -108,6 +126,38 @@ function compareById(a: unknown, b: unknown): number {
   return String(ra.id ?? "").localeCompare(String(rb.id ?? ""));
 }
 
+/** 短哈希（FNV-1a，8 位十六进制）：只用来判断两份文件内容是否相同 */
+function shortHash(text: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+/**
+ * 技能的资源文件是集合（唯一键是 path），修订 payload 与 GET 响应都以 base64 带全文；
+ * 把 1 MiB 的 base64 摊进 diff 行没人读得了，所以投影成 { path, size, hash }——
+ * 大小与内容哈希都从 base64 算，两边同一算法，改了内容就能看出来。
+ */
+function projectSkillFiles(value: unknown): unknown[] {
+  return (value as unknown[])
+    .map((item) => {
+      const rec = asRecord(item);
+      if (!rec) return item;
+      const encoded = typeof rec.contentBase64 === "string" ? rec.contentBase64 : "";
+      const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+      const size = encoded === "" ? 0 : Math.floor((encoded.length * 3) / 4) - padding;
+      return { path: rec.path, size, hash: shortHash(encoded) };
+    })
+    .sort((a, b) => {
+      const pa = String(asRecord(a)?.path ?? "");
+      const pb = String(asRecord(b)?.path ?? "");
+      return pa.localeCompare(pb);
+    });
+}
+
 /** 把一份定义（修订 payload 或当前定义）裁剪并定序成规范形态 */
 function normalizeDefinition(kind: EntityKind, value: unknown): unknown {
   const rec = asRecord(value);
@@ -115,6 +165,8 @@ function normalizeDefinition(kind: EntityKind, value: unknown): unknown {
   const out = pick(rec, DEFINITION_KEYS[kind]);
   if (kind === "action" && Array.isArray(out.ports))
     out.ports = projectItems(out.ports, PORT_KEYS).sort(comparePorts);
+  if (kind === "skill" && Array.isArray(out.files))
+    out.files = projectSkillFiles(out.files);
   if (kind === "workflow") {
     if (Array.isArray(out.nodes))
       out.nodes = projectItems(out.nodes, NODE_KEYS).sort(compareById);
@@ -137,6 +189,10 @@ function currentDefinition(kind: EntityKind, body: unknown): unknown {
   return normalizeDefinition(kind, {
     name: workflow.name,
     description: workflow.description,
+    instructions: workflow.instructions,
+    settings: workflow.settings,
+    skillIds: workflow.skillIds,
+    toolIds: workflow.toolIds,
     nodes: envelope.nodes,
     edges: envelope.edges,
   });

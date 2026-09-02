@@ -24,22 +24,16 @@ import {
   type McpServerSpec,
 } from "./entries";
 import type { RunWorkspace } from "./workspace";
+import { DEFAULT_COMPOSITION_TOGGLES, type CompositionToggles } from "@/lib/workflow-settings";
 
 /** 运行目录内的会话持久化根目录名。 */
 export const RUN_SESSIONS_SUBDIR = "sessions";
 /** 运行 home 内的工具结果 spill 根目录名（spill-local 不钉 root 会落到进程级临时目录）。 */
 export const RUN_SPILL_SUBDIR = "spill";
 
-/** 可按工作流切换的能力开关；第一批只有全局默认值，第二批由工作流设置覆盖（ADR-0016）。 */
-export interface CompositionToggles {
-  /**
-   * DeepSeek 搜索（web_search）。默认关：搜索是一次独立的辅助模型请求，用量不经
-   * llm/stream，本站 node_usage 收不到，是账外支出（docs/harness/02）。
-   */
-  webSearch: boolean;
-}
-
-export const DEFAULT_COMPOSITION_TOGGLES: CompositionToggles = { webSearch: false };
+// 可按工作流切换的能力开关的类型与出厂默认住在 src/lib/workflow-settings.ts：全局设置给
+// 默认值、工作流设置覆盖、受理时合成（ADR-0016）；这里只消费合成后的结果。
+export { DEFAULT_COMPOSITION_TOGGLES, type CompositionToggles } from "@/lib/workflow-settings";
 
 /** 全局设置进入一次运行的组合面。 */
 export interface RunCompositionOptions {
@@ -88,14 +82,18 @@ export function runCompositionEntries(
     { id: "session-checkpoint-policy", name: "@deepseek-ai/dsh-session-checkpoint-policy" },
     // 上下文预算三件套：token-meter 是 compaction-basic 的必需依赖，pruner 是它的
     // 可选配套（无模型剪枝先于摘要）。摘要那次调用的用量挂在 compaction/summary
-    // 事件上而不是 usage chunk，engine/events.ts 单独计费。
-    { id: "token-meter", name: "@deepseek-ai/dsh-token-meter" },
-    { id: "compaction-basic", name: "@deepseek-ai/dsh-compaction-basic" },
-    {
-      id: "tool-result-pruner",
-      name: "@deepseek-ai/dsh-compaction-tool-result-pruner",
-      config: { thresholdChars: 8192, headChars: 4096, tailChars: 1024 },
-    },
+    // 事件上而不是 usage chunk，engine/events.ts 单独计费。三行随 compaction 开关同进同出。
+    ...(toggles.compaction
+      ? [
+          { id: "token-meter", name: "@deepseek-ai/dsh-token-meter" },
+          { id: "compaction-basic", name: "@deepseek-ai/dsh-compaction-basic" },
+          {
+            id: "tool-result-pruner",
+            name: "@deepseek-ai/dsh-compaction-tool-result-pruner",
+            config: { thresholdChars: 8192, headChars: 4096, tailChars: 1024 },
+          },
+        ]
+      : []),
     // spill-local 是 spill-policy（超大工具结果）与 glob/grep 超上限结果的存储；bash 的
     // 完整输出由 subprocess-local 自己写在 TMPDIR 下，不经它。root 必须钉进运行目录，
     // 默认值是 os.tmpdir() 下的进程级私有目录。
@@ -149,20 +147,30 @@ export function runCompositionEntries(
     { id: "tool-fs", name: "@deepseek-ai/dsh-tool-fs" },
     // glob/grep 走包内 ripgrep（@vscode/ripgrep 的平台包），不经 shell；结果超上限
     // 落到上面的 spill store。sampleOverCapGlobResults 是必填项，取上游 base 的值。
-    {
-      id: "tool-fs-search",
-      name: "@deepseek-ai/dsh-tool-fs-search",
-      config: { sampleOverCapGlobResults: false },
-    },
-    {
-      id: "tool-str-replace-editor",
-      name: "@deepseek-ai/dsh-tool-str-replace-editor",
-      config: { maxOutputChars: 16_000 },
-    },
+    ...(toggles.fsSearch
+      ? [
+          {
+            id: "tool-fs-search",
+            name: "@deepseek-ai/dsh-tool-fs-search",
+            config: { sampleOverCapGlobResults: false },
+          },
+        ]
+      : []),
+    ...(toggles.strReplaceEditor
+      ? [
+          {
+            id: "tool-str-replace-editor",
+            name: "@deepseek-ai/dsh-tool-str-replace-editor",
+            config: { maxOutputChars: 16_000 },
+          },
+        ]
+      : []),
     // 后台任务通道（dsh-jobs）不挂（ADR-0014），关掉 run_in_background 免得模型走进注定报错的分支。
     { id: "tool-bash", name: "@deepseek-ai/dsh-tool-bash", config: { enableRunInBackground: false } },
     // allowParallelInProgress 是必填项；取上游 base 的值。
-    { id: "tool-todo", name: "@deepseek-ai/dsh-tool-todo", config: { allowParallelInProgress: true } },
+    ...(toggles.todo
+      ? [{ id: "tool-todo", name: "@deepseek-ai/dsh-tool-todo", config: { allowParallelInProgress: true } }]
+      : []),
     {
       id: "agent-instructions",
       name: "@deepseek-ai/dsh-agent-instructions",

@@ -15,6 +15,7 @@ import {
   type PluginGroupId,
 } from "./catalog";
 import { runCompositionEntries } from "./composition";
+import { COMPOSITION_TOGGLE_KEYS, DEFAULT_COMPOSITION_TOGGLES } from "@/lib/workflow-settings";
 import type { RunWorkspace } from "./workspace";
 
 const REPO_ROOT = process.cwd();
@@ -60,7 +61,7 @@ describe("插件目录 ↔ 组合", () => {
     }
   });
 
-  it("按开关挂载的行只在开关打开时进入组合", () => {
+  it("默认关的开关行只在开关打开时进入组合", () => {
     const off = new Set(runCompositionEntries(previewWorkspace()).map((e) => e.id));
     const on = new Set(
       runCompositionEntries(previewWorkspace(), { toggles: { webSearch: true } }).map((e) => e.id),
@@ -68,6 +69,33 @@ describe("插件目录 ↔ 组合", () => {
     for (const id of toggleMountedEntryIds()) {
       expect(off.has(id), `「${id}」是开关行，默认组合不该有`).toBe(false);
       expect(on.has(id), `「${id}」是开关行，开关全开后组合里应当有`).toBe(true);
+    }
+  });
+
+  it("每个开关键都恰好控制目录里标了它的那些行", () => {
+    for (const key of COMPOSITION_TOGGLE_KEYS) {
+      const rows = PLUGIN_CATALOG.filter((r) => r.toggle === key && r.entry !== undefined && "id" in r.entry);
+      expect(rows.length, `开关「${key}」在目录里没有对应的行`).toBeGreaterThan(0);
+      const ids = rows.map((r) => (r.entry as { id: string }).id);
+      const on = new Set(
+        runCompositionEntries(previewWorkspace(), { toggles: { ...DEFAULT_COMPOSITION_TOGGLES, [key]: true } }).map((e) => e.id),
+      );
+      const off = new Set(
+        runCompositionEntries(previewWorkspace(), { toggles: { ...DEFAULT_COMPOSITION_TOGGLES, [key]: false } }).map((e) => e.id),
+      );
+      for (const id of ids) {
+        expect(on.has(id), `开关「${key}」打开时「${id}」应在组合里`).toBe(true);
+        expect(off.has(id), `开关「${key}」关闭时「${id}」不该在组合里`).toBe(false);
+      }
+      // 没标这个键的固定行不受它影响
+      const others = [...on].filter((id) => !ids.includes(id));
+      for (const id of others) expect(off.has(id), `开关「${key}」不该影响「${id}」`).toBe(true);
+    }
+  });
+
+  it("标了开关键的行必须允许按工作流切换", () => {
+    for (const row of PLUGIN_CATALOG) {
+      if (row.toggle !== undefined) expect(row.workflowToggle, `「${row.package}」有开关键却不可切换`).toBe(true);
     }
   });
 

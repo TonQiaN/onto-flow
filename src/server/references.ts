@@ -1,12 +1,15 @@
 /**
  * 引用（反向索引）服务：谁在引用这个实体。
  *
- * 引用关系的唯一事实源（DESIGN-V2 第三节）：
+ * 引用关系的唯一事实源（DESIGN-V2 第三节，ADR-0016）：
  * - Action      ← workflow_nodes.action_id
- * - Skill       ← action_skills
- * - Tool        ← action_tools
+ * - Skill       ← workflow_skills（工作流的技能集）
+ * - Tool        ← workflow_tools（工作流的 Tool 集）
  * - Object Type ← action_ports.object_type_id 与 workflow_nodes.object_type_id
  * - Workflow    ← 无（顶层实体，refCount 恒为 0）
+ *
+ * Action 的预载（action_preloads）与可见 Tool（action_tools）不是引用：它们只在
+ * 工作流已经引用的集合里做选择，工作流保存时校验子集关系，删除保护不看它们。
  *
  * 对外接口（其它模块可直接 import，签名保持稳定）：
  *   isEntityKind / listEntities / entityExists / entityHref
@@ -16,8 +19,6 @@ import { asc, eq, inArray, isNotNull, or } from "drizzle-orm";
 import {
   ENTITY_KINDS,
   actionPorts,
-  actionSkills,
-  actionTools,
   actions,
   db,
   objectTypes,
@@ -25,6 +26,8 @@ import {
   tools,
   workflowEdges,
   workflowNodes,
+  workflowSkills,
+  workflowTools,
   workflows,
   type EntityKind,
 } from "@/db";
@@ -34,7 +37,7 @@ export interface EntityRef {
   kind: "workflow" | "action";
   id: string;
   name: string;
-  /** 引用位置的人话描述，如「节点：集采计划审核」「输入端口：集采计划」 */
+  /** 引用位置的人话描述，如「节点：集采计划审核」「输入端口：集采计划」「技能集」 */
   detail: string;
   href: string;
 }
@@ -117,6 +120,11 @@ export function entityName(kind: EntityKind, id: string): string | null {
   return row?.name ?? null;
 }
 
+/** 技能集与 Tool 集在工作流设置页里编辑，引用面板直接跳到那里。 */
+export function workflowSettingsHref(workflowId: string): string {
+  return `/workflows/${workflowId}/settings`;
+}
+
 /**
  * 实体在前端的可跳转路径。
  * workflow 有独立详情页；其余四个库是列表页 + highlight 查询参数。
@@ -166,33 +174,35 @@ export function referencesOf(kind: EntityKind, id: string): EntityRef[] {
 
     case "skill": {
       const rows = db
-        .select({ actionId: actions.id, actionName: actions.name })
-        .from(actionSkills)
-        .innerJoin(actions, eq(actionSkills.actionId, actions.id))
-        .where(eq(actionSkills.skillId, id))
+        .select({ workflowId: workflows.id, workflowName: workflows.name })
+        .from(workflowSkills)
+        .innerJoin(workflows, eq(workflowSkills.workflowId, workflows.id))
+        .where(eq(workflowSkills.skillId, id))
+        .orderBy(asc(workflows.name))
         .all();
       return rows.map((r) => ({
-        kind: "action" as const,
-        id: r.actionId,
-        name: r.actionName,
-        detail: "引用技能",
-        href: entityHref("action", r.actionId),
+        kind: "workflow" as const,
+        id: r.workflowId,
+        name: r.workflowName,
+        detail: "技能集",
+        href: workflowSettingsHref(r.workflowId),
       }));
     }
 
     case "tool": {
       const rows = db
-        .select({ actionId: actions.id, actionName: actions.name })
-        .from(actionTools)
-        .innerJoin(actions, eq(actionTools.actionId, actions.id))
-        .where(eq(actionTools.toolId, id))
+        .select({ workflowId: workflows.id, workflowName: workflows.name })
+        .from(workflowTools)
+        .innerJoin(workflows, eq(workflowTools.workflowId, workflows.id))
+        .where(eq(workflowTools.toolId, id))
+        .orderBy(asc(workflows.name))
         .all();
       return rows.map((r) => ({
-        kind: "action" as const,
-        id: r.actionId,
-        name: r.actionName,
-        detail: "引用工具",
-        href: entityHref("action", r.actionId),
+        kind: "workflow" as const,
+        id: r.workflowId,
+        name: r.workflowName,
+        detail: "Tool 集",
+        href: workflowSettingsHref(r.workflowId),
       }));
     }
 
@@ -265,16 +275,16 @@ export function refCounts(kind: EntityKind): Record<string, number> {
     }
     case "skill": {
       const rows = db
-        .select({ skillId: actionSkills.skillId })
-        .from(actionSkills)
+        .select({ skillId: workflowSkills.skillId })
+        .from(workflowSkills)
         .all();
       for (const r of rows) bump(r.skillId);
       break;
     }
     case "tool": {
       const rows = db
-        .select({ toolId: actionTools.toolId })
-        .from(actionTools)
+        .select({ toolId: workflowTools.toolId })
+        .from(workflowTools)
         .all();
       for (const r of rows) bump(r.toolId);
       break;

@@ -42,14 +42,18 @@ import {
   RESUME_MATCH_RESUME_OBJECT_TYPE_NAME,
   RESUME_MATCH_RESUME_PARSE_PORT,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
-  RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256,
+  RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256,
   RESUME_MATCH_WORKFLOW_NAME,
-  resumeMatchWorkflowDescriptionSha256,
+  resumeMatchWorkflowBehaviorSha256,
   type ResumeMatchResult,
 } from "@/lib/resume-match";
 import { isWithinData, resolveWithinData } from "@/server/fs-safety";
 import { startResolvedRun } from "@/server/engine/runner";
-import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import {
+  resolveWorkflow,
+  WorkflowResolveError,
+  type ResolvedWorkflow,
+} from "@/server/resolve";
 import { isAuthoritativeResumeMatchActionBehavior } from "@/server/resume-match-action-integrity";
 import { isAuthoritativeResumeMatchValidatorTool } from "@/server/resume-match-validator-integrity";
 import { readSettings, type SettingsDocument } from "@/server/settings";
@@ -530,15 +534,16 @@ function validateRequiredCapabilities(
   const referencedTools = new Set(
     resolved.capabilities.toolNamesByActionId.get(actionId) ?? [],
   );
+  // 可见关系与 Tool 集里放的都是公名：展示名可随意改，公名才是模型调用与收窄用的身份。
   const validator = referencedTools.has(RESUME_MATCH_VALIDATOR_TOOL_NAME)
     ? resolved.capabilities.tools.find(
-        (tool) => tool.name === RESUME_MATCH_VALIDATOR_TOOL_NAME,
+        (tool) => tool.publicName === RESUME_MATCH_VALIDATOR_TOOL_NAME,
       )
     : undefined;
   if (!validator) {
     return `简历匹配汇总 Action 必须引用 ${RESUME_MATCH_VALIDATOR_TOOL_NAME}`;
   }
-  if (!isAuthoritativeResumeMatchValidatorTool(validator.code)) {
+  if (!isAuthoritativeResumeMatchValidatorTool(validator)) {
     return `校验 Tool ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 的实现与内置版本不一致`;
   }
   if (settings.disabledTools.includes(RESUME_MATCH_VALIDATOR_TOOL_NAME)) {
@@ -553,13 +558,19 @@ function validateRequiredCapabilities(
   return null;
 }
 
-/** 八个 Action 的可执行行为也是专用付费入口契约，不能只凭同名与同端口放行。 */
+/**
+ * 工作流层（指令、设置、技能集、Tool 集）与八个 Action 的可执行行为都是专用付费入口契约，
+ * 不能只凭同名与同端口放行（ADR-0016：digest pin 纳入工作流设置）。
+ */
 function validateActionBehaviors(resolved: ResolvedWorkflow): string | null {
-  if (
-    resumeMatchWorkflowDescriptionSha256(resolved.workflow.description) !==
-    RESUME_MATCH_WORKFLOW_DESCRIPTION_SHA256
-  ) {
-    return "简历匹配工作流的共同指令必须与内置行为契约一致";
+  const workflowDigest = resumeMatchWorkflowBehaviorSha256({
+    instructions: resolved.workflow.instructions,
+    settings: resolved.settings,
+    skillNames: resolved.capabilities.skills.map((skill) => skill.name),
+    toolPublicNames: resolved.capabilities.tools.map((tool) => tool.publicName),
+  });
+  if (workflowDigest !== RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256) {
+    return "简历匹配工作流的共同指令、设置、技能集与 Tool 集必须与内置行为契约一致";
   }
   const expectedNames = [
     RESUME_MATCH_PARSE_ACTION_NAME,
@@ -574,12 +585,12 @@ function validateActionBehaviors(resolved: ResolvedWorkflow): string | null {
     const definition = actionId
       ? resolved.actionDefinitions.get(actionId)
       : undefined;
-    const toolNames = actionId
+    const toolPublicNames = actionId
       ? resolved.capabilities.toolNamesByActionId.get(actionId) ?? []
       : [];
     if (
       !definition ||
-      !isAuthoritativeResumeMatchActionBehavior(name, definition, toolNames)
+      !isAuthoritativeResumeMatchActionBehavior(name, definition, toolPublicNames)
     ) {
       return (
         `「${name}」的任务、规则、模型、推理档位、重入策略及 Skill/Tool 集合` +
@@ -601,7 +612,16 @@ export async function startResumeMatch(
   if (!workflow) {
     return writeFail(500, `工作流「${RESUME_MATCH_WORKFLOW_NAME}」尚未装入`);
   }
-  const resolved = await resolveWorkflow(workflow.id);
+  let resolved: ResolvedWorkflow | null;
+  try {
+    resolved = await resolveWorkflow(workflow.id);
+  } catch (error) {
+    // 预载 / 可见 Tool 越出工作流集合是受理期的确定性校验失败，与 startRun 同一形状回 422。
+    if (error instanceof WorkflowResolveError) {
+      return writeFail(error.status, error.message, error.issues);
+    }
+    throw error;
+  }
   if (!resolved) return writeFail(500, "简历匹配工作流无法解析");
   const contractError = validateWorkflowContract(resolved);
   if (contractError) return writeFail(500, contractError);

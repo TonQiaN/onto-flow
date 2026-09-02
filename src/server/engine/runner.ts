@@ -24,6 +24,11 @@ import {
   type ValidationIssue,
 } from "@/lib/graph";
 import { MAX_FILE_INPUT_BYTES, type PortValue } from "@/lib/values";
+import {
+  effectiveMcpServerNames,
+  effectiveToggles,
+  type RunSettingsSnapshot,
+} from "@/lib/workflow-settings";
 import { DATA_DIR, isWithinData, resolveWithinData, safeBasename } from "@/server/fs-safety";
 import { assertSafeId } from "@/server/harness/ids";
 import {
@@ -36,7 +41,11 @@ import {
   WORKSPACE_INPUTS_SUBDIR,
   type RunWorkspace,
 } from "@/server/harness/workspace";
-import { resolveWorkflow, type ResolvedWorkflow } from "@/server/resolve";
+import {
+  resolveWorkflow,
+  WorkflowResolveError,
+  type ResolvedWorkflow,
+} from "@/server/resolve";
 import {
   releaseSkillProjections,
   retainSkillProjections,
@@ -226,9 +235,67 @@ export async function startRun(
   workflowId: string,
   inputs: Record<string, unknown>,
 ): Promise<StartRunResult> {
-  const resolved = await resolveWorkflow(workflowId);
+  let resolved: ResolvedWorkflow | null;
+  try {
+    resolved = await resolveWorkflow(workflowId);
+  } catch (error) {
+    // 预载 / 可见 Tool 越出工作流集合是受理期的确定性校验失败，与图校验同一形状回给调用方。
+    if (error instanceof WorkflowResolveError) {
+      return { ok: false, status: 422, error: error.message, issues: error.issues };
+    }
+    throw error;
+  }
   if (!resolved) return { ok: false, status: 404, error: "工作流不存在" };
   return startResolvedRun(resolved, inputs, readSettings(), { source: "workflow" });
+}
+
+/** 工作区 AGENTS.md 的正文：工作流自己的指令，空时只留标题让文件有意义。 */
+function workspaceInstructionsText(resolved: ResolvedWorkflow): string {
+  return resolved.workflow.instructions || `# ${resolved.workflow.name}\n`;
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/**
+ * 受理时冻结的三层设置（ADR-0016）：全局文档、工作流设置与集合、二者合成的生效面。
+ * 与 runs 行同一事务落库，运行详情据此解释「那次为什么有 web_search」。
+ */
+export function buildRunSettingsSnapshot(
+  resolved: ResolvedWorkflow,
+  settings: SettingsDocument,
+): RunSettingsSnapshot {
+  const globalMcp = settings.mcpServers.filter((server) => server.enabled).map((s) => s.name);
+  return {
+    global: {
+      toggles: { ...settings.toggles },
+      mcpServers: globalMcp,
+      disabledTools: [...settings.disabledTools],
+      defaultInstructionsSha256: sha256(settings.defaultInstructions),
+    },
+    workflow: {
+      settings: {
+        toggles: { ...resolved.settings.toggles },
+        mcpServers: [...resolved.settings.mcpServers],
+      },
+      instructionsSha256: sha256(workspaceInstructionsText(resolved)),
+      skills: resolved.capabilities.skills.map((skill) => ({
+        id: skill.id,
+        name: skill.name,
+        slug: skill.slug,
+      })),
+      tools: resolved.capabilities.tools.map((tool) => ({
+        id: tool.id,
+        name: tool.name,
+        publicName: tool.publicName,
+      })),
+    },
+    effective: {
+      toggles: effectiveToggles(settings.toggles, resolved.settings.toggles),
+      mcpServers: effectiveMcpServerNames(globalMcp, resolved.settings.mcpServers),
+    },
+  };
 }
 
 /**
@@ -347,6 +414,7 @@ export async function startResolvedRun(
   }
 
   const runId = crypto.randomUUID();
+  const settingsSnapshot = buildRunSettingsSnapshot(resolved, settings);
   try {
     retainSkillProjections(runId, resolved.capabilities.skills);
   } catch (error) {
@@ -372,6 +440,8 @@ export async function startResolvedRun(
           status: "running",
           // 入口来源与 run 同一次同步 insert 落库；专用 GET 不凭工作流名称猜来源。
           imports: { invocation },
+          // 三层设置与 run 同一事务冻结（ADR-0016）。
+          settingsSnapshot: settingsSnapshot as unknown as Record<string, unknown>,
           startedAt: new Date(),
         })
         .run();
@@ -469,12 +539,14 @@ async function executeRun(
   let cancelled = false;
 
   // 工作区先建：它是这次运行全部 Action 的共同工作场所与唯一交流场所。
-  // 技能以 symlink 指向全局库活目录，摘要写进 runs.imports（ADR-0007）。
+  // 技能集以 symlink 指向全局库活目录，摘要写进 runs.imports（ADR-0007）。
+  // 工作流指令落 workspace/AGENTS.md，全局默认指令落 <run>/home/AGENTS.md（ADR-0016）。
   const capabilities = collectCapabilities(resolved);
   const workspace = await createRunWorkspace({
     workflowId: resolved.workflow.id,
     runId,
-    instructions: workflowInstructions(resolved),
+    instructions: workspaceInstructionsText(resolved),
+    homeInstructions: globalSettings.defaultInstructions,
     skills: capabilities.skills,
   });
   db.update(runs)
@@ -499,19 +571,33 @@ async function executeRun(
   // 即时写成 run_events / node_usage。
   const sinks = new Map<string, EventSinkContext>();
   // 设置已在准入时冻结：工作区创建期间发生的网页修改也只影响下一次运行。
+  // 组合由全局设置与工作流设置合成（ADR-0016）：开关取生效值，MCP 取全局启用 ∩ 工作流子集，
+  // Tool 集声明即物化。
+  const credentialRefs = globalSettings.credentialRefs.map((r) => r.name);
+  const workflowMcp = new Set(resolved.settings.mcpServers);
   let proc: RunProcess;
   try {
     proc = await launchRun(workspace, {
-      credentialRefs: globalSettings.credentialRefs.map((r) => r.name),
+      credentialRefs,
       composition: {
         deepseek: {
           apiKeyEnv: globalSettings.modelApiKeyEnv,
           ...(globalSettings.modelBaseUrl ? { baseURL: globalSettings.modelBaseUrl } : {}),
         },
-        mcpServers: globalSettings.mcpServers,
-        toolPlugins: materializeToolPlugins(workspace, capabilities.tools),
-        // 可切换插件的全局默认值与凭据、MCP 同一处冻结；第二批由工作流设置覆盖（ADR-0016）。
-        toggles: { webSearch: globalSettings.webSearchEnabled },
+        mcpServers: globalSettings.mcpServers.filter(
+          (server) => server.enabled && workflowMcp.has(server.name),
+        ),
+        toolPlugins: materializeToolPlugins(workspace, capabilities.tools, {
+          // execute 模块的环境白名单与 launch.ts 注入子进程的键一致：凭据引用名、
+          // 模型凭据名，加两个运行上下文变量。
+          envKeys: [
+            ...credentialRefs,
+            globalSettings.modelApiKeyEnv,
+            "ONTOFLOW_DB_PATH",
+            "ONTOFLOW_DATA_DIR",
+          ],
+        }),
+        toggles: effectiveToggles(globalSettings.toggles, resolved.settings.toggles),
       },
       onCrash: (message) => {
         firstError ??= message;
@@ -738,6 +824,7 @@ async function executeRun(
     if (!nodeRow?.actionId) throw new Error("Action 节点缺少 actionId");
     const definition = resolved.actionDefinitions.get(nodeRow.actionId);
     if (!definition) throw new Error(`Action 节点「${state.node.label}」缺少受理时定义快照`);
+    const visibleTools = new Set(capabilities.toolNamesByActionId.get(nodeRow.actionId) ?? []);
     const result = await runActionNode({
       runId,
       node: state.node,
@@ -747,6 +834,11 @@ async function executeRun(
       workspace,
       sinks,
       round: state.round,
+      skills: capabilities.skillRefs,
+      tools: capabilities.tools.map((tool) => ({
+        name: tool.publicName,
+        visible: visibleTools.has(tool.publicName),
+      })),
       toolFilter: toolFilterForAction(
         capabilities,
         nodeRow.actionId,
@@ -1032,29 +1124,6 @@ function failWholeRun(runId: string, message: string, attempt = 0): void {
       setTimeout(() => failWholeRun(runId, message, attempt + 1), 2000);
     }
   }
-}
-
-/**
- * 工作流级共同指令，物化为工作区的 AGENTS.md。
- * 上游 agent-instructions 从会话 cwd 向上发现它，因此这次运行的每个 Action
- * 都无条件读到同一份（对应「在项目文件夹里起 agent」的体验）。
- */
-function workflowInstructions(resolved: ResolvedWorkflow): string {
-  const lines = [
-    `# ${resolved.workflow.name}`,
-    "",
-    "你是这个工作流里的一个 Action。本目录是本次运行的工作区，也是各 Action 之间",
-    "唯一的交流场所：实质内容一律写成文件，读上游的东西也一律读文件。",
-    "",
-    "- 产物只写在本目录内；沙箱只放行工作区与系统临时目录的写入。",
-    "- 输入文件都是原件，没有做过任何预处理；读不动的格式就用 bash 自己转换。",
-    "- 结构化输出只用来报告产物路径，不要往里塞长文本。",
-    "- 声明了的产物必须真的写出来：文件不存在，本节点即判失败。",
-  ];
-  if (resolved.workflow.description) {
-    lines.splice(2, 0, resolved.workflow.description, "");
-  }
-  return `${lines.join("\n")}\n`;
 }
 
 /**

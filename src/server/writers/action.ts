@@ -1,7 +1,7 @@
 import { asc, eq, inArray } from "drizzle-orm";
 import {
   actionPorts,
-  actionSkills,
+  actionPreloads,
   actionTools,
   actions,
   db,
@@ -11,7 +11,7 @@ import {
   tools,
 } from "@/db";
 import { recordRevision } from "@/server/revisions";
-import { asObject, type WriteResult, writeFail, writeOk } from "./types";
+import { asObject, parseIdArray, type WriteResult, writeFail, writeOk } from "./types";
 
 type Effort = "off" | "low" | "high" | "max";
 const EFFORTS: readonly string[] = ["off", "low", "high", "max"];
@@ -37,7 +37,9 @@ export interface ActionPayload {
   maxReentries: number;
   onExhausted: "fail" | "accept";
   ports: PortPayload[];
-  skillIds: string[];
+  /** 会话开始时以 /slug 手势注入的技能，必须是所在工作流技能集的子集（ADR-0016） */
+  preloadSkillIds: string[];
+  /** 该 Action 会话里可见的 Tool，必须是所在工作流 Tool 集的子集 */
   toolIds: string[];
 }
 
@@ -62,19 +64,8 @@ export interface ActionDto {
     artifactPath: string | null;
     exitName: string | null;
   }>;
-  skillIds: string[];
+  preloadSkillIds: string[];
   toolIds: string[];
-}
-
-function parseIdArray(value: unknown): string[] | null {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) return null;
-  const out: string[] = [];
-  for (const v of value) {
-    if (typeof v !== "string") return null;
-    out.push(v);
-  }
-  return [...new Set(out)];
 }
 
 export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
@@ -163,19 +154,21 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
       return writeFail(400, "端口引用的对象类型不存在");
   }
 
-  const skillIds = parseIdArray(body.skillIds);
-  if (!skillIds) return writeFail(400, "skillIds 必须是字符串数组");
-  if (skillIds.length > 0) {
+  // 「⊆ 所在工作流技能集」不在这里校验：Action 今天仍是共享库实体，同一个 Action
+  // 可能被多个工作流引用，子集关系在工作流保存与运行受理时按各自的集合检查。
+  const preloadSkillIds = parseIdArray(body.preloadSkillIds);
+  if (!preloadSkillIds) return writeFail(400, "preloadSkillIds 必须是字符串数组");
+  if (preloadSkillIds.length > 0) {
     const found = new Set(
       db
         .select({ id: skills.id })
         .from(skills)
-        .where(inArray(skills.id, skillIds))
+        .where(inArray(skills.id, preloadSkillIds))
         .all()
         .map((r) => r.id),
     );
-    if (skillIds.some((s) => !found.has(s)))
-      return writeFail(400, "引用的技能不存在");
+    if (preloadSkillIds.some((s) => !found.has(s)))
+      return writeFail(400, "预载的技能不存在");
   }
 
   const toolIds = parseIdArray(body.toolIds);
@@ -190,7 +183,7 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
         .map((r) => r.id),
     );
     if (toolIds.some((t) => !found.has(t)))
-      return writeFail(400, "引用的工具不存在");
+      return writeFail(400, "可见的 Tool 不存在");
   }
 
   const rawReentries = body.maxReentries;
@@ -214,12 +207,12 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
     modelId,
     reasoningEffort,
     ports,
-    skillIds,
+    preloadSkillIds,
     toolIds,
   });
 }
 
-/** 修订 payload：Action 的完整定义（含 ports/skillIds/toolIds） */
+/** 修订 payload：Action 的完整定义（含 ports/preloadSkillIds/toolIds） */
 function revisionPayload(p: ActionPayload): Record<string, unknown> {
   return {
     name: p.name,
@@ -238,12 +231,12 @@ function revisionPayload(p: ActionPayload): Record<string, unknown> {
       artifactPath: port.artifactPath,
       exitName: port.exitName,
     })),
-    skillIds: p.skillIds,
+    preloadSkillIds: p.preloadSkillIds,
     toolIds: p.toolIds,
   };
 }
 
-/** 组装 ActionDto（join 端口的 objectTypeName/kind，附 skillIds/toolIds），按传入 id 顺序 */
+/** 组装 ActionDto（join 端口的 objectTypeName/kind，附 preloadSkillIds/toolIds），按传入 id 顺序 */
 export function loadActionDtos(ids: string[]): ActionDto[] {
   if (ids.length === 0) return [];
   const actionRows = db
@@ -272,11 +265,11 @@ export function loadActionDtos(ids: string[]): ActionDto[] {
     .where(inArray(actionPorts.actionId, presentIds))
     .orderBy(asc(actionPorts.position))
     .all();
-  const skillRows = db
+  const preloadRows = db
     .select()
-    .from(actionSkills)
-    .where(inArray(actionSkills.actionId, presentIds))
-    .orderBy(asc(actionSkills.position))
+    .from(actionPreloads)
+    .where(inArray(actionPreloads.actionId, presentIds))
+    .orderBy(asc(actionPreloads.position))
     .all();
   const toolRows = db
     .select()
@@ -300,7 +293,7 @@ export function loadActionDtos(ids: string[]): ActionDto[] {
         ports: portRows
           .filter((p) => p.actionId === a.id)
           .map(({ actionId: _actionId, ...port }) => port),
-        skillIds: skillRows
+        preloadSkillIds: preloadRows
           .filter((s) => s.actionId === a.id)
           .map((s) => s.skillId),
         toolIds: toolRows
@@ -327,10 +320,10 @@ function insertRelations(tx: Tx, actionId: string, p: ActionPayload) {
     tx.insert(actionPorts)
       .values(p.ports.map((port) => ({ actionId, ...port })))
       .run();
-  if (p.skillIds.length > 0)
-    tx.insert(actionSkills)
+  if (p.preloadSkillIds.length > 0)
+    tx.insert(actionPreloads)
       .values(
-        p.skillIds.map((skillId, position) => ({ actionId, skillId, position })),
+        p.preloadSkillIds.map((skillId, position) => ({ actionId, skillId, position })),
       )
       .run();
   if (p.toolIds.length > 0)
@@ -368,7 +361,7 @@ export function createAction(raw: unknown): WriteResult<ActionDto> {
   return dto ? writeOk(dto) : writeFail(500, "Action 创建后读取失败");
 }
 
-/** PUT 与回滚共用的写入路径：ports/skillIds/toolIds 整体替换 */
+/** PUT 与回滚共用的写入路径：ports/preloadSkillIds/toolIds 整体替换 */
 export function writeAction(id: string, raw: unknown): WriteResult<ActionDto> {
   const existing = db.select().from(actions).where(eq(actions.id, id)).get();
   if (!existing) return writeFail(404, "Action 不存在");
@@ -392,7 +385,7 @@ export function writeAction(id: string, raw: unknown): WriteResult<ActionDto> {
       .where(eq(actions.id, id))
       .run();
     tx.delete(actionPorts).where(eq(actionPorts.actionId, id)).run();
-    tx.delete(actionSkills).where(eq(actionSkills.actionId, id)).run();
+    tx.delete(actionPreloads).where(eq(actionPreloads.actionId, id)).run();
     tx.delete(actionTools).where(eq(actionTools.actionId, id)).run();
     insertRelations(tx, id, p);
     recordRevision("action", id, revisionPayload(p), "", tx);

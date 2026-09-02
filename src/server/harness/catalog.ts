@@ -69,10 +69,17 @@ export interface PluginCatalogRow {
   mountedByDefault?: false;
   /** 能否由单个工作流覆盖全局默认（ADR-0016）。骨架、沙箱、审批、记录一律 false。 */
   workflowToggle: boolean;
+  /**
+   * 控制这一行挂载的开关键（src/lib/workflow-settings.ts 的 CompositionToggles）。
+   * 有它的行由开关决定进不进组合，catalog.test 对每个键都验一遍开与关。
+   */
+  toggle?: CompositionToggleKey;
   /** 一句话理由；完整论证在组文档里。 */
   reason: string;
   customization?: PluginCustomization;
 }
+
+import type { CompositionToggleKey } from "@/lib/workflow-settings";
 
 /** 目前钉住的上游版本；package.json 的 @deepseek-ai/* 钉版与 docs/harness/README.md 都必须与它一致。 */
 export const UPSTREAM_VERSION = "0.1.1-rc.2";
@@ -421,6 +428,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "tool-fs-search" },
     workflowToggle: true,
+    toggle: "fsSearch",
     reason: "glob / grep：包内 ripgrep、不经 shell；CLI 会话里有的发现工具。",
     customization: {
       kind: "配置",
@@ -434,6 +442,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "tool-str-replace-editor" },
     workflowToggle: true,
+    toggle: "strReplaceEditor",
     reason: "view / create / str_replace / insert；与 edit 重叠但上游两套并存，对等保留。",
   },
   {
@@ -485,6 +494,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     entry: { id: "web" },
     mountedByDefault: false,
     workflowToggle: true,
+    toggle: "webSearch",
     reason: "web 能力 seam；随搜索开关挂载。",
     customization: {
       kind: "配置",
@@ -499,6 +509,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     entry: { id: "web-search-deepseek" },
     mountedByDefault: false,
     workflowToggle: true,
+    toggle: "webSearch",
     reason: "DeepSeek 搜索 provider，用与模型相同的凭据引用名。默认关：搜索用量不经 llm/stream，是账外支出。",
   },
   {
@@ -508,6 +519,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     entry: { id: "tool-web" },
     mountedByDefault: false,
     workflowToggle: true,
+    toggle: "webSearch",
     reason: "web_search 工具；随搜索开关挂载。",
     customization: {
       kind: "配置",
@@ -634,6 +646,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "token-meter" },
     workflowToggle: true,
+    toggle: "compaction",
     reason: "回放感知的 token 计量；compaction-basic 的必需依赖。",
   },
   {
@@ -649,6 +662,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "compaction-basic" },
     workflowToggle: true,
+    toggle: "compaction",
     reason: "上下文压力到阈值时先剪枝再摘要；产物在文件里，摘要丢的细节模型可重读（ADR-0008）。摘要用量由 engine/events.ts 从 compaction/summary 事件计费；摘要在提交阶段失败时上游不写该事件，那笔费用无法计费。",
   },
   {
@@ -657,6 +671,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "tool-result-pruner" },
     workflowToggle: true,
+    toggle: "compaction",
     reason: "无模型的首中尾剪枝；compaction-basic 的可选配套，先于摘要运行。",
   },
   {
@@ -688,6 +703,7 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "tool-todo" },
     workflowToggle: true,
+    toggle: "todo",
     reason: "todo_write：模型的自我组织工具，事件进会话日志；不需要有人在。",
     customization: {
       kind: "配置",
@@ -1440,7 +1456,20 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "自有",
     entry: { idPrefix: "tool-" },
     workflowToggle: false,
-    reason: "Tool 库物化的 cordis 插件，按运行生成、以绝对路径进组合；每个 Action 再按引用收窄。",
+    reason: "工作流 Tool 集物化的 cordis 插件（平台包装 + execute 模块），按运行生成、以绝对路径进组合；每个 Action 再按可见子集收窄。",
+  },
+  {
+    package: "src/server/harness/tool-plugin.ts",
+    group: 10,
+    decision: "自有",
+    workflowToggle: false,
+    reason: "Tool 契约的 cordis 包装生成器（ADR-0017）：作者只写 execute 模块，注册形状与 ctx.run() 围栏归平台。",
+    customization: {
+      kind: "包装",
+      what: "按契约生成 tool-<id>.ts：ctx.tools.register 的 name/parameters/output/timeoutMs 与 render，execute 组装 ToolContext（路径、env 白名单、sandboxPolicy + shell 的 run）。",
+      why: "上游 ToolDefinition 的注册形状（output 必填、render(args, value)、JSON Schema 子集）漂移时只改这一处，库里的 Tool 不动。",
+      upstream: { path: "packages/core/tools/src/index.ts", version: V },
+    },
   },
   {
     package: "src/server/harness/composition.ts",

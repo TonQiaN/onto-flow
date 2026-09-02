@@ -1,6 +1,7 @@
 /**
- * 全局设置：模型默认值、凭据引用、MCP 服务器、默认停用的工具、可切换插件的
- * 全局默认值（今天只有搜索开关）。
+ * 全局设置：模型默认值、凭据引用、MCP 服务器登记、默认停用的工具、可切换插件的
+ * 全局默认值与默认指令——三层设置的最上层（ADR-0016）。工作流设置只在允许切换的
+ * 范围内覆盖这里的开关与 MCP 子集，Action 从不开关插件。
  *
  * 单行表存整份 JSON 文档，读写都全量校验（写入口是唯一的校验点，见 AGENTS.md
  * 的「Entity-body validation lives in the writer」）。
@@ -18,6 +19,11 @@ import {
   type McpServerSpec,
 } from "@/server/harness/entries";
 import { writeFail, writeOk, type WriteResult } from "@/server/writers/types";
+import {
+  COMPOSITION_TOGGLE_KEYS,
+  DEFAULT_COMPOSITION_TOGGLES,
+  type CompositionToggles,
+} from "@/lib/workflow-settings";
 
 /** 一条凭据引用登记：只有名字与用途。 */
 export interface CredentialRef {
@@ -37,12 +43,35 @@ export interface SettingsDocument {
   /** 默认对所有 Action 停用的工具公名 */
   disabledTools: string[];
   /**
-   * DeepSeek 搜索（web_search）的全局默认值：受理时变成组合的 toggles.webSearch，
-   * 打开才挂 web / web-search-deepseek / tool-web 三行（ADR-0013、ADR-0016）。
-   * 默认关：搜索用量不经 llm/stream，本站 node_usage 收不到，是账外支出。
+   * 可切换插件的全局默认值；工作流设置只写要覆盖的键，受理时合成生效开关
+   * （ADR-0013、ADR-0016）。webSearch 默认关：搜索用量不经 llm/stream，
+   * 本站 node_usage 收不到，是账外支出。
    */
-  webSearchEnabled: boolean;
+  toggles: CompositionToggles;
+  /**
+   * 默认指令：物化为每次运行的 <run>/home/AGENTS.md，上游 agent-instructions 把
+   * $DSH_HOME/AGENTS.md 当用户级指令读，因此每个 Action 会话都无条件读到；
+   * 工作流自己的指令另落 workspace/AGENTS.md（ADR-0016）。
+   */
+  defaultInstructions: string;
 }
+
+/** 出厂默认指令：运行时约束的四条底线，原先硬编码在引擎里，现在归全局设置。 */
+export const DEFAULT_INSTRUCTIONS = [
+  "# 工作流运行约定",
+  "",
+  "你是这个工作流里的一个 Action。当前目录是本次运行的工作区，也是各 Action 之间",
+  "唯一的交流场所：实质内容一律写成文件，读上游的东西也一律读文件。",
+  "",
+  "- 产物只写在工作区内；沙箱只放行工作区与系统临时目录的写入。",
+  "- 输入文件都是原件，没有做过任何预处理；读不动的格式就用 bash 自己转换。",
+  "- 结构化输出只用来报告产物路径，不要往里塞长文本。",
+  "- 声明了的产物必须真的写出来：文件不存在，本节点即判失败。",
+  "",
+].join("\n");
+
+/** 默认指令的字节上限，对齐组合里 agent-instructions 的 maxBytes。 */
+export const DEFAULT_INSTRUCTIONS_MAX_BYTES = 65_536;
 
 export const DEFAULT_SETTINGS: SettingsDocument = {
   modelApiKeyEnv: DEFAULT_CREDENTIAL_ENV,
@@ -50,7 +79,8 @@ export const DEFAULT_SETTINGS: SettingsDocument = {
   credentialRefs: [],
   mcpServers: [],
   disabledTools: [],
-  webSearchEnabled: false,
+  toggles: { ...DEFAULT_COMPOSITION_TOGGLES },
+  defaultInstructions: DEFAULT_INSTRUCTIONS,
 };
 
 /** 凭据形键名：出现在 MCP stdio env 里就拒绝；HTTP headers 暂不接受非空值。 */
@@ -186,12 +216,28 @@ export function parseSettings(raw: unknown): WriteResult<SettingsDocument> {
     }
   }
 
-  // 缺省即关：旧文档与只发部分字段的调用方都不会因此把搜索悄悄打开。
-  const rawWebSearch = body.webSearchEnabled;
-  if (rawWebSearch !== undefined && typeof rawWebSearch !== "boolean") {
-    return writeFail(400, "webSearchEnabled 必须是布尔值");
+  // 缺省取出厂值：只发部分字段的调用方不会把搜索悄悄打开，也不会把其余开关关掉。
+  const toggles: CompositionToggles = { ...DEFAULT_COMPOSITION_TOGGLES };
+  const rawToggles = body.toggles;
+  if (rawToggles !== undefined) {
+    if (!isPlainObject(rawToggles)) return writeFail(400, "toggles 必须是对象");
+    for (const key of COMPOSITION_TOGGLE_KEYS) {
+      const value = rawToggles[key];
+      if (value === undefined) continue;
+      if (typeof value !== "boolean") return writeFail(400, `toggles.${key} 必须是布尔值`);
+      toggles[key] = value;
+    }
   }
-  const webSearchEnabled = rawWebSearch === true;
+
+  const rawInstructions = body.defaultInstructions;
+  if (rawInstructions !== undefined && typeof rawInstructions !== "string") {
+    return writeFail(400, "defaultInstructions 必须是字符串");
+  }
+  const defaultInstructions =
+    rawInstructions === undefined ? DEFAULT_INSTRUCTIONS : rawInstructions;
+  if (Buffer.byteLength(defaultInstructions, "utf8") > DEFAULT_INSTRUCTIONS_MAX_BYTES) {
+    return writeFail(400, "defaultInstructions 不能超过 64 KiB");
+  }
 
   return writeOk({
     modelApiKeyEnv,
@@ -199,7 +245,8 @@ export function parseSettings(raw: unknown): WriteResult<SettingsDocument> {
     credentialRefs,
     mcpServers,
     disabledTools,
-    webSearchEnabled,
+    toggles,
+    defaultInstructions,
   });
 }
 

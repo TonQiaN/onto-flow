@@ -28,7 +28,9 @@ export interface ActionDto {
   maxReentries: number;
   onExhausted: "fail" | "accept";
   ports: ActionPortDto[];
-  skillIds: string[];
+  /** 会话开始时以 /技能 注入的技能（ADR-0016）；必须 ⊆ 所在工作流的技能集 */
+  preloadSkillIds: string[];
+  /** 本 Action 会话看得见的 Tool；必须 ⊆ 所在工作流的 Tool 集 */
   toolIds: string[];
   updatedAt?: string;
 }
@@ -48,15 +50,20 @@ export interface ObjectTypeRow {
   builtin: boolean;
 }
 
+/** 预载候选：列表 GET 的行自带正文，预载的 token 估算据此算 */
 export interface SkillRow {
   id: string;
   name: string;
   description: string;
+  /** SKILL.md 正文；预载时整段进入会话首条消息 */
+  content: string;
 }
 
+/** 可见 Tool 候选：展示名与模型看见的公名 */
 export interface ToolRow {
   id: string;
   name: string;
+  publicName: string;
   description: string;
 }
 

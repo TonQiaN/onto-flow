@@ -3,8 +3,13 @@
 /**
  * Skill 编辑抽屉：小标签页组织「基本信息 / 被引用 / 修订历史」，避免面板过长。
  * 基本信息里内嵌 FolderPicker（新建时先收集，实体落库后再补一次归属指派）。
+ *
+ * 技能是一个目录（ADR-0016）：SKILL.md 正文加资源文件。资源文件整份提交——PUT 的
+ * files 缺省即清空——所以编辑模式先把服务端的清单拉回来，拉不到就不许保存，免得一次
+ * 只改描述的保存把文件全部抹掉。文件内容以 base64 在浏览器里持有，上限与路径规则
+ * 见 skill-files.ts（与写入口同一套）。
  */
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FolderPicker,
   type FolderRef,
@@ -13,14 +18,36 @@ import {
   ReferencesPanel,
   RevisionPanel,
 } from "@/components/library";
+import { estimateTokens } from "@/lib/workflow-settings";
+import {
+  defaultFilePath,
+  formatBytes,
+  SKILL_FILE_MAX_BYTES,
+  SKILL_FILE_MAX_COUNT,
+  type SkillFileDraft,
+  skillFilesProblem,
+} from "./skill-files";
 
 export interface SkillRow {
   id: string;
   name: string;
   description: string;
+  /** SKILL.md 正文（不含 frontmatter） */
   content: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** GET /api/skills/[id] 的资源文件项 */
+export interface SkillFileDto {
+  path: string;
+  contentBase64: string;
+  size: number;
+}
+
+/** GET / PUT / POST /api/skills/[id] 的响应：库行加资源文件清单 */
+export interface SkillDto extends SkillRow {
+  files: SkillFileDto[];
 }
 
 type TabKey = "basic" | "refs" | "revisions";
@@ -30,6 +57,31 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: "refs", label: "被引用" },
   { key: "revisions", label: "修订历史" },
 ];
+
+/** 资源文件清单的加载状态：编辑模式拉到服务端清单之前不许保存 */
+type FilesStatus = "loading" | "ready" | "error";
+
+function toDrafts(files: SkillFileDto[]): SkillFileDraft[] {
+  return files.map((f) => ({
+    key: crypto.randomUUID(),
+    path: f.path,
+    contentBase64: f.contentBase64,
+    size: f.size,
+  }));
+}
+
+/** 浏览器里把文件读成标准 base64（带填充），与写入口的严格 base64 正则匹配 */
+function readAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result ?? "");
+      resolve(url.slice(url.indexOf(",") + 1));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
 
 export function SkillEditor({
   initial,
@@ -51,9 +103,40 @@ export function SkillEditor({
   const [name, setName] = useState(initial?.name ?? "");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [content, setContent] = useState(initial?.content ?? "");
+  const [files, setFiles] = useState<SkillFileDraft[]>([]);
+  const [filesStatus, setFilesStatus] = useState<FilesStatus>(
+    initial ? "loading" : "ready",
+  );
+  const [filesError, setFilesError] = useState<string | null>(null);
   const [folder, setFolder] = useState<FolderRef | null>(initialFolder);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /** 编辑模式：把服务端的资源文件清单拉回来；列表行不带 files */
+  const loadFiles = useCallback(async () => {
+    if (!initial) return;
+    setFilesStatus("loading");
+    setFilesError(null);
+    try {
+      const res = await fetch(`/api/skills/${initial.id}`, { cache: "no-store" });
+      if (!res.ok) {
+        setFilesError(await readError(res));
+        setFilesStatus("error");
+        return;
+      }
+      const dto = (await res.json()) as SkillDto;
+      setFiles(toDrafts(dto.files ?? []));
+      setFilesStatus("ready");
+    } catch {
+      setFilesError("网络错误，资源文件清单未加载");
+      setFilesStatus("error");
+    }
+  }, [initial]);
+
+  useEffect(() => {
+    void loadFiles();
+  }, [loadFiles]);
 
   /** 回滚后把服务端的最新定义拉回表单，避免用陈旧表单再保存一次把回滚覆盖掉 */
   const reloadFromServer = useCallback(async () => {
@@ -63,14 +146,56 @@ export function SkillEditor({
         cache: "no-store",
       });
       if (!res.ok) return;
-      const row = (await res.json()) as SkillRow;
-      setName(row.name);
-      setDescription(row.description);
-      setContent(row.content);
+      const dto = (await res.json()) as SkillDto;
+      setName(dto.name);
+      setDescription(dto.description);
+      setContent(dto.content);
+      setFiles(toDrafts(dto.files ?? []));
+      setFilesStatus("ready");
+      setFilesError(null);
     } catch {
       // 拉取失败时保持当前表单，用户可自行关闭重开
     }
   }, [initial]);
+
+  async function addFiles(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    setFilesError(null);
+    const next = [...files];
+    const skipped: string[] = [];
+    for (const file of Array.from(list)) {
+      if (file.size > SKILL_FILE_MAX_BYTES) {
+        skipped.push(`「${file.name}」超过 1 MiB（${formatBytes(file.size)}）`);
+        continue;
+      }
+      let contentBase64: string;
+      try {
+        contentBase64 = await readAsBase64(file);
+      } catch {
+        skipped.push(`「${file.name}」读取失败`);
+        continue;
+      }
+      const path = defaultFilePath(file);
+      const draft = { key: crypto.randomUUID(), path, contentBase64, size: file.size };
+      // 同路径再传一次即覆盖：编辑器里的清单是整份定义，不会出现两份同名文件
+      const index = next.findIndex((f) => f.path === path);
+      if (index >= 0) next[index] = { ...draft, key: next[index].key };
+      else next.push(draft);
+    }
+    setFiles(next);
+    if (skipped.length > 0) setFilesError(`未加入：${skipped.join("；")}`);
+  }
+
+  function updatePath(key: string, path: string) {
+    setFiles(files.map((f) => (f.key === key ? { ...f, path } : f)));
+  }
+
+  function removeFile(key: string) {
+    setFiles(files.filter((f) => f.key !== key));
+  }
+
+  const listProblem = skillFilesProblem(files);
+  const contentTokens = estimateTokens(content);
 
   async function save() {
     if (!name.trim()) {
@@ -78,7 +203,15 @@ export function SkillEditor({
       return;
     }
     if (!content.trim()) {
-      setError("内容不能为空");
+      setError("SKILL.md 正文不能为空");
+      return;
+    }
+    if (filesStatus !== "ready") {
+      setError("资源文件清单还没加载好，保存会把它清空；请等待或重试加载");
+      return;
+    }
+    if (listProblem) {
+      setError(listProblem);
       return;
     }
     setSaving(true);
@@ -89,7 +222,12 @@ export function SkillEditor({
         {
           method: initial ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim(), description, content }),
+          body: JSON.stringify({
+            name: name.trim(),
+            description,
+            content,
+            files: files.map((f) => ({ path: f.path, contentBase64: f.contentBase64 })),
+          }),
         },
       );
       if (!res.ok) {
@@ -184,6 +322,9 @@ export function SkillEditor({
                   placeholder="一句话说明这个 Skill 的用途"
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                 />
+                <span className="mt-1 block text-xs text-zinc-400">
+                  模型按名字与描述判断要不要加载这个技能；必定要用的由 Action 预载。
+                </span>
               </label>
               <div>
                 <span className="mb-1 block text-sm font-medium text-zinc-700">
@@ -205,17 +346,100 @@ export function SkillEditor({
                 )}
               </div>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  内容（Markdown，注入会话上下文）
+                <span className="mb-1 flex items-baseline justify-between text-sm font-medium text-zinc-700">
+                  <span>SKILL.md 正文（Markdown）</span>
+                  <span className="text-xs font-normal text-zinc-400">
+                    约 {contentTokens} token；被 Action 预载时整段进入会话首条消息
+                  </span>
                 </span>
                 <textarea
                   value={content}
                   onChange={(e) => setContent(e.target.value)}
-                  rows={16}
+                  rows={14}
                   placeholder="Skill 全文…"
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
                 />
               </label>
+
+              <div>
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="text-sm font-medium text-zinc-700">
+                    资源文件
+                    <span className="ml-2 text-xs font-normal text-zinc-400">
+                      {files.length} / {SKILL_FILE_MAX_COUNT} 个，单文件 ≤ 1 MiB
+                    </span>
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {filesStatus === "error" && (
+                      <button
+                        type="button"
+                        onClick={() => void loadFiles()}
+                        className="rounded-md border border-red-200 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
+                      >
+                        重试加载
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={filesStatus !== "ready"}
+                      onClick={() => fileInputRef.current?.click()}
+                      className="rounded-md border border-zinc-300 px-2 py-0.5 text-xs text-zinc-600 hover:bg-zinc-50 disabled:opacity-50"
+                    >
+                      + 上传文件
+                    </button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        void addFiles(e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                  </div>
+                </div>
+                <p className="mb-1.5 text-xs leading-5 text-zinc-400">
+                  参考资料、脚本等随技能一起投影到技能目录，路径相对于目录根，可用 / 分子目录（如
+                  references/guide.md）；SKILL.md 由正文生成，不能上传。
+                </p>
+                {filesStatus === "loading" ? (
+                  <p className="rounded-md border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-400">
+                    正在读取资源文件清单…
+                  </p>
+                ) : files.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-zinc-300 px-3 py-2 text-xs text-zinc-400">
+                    （没有资源文件）
+                  </p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {files.map((f) => (
+                      <li key={f.key} className="flex items-center gap-2">
+                        <input
+                          value={f.path}
+                          onChange={(e) => updatePath(f.key, e.target.value)}
+                          aria-label="资源文件路径"
+                          className="flex-1 rounded-md border border-zinc-300 px-3 py-1 font-mono text-xs focus:border-zinc-500 focus:outline-none"
+                        />
+                        <span className="w-20 shrink-0 text-right text-xs text-zinc-400">
+                          {formatBytes(f.size)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeFile(f.key)}
+                          className="shrink-0 rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                          title="从技能目录移除此文件"
+                        >
+                          删除
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {(filesError || listProblem) && (
+                  <p className="mt-1.5 text-xs text-red-600">{filesError ?? listProblem}</p>
+                )}
+              </div>
             </>
           )}
 
@@ -246,7 +470,8 @@ export function SkillEditor({
           {tab === "basic" && (
             <button
               onClick={() => void save()}
-              disabled={saving}
+              disabled={saving || filesStatus !== "ready"}
+              title={filesStatus !== "ready" ? "资源文件清单加载完成后才能保存" : undefined}
               className="rounded-md bg-zinc-900 px-4 py-2 text-sm text-white transition-colors hover:bg-zinc-700 disabled:opacity-50"
             >
               {saving ? "保存中…" : "保存"}

@@ -156,7 +156,7 @@ test.describe("工作流画布", () => {
             exitName: null,
           },
         ],
-        skillIds: [],
+        preloadSkillIds: [],
         toolIds: [],
       },
     });
@@ -200,7 +200,7 @@ test.describe("工作流画布", () => {
             exitName: "打回",
           },
         ],
-        skillIds: [],
+        preloadSkillIds: [],
         toolIds: [],
       },
     });
@@ -340,7 +340,7 @@ test.describe("工作流画布", () => {
         artifactPath: string | null;
         exitName: string | null;
       }>;
-      skillIds: string[];
+      preloadSkillIds: string[];
       toolIds: string[];
     };
     const decisionV2Response = await request.put(
@@ -363,7 +363,7 @@ test.describe("工作流画布", () => {
             artifactPath: port.artifactPath,
             exitName: port.name === "成品" ? "放行" : port.exitName,
           })),
-          skillIds: decisionDetail.skillIds,
+          preloadSkillIds: decisionDetail.preloadSkillIds,
           toolIds: decisionDetail.toolIds,
         },
       },

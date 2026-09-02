@@ -205,7 +205,7 @@ function ToolsLibrary() {
     <>
       <LibraryLayout
         title="Tool 库"
-        subtitle="cordis 插件源码，被引用后物化进运行目录并注册到工具面，供模型调用。"
+        subtitle="按契约写的自定义能力：公名、描述、参数 schema 与一个 execute 模块。由工作流的 Tool 集带进运行，只对勾选了它的 Action 可见。"
         tree={
           <FolderTree
             kind="tool"
@@ -267,8 +267,14 @@ function ToolsLibrary() {
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
-                  <h2 className="font-mono text-sm font-semibold text-zinc-900">
-                    {tool.name}
+                  <h2 className="flex flex-wrap items-baseline gap-2 text-sm font-semibold text-zinc-900">
+                    <span>{tool.name}</span>
+                    <span
+                      title="模型可见的工具名"
+                      className="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs font-normal text-zinc-600"
+                    >
+                      {tool.publicName}
+                    </span>
                   </h2>
                   <p className="mt-1 text-sm text-zinc-500">
                     {tool.description || "（无描述）"}

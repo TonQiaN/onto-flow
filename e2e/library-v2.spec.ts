@@ -129,15 +129,35 @@ test.describe("库 v2 新能力", () => {
     await expect(panel.getByText("与当前定义一致，无差异。")).toBeVisible();
   });
 
-  test("编辑面板「被引用」显示引用方：Skill「集采计划审核要点」被 Action「集采计划审核」引用", async ({
+  test("编辑面板「被引用」显示引用方：Skill「集采计划审核要点」被工作流「采购集采计划生成」的技能集引用", async ({
     page,
+    request,
   }) => {
-    await page.goto("/skills");
+    // 引用关系的事实源是工作流的技能集（workflow_skills，ADR-0016）：Action 的预载不是引用。
+    // 引用数会随真实使用增长（别的工作流也可以把它加进技能集），所以从 API 取当前值再比对 DOM。
+    const skills = (await (await request.get("/api/skills?pageSize=100")).json()) as {
+      items: Array<{ id: string; name: string; refCount: number }>;
+    };
+    const skill = skills.items.find((s) => s.name === "集采计划审核要点");
+    expect(skill).toBeTruthy();
+    const { refs } = (await (
+      await request.get(`/api/references?kind=skill&id=${skill!.id}`)
+    ).json()) as {
+      refs: Array<{ kind: string; id: string; name: string; detail: string; href: string }>;
+    };
+    expect(refs.length).toBeGreaterThan(0);
+    expect(refs.every((r) => r.kind === "workflow"), "Skill 只会被工作流引用").toBe(true);
+    const seedRef = refs.find((r) => r.name === "采购集采计划生成");
+    expect(seedRef, "种子工作流的技能集含《集采计划审核要点》").toBeTruthy();
+    expect(seedRef!.detail).toBe("技能集");
+    expect(seedRef!.href).toBe(`/workflows/${seedRef!.id}/settings`);
+    expect(skill!.refCount).toBe(refs.length);
 
+    await page.goto("/skills");
     const card = page.locator("li").filter({
       has: page.getByRole("heading", { name: "集采计划审核要点", exact: true }),
     });
-    await expect(card.getByText("1 处引用")).toBeVisible();
+    await expect(card.getByText(`${refs.length} 处引用`)).toBeVisible();
     await card.getByRole("button", { name: "编辑" }).click();
     await expect(
       page.getByRole("heading", { name: "编辑 Skill" }),
@@ -149,18 +169,19 @@ test.describe("库 v2 新能力", () => {
       .locator("section")
       .filter({ has: page.getByRole("heading", { name: "被引用" }) });
     await expect(panel).toHaveCount(1);
-    await expect(panel.getByText("被 1 处引用")).toBeVisible();
-    await expect(panel.getByText("Action（1）")).toBeVisible();
+    await expect(panel.getByText(`被 ${refs.length} 处引用`)).toBeVisible();
+    await expect(panel.getByText(`工作流（${refs.length}）`)).toBeVisible();
+    await expect(panel.getByText("Action（")).toHaveCount(0);
 
-    const ref = panel.getByRole("link", { name: /集采计划审核/ });
+    const ref = panel.getByRole("link", { name: /采购集采计划生成/ });
     await expect(ref).toHaveCount(1);
-    await expect(ref).toHaveAttribute("href", /^\/actions\?highlight=[0-9a-f-]{36}$/);
+    await expect(ref).toContainText("技能集");
+    await expect(ref).toHaveAttribute("href", seedRef!.href);
 
-    // 点进去跳到 Action 库并高亮该 Action
+    // 点进去跳到该工作流的设置页——技能集就在那里编辑
     await ref.click();
-    await page.waitForURL(/\/actions\?highlight=[0-9a-f-]{36}/);
-    await expect(
-      page.getByRole("heading", { name: "集采计划审核", exact: true }),
-    ).toBeVisible();
+    await page.waitForURL(new RegExp(`/workflows/${seedRef!.id}/settings$`));
+    await expect(page.getByRole("heading", { name: "工作流设置", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /^技能集（\d+）$/ })).toBeVisible();
   });
 });

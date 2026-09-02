@@ -1,4 +1,5 @@
 "use client";
+import { fetchAllPages } from "@/components/library/fetch-all-pages";
 
 /**
  * 画布编辑器主体：@xyflow/react v12。
@@ -8,8 +9,10 @@
  *   同 objectTypeId + 目标输入端口无入线 + getOutgoers DFS 防环
  * - 拖线时把源端口信息放进 CanvasStateProvider，节点据此高亮可接端口、淡化其余端口
  * - 双击 Action 节点 → ActionInspector 编辑**共享 Action**（ADR-0004），
- *   保存后就地刷新画布上引用它的全部节点，不动视口
- * - 保存 = PUT 整图（toNodeDto/toEdgeDto 白名单序列化，剥 `_` 瞬态字段）
+ *   保存后就地刷新画布上引用它的全部节点，不动视口；检查器的预载 / 可见 Tool 候选
+ *   收窄到本工作流的技能集与 Tool 集（ADR-0016），集合在 /workflows/[id]/settings 里改
+ * - 保存 = PUT 整图（toNodeDto/toEdgeDto 白名单序列化，剥 `_` 瞬态字段）；
+ *   只发 name/description/nodes/edges，指令、开关、MCP 子集与两个集合由服务端沿用现值
  * - 运行 = 自动保存 → 收集输入 → POST run → useRunVisuals 订阅 SSE，经 Context 下发运行态
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -66,6 +69,7 @@ import {
   type SkillRow,
   type ToolRow,
   type WorkflowDetail,
+  type WorkflowSets,
 } from "./types";
 
 const nodeTypes = { flowNode: FlowNodeView };
@@ -112,6 +116,8 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   const [models, setModels] = useState<ModelRow[]>([]);
   const [skills, setSkills] = useState<SkillRow[]>([]);
   const [tools, setTools] = useState<ToolRow[]>([]);
+  /** 本工作流的技能集与 Tool 集：随每次 GET/PUT 响应刷新，检查器据此收窄候选 */
+  const [sets, setSets] = useState<WorkflowSets>({ skillIds: [], toolIds: [] });
   const [issues, setIssues] = useState<ValidationIssue[]>([]);
   const [banner, setBanner] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -169,34 +175,29 @@ function EditorInner({ workflowId }: { workflowId: string }) {
     let cancelled = false;
     (async () => {
       try {
-        // 库列表是分页信封（DESIGN-V2 第一节），画布要全量，故显式取大页
+        // 库列表是分页信封（DESIGN-V2 第一节），画布要全量，翻到底而不是只取第一页
         const [wfRes, actRes, typeRes, modelRes, skillRes, toolRes] =
           await Promise.all([
             fetch(`/api/workflows/${workflowId}`),
-            fetch("/api/actions?pageSize=100&sort=name_asc"),
-            fetch("/api/object-types?pageSize=100&sort=name_asc"),
+            fetchAllPages<ActionItem>("/api/actions?sort=name_asc"),
+            fetchAllPages<ObjectTypeRow>("/api/object-types?sort=name_asc"),
             fetch("/api/models"),
-            fetch("/api/skills?pageSize=100&sort=name_asc"),
-            fetch("/api/tools?pageSize=100&sort=name_asc"),
+            fetchAllPages<SkillRow>("/api/skills?sort=name_asc"),
+            fetchAllPages<ToolRow>("/api/tools?sort=name_asc"),
           ]);
         if (!wfRes.ok) throw new Error(await readError(wfRes));
-        if (!actRes.ok) throw new Error(await readError(actRes));
-        if (!typeRes.ok) throw new Error(await readError(typeRes));
+        if (!actRes.ok) throw new Error(`Action 库读取失败（HTTP ${actRes.status}）`);
+        if (!typeRes.ok) throw new Error(`对象类型库读取失败（HTTP ${typeRes.status}）`);
 
         const wf = (await wfRes.json()) as WorkflowDetail;
-        const acts = ((await actRes.json()) as { items: ActionItem[] }).items;
-        const types = ((await typeRes.json()) as { items: ObjectTypeRow[] })
-          .items;
+        const acts = actRes.items;
+        const types = typeRes.items;
         // 模型 / Skill / Tool 只服务于检查器，取不到也不该拦住画布
         const modelRows = modelRes.ok
           ? ((await modelRes.json()) as ModelRow[])
           : [];
-        const skillRows = skillRes.ok
-          ? ((await skillRes.json()) as { items: SkillRow[] }).items
-          : [];
-        const toolRows = toolRes.ok
-          ? ((await toolRes.json()) as { items: ToolRow[] }).items
-          : [];
+        const skillRows = skillRes.ok ? skillRes.items : [];
+        const toolRows = toolRes.ok ? toolRes.items : [];
         if (cancelled) return;
 
         setActions(acts);
@@ -206,6 +207,10 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         setTools(toolRows);
         setName(wf.workflow.name);
         setDescription(wf.workflow.description ?? "");
+        setSets({
+          skillIds: wf.workflow.skillIds ?? [],
+          toolIds: wf.workflow.toolIds ?? [],
+        });
         setIssues(wf.issues ?? []);
         const flowNodes = buildFlowNodes(
           wf.nodes ?? [],
@@ -594,6 +599,13 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         }
         const nextIssues = body?.issues ?? [];
         setIssues(nextIssues);
+        // 设置页可能在另一个标签页里改了集合；PUT 响应带回服务端现值，检查器不拿旧集合收窄
+        if (body?.workflow) {
+          setSets({
+            skillIds: body.workflow.skillIds ?? [],
+            toolIds: body.workflow.toolIds ?? [],
+          });
+        }
         // 只有在途期间没有新改动才算「干净」，否则保留 dirty 等下一次保存
         if (dirtyVersionRef.current === sentVersion) setDirty(false);
         setSavedAt(new Date());
@@ -916,6 +928,13 @@ function EditorInner({ workflowId }: { workflowId: string }) {
           {/* 运行状态与详情入口由下方 RunBar 承载，顶栏不再重复 */}
 
           <div className="ml-auto flex shrink-0 items-center gap-2">
+            <Link
+              href={`/workflows/${encodeURIComponent(workflowId)}/settings`}
+              title="工作流级指令、插件开关、MCP 子集、技能集与 Tool 集"
+              className="rounded-md px-2.5 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
+            >
+              工作流设置
+            </Link>
             <button
               type="button"
               onClick={() => void persist()}
@@ -1225,6 +1244,8 @@ function EditorInner({ workflowId }: { workflowId: string }) {
       {inspector && inspectorReady && (
         <ActionInspector
           target={inspector}
+          workflowId={workflowId}
+          sets={sets}
           models={models}
           objectTypes={objectTypes}
           skills={skills}

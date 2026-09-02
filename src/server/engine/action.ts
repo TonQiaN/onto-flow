@@ -7,6 +7,9 @@
  * - 产物没写出来是唯一的机械兜底：文件不存在即节点失败，不管模型说了什么。
  * - Action、模型、端口与能力关系在运行受理时已经冻结；Skill 正文按活链接契约
  *   在会话启动前读取工作区投影，并与实际渲染的提示一起写进 run_nodes.snapshot。
+ * - 预载技能零改造复用上游手势：提示正文前每个预载技能各一行 `/<slug>`，上游
+ *   tool-skill 的 agent/pre-step 在同一步里把 `<skill_content>` 以 skill-invocation
+ *   来源注入——等同于人在 CLI 里敲斜杠命令（ADR-0016）。
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -26,8 +29,11 @@ import {
   WORKSPACE_SKILLS_SUBDIR,
   type RunWorkspace,
 } from "@/server/harness/workspace";
-import { skillSlug } from "@/server/skill-library";
-import type { ResolvedActionDefinition, ResolvedActionPort } from "@/server/resolve";
+import type {
+  ResolvedActionDefinition,
+  ResolvedActionPort,
+  ResolvedSkillRef,
+} from "@/server/resolve";
 import type { NodeExit } from "@/lib/graph";
 import {
   clearUnpersistedUsageForSession,
@@ -55,7 +61,11 @@ export interface ActionNodeContext {
   sinks: Map<string, EventSinkContext>;
   /** 第几轮执行；0 是首次，>0 说明本节点被回边重入了（ADR-0009） */
   round: number;
-  /** 本 Action 的会话工具面：未引用的工作流 Tool 与全局停用项都在这里收窄。 */
+  /** 工作流技能集全量：快照记每个技能的活投影正文与是否被本 Action 预载。 */
+  skills: readonly ResolvedSkillRef[];
+  /** 工作流 Tool 集全量公名与本 Action 是否可见；快照记它解释「模型看见了哪些工具」。 */
+  tools: ReadonlyArray<{ name: string; visible: boolean }>;
+  /** 本 Action 的会话工具面：未勾选的工作流 Tool 与全局停用项都在这里收窄。 */
   toolFilter?: NodeToolFilter;
 }
 
@@ -85,7 +95,10 @@ export interface RunSnapshot {
   rule: string;
   model: { providerId: string; modelId: string; displayName: string };
   reasoningEffort: "off" | "low" | "high" | "max";
-  skills: Array<{ name: string; content: string }>;
+  /** 工作流技能集全量；content 是会话启动前读到的活投影正文，preloaded 标记本 Action 的预载 */
+  skills: Array<{ id: string; name: string; slug: string; preloaded: boolean; content: string }>;
+  /** 工作流 Tool 集全量公名；visible 标记本 Action 会话看得见它 */
+  tools: Array<{ name: string; visible: boolean }>;
   ports: { inputs: RunSnapshotPort[]; outputs: RunSnapshotPort[] };
   /** 本次执行发给模型的完整提示，含上游产物指引与产物要求 */
   renderedPrompt: string;
@@ -137,7 +150,7 @@ export async function runActionNode(
 ): Promise<ActionNodeResult> {
   assertNotCancelled(ctx.runId);
 
-  const { action, model, ports, skills: skillRows } = ctx.definition;
+  const { action, model, ports, preloads } = ctx.definition;
 
   const outputPorts = ports.outputs.map((port) => ({
     ...port,
@@ -157,6 +170,7 @@ export async function runActionNode(
   const branching = hasNamedExits(ctx.node);
 
   const renderedPrompt = buildPrompt(
+    preloads.map((skill) => skill.slug),
     action.prompt,
     action.rule,
     ctx.inputs,
@@ -177,7 +191,8 @@ export async function runActionNode(
       displayName: model.displayName,
     },
     reasoningEffort: action.reasoningEffort,
-    skills: readProjectedSkills(ctx.workspace, skillRows, action.name),
+    skills: readProjectedSkills(ctx.workspace, ctx.skills, preloads, action.name),
+    tools: ctx.tools.map((tool) => ({ name: tool.name, visible: tool.visible })),
     ports: {
       inputs: ports.inputs.map(toSnapshotPort),
       // 输出记本轮真实生效的路径（含 rounds/ 前缀）与出口归属，
@@ -278,26 +293,35 @@ export async function runActionNode(
 }
 
 /**
- * Skill 关系在准入时冻结，正文却有意保持活链接。紧贴会话创建前读取 symlink
+ * 技能集关系在准入时冻结，正文却有意保持活链接。紧贴会话创建前读取 symlink
  * 实际指向的 SKILL.md，节点快照才解释得了这次模型可见的版本；投影缺失则失败。
+ * 记的是工作流技能集全量——模型看得见全部，只是预载的那些会在首条消息里注入。
  */
 function readProjectedSkills(
   workspace: RunWorkspace,
-  skillRows: ResolvedActionDefinition["skills"],
+  skillRefs: readonly ResolvedSkillRef[],
+  preloads: readonly ResolvedSkillRef[],
   actionName: string,
 ): RunSnapshot["skills"] {
-  return skillRows.map((skill) => {
+  const preloaded = new Set(preloads.map((skill) => skill.id));
+  return skillRefs.map((skill) => {
     const file = path.join(
       workspace.workspaceDir,
       WORKSPACE_SKILLS_SUBDIR,
-      skillSlug(skill),
+      skill.slug,
       "SKILL.md",
     );
     try {
-      return { name: skill.name, content: fs.readFileSync(file, "utf8") };
+      return {
+        id: skill.id,
+        name: skill.name,
+        slug: skill.slug,
+        preloaded: preloaded.has(skill.id),
+        content: fs.readFileSync(file, "utf8"),
+      };
     } catch (error) {
       throw new Error(
-        `Action「${actionName}」引用的 Skill「${skill.name}」投影不可读：` +
+        `Action「${actionName}」所在工作流的 Skill「${skill.name}」投影不可读：` +
           `${error instanceof Error ? error.message : String(error)}`,
       );
     }
@@ -359,10 +383,15 @@ function writeSnapshot(ctx: ActionNodeContext, snapshot: RunSnapshot): void {
 }
 
 /**
- * 组装发给模型的完整提示：任务、上游产物指引、必须写出的产物、出口选择、执行规则。
+ * 组装发给模型的完整提示：预载手势、任务、上游产物指引、必须写出的产物、出口选择、执行规则。
  * `{{端口名}}` 占位符插值为该入端口的取用说明（文件读路径或字面值）。
+ *
+ * 预载技能在正文之前各占一行 `/<slug>`，再空一行接任务：上游 tool-skill 只在
+ * source.kind === "user" 的消息里按 `(^|\s)\/name(?=\s|$)` 扫手势，独占一行最稳；
+ * 手势文本本身留在提示里，与人在 CLI 敲 `/skill` 的记录一致。
  */
 function buildPrompt(
+  preloadSlugs: readonly string[],
   prompt: string,
   rule: string,
   inputs: Record<string, PortValue[]>,
@@ -371,7 +400,12 @@ function buildPrompt(
   branching: boolean,
   round: number,
 ): string {
-  const sections: string[] = [interpolate(prompt, inputs)];
+  const task = interpolate(prompt, inputs);
+  const sections: string[] = [
+    preloadSlugs.length === 0
+      ? task
+      : `${preloadSlugs.map((slug) => `/${slug}`).join("\n")}\n\n${task}`,
+  ];
 
   if (round > 0) {
     sections.push(

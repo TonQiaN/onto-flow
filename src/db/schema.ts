@@ -7,6 +7,7 @@ import {
   text,
   uniqueIndex,
   type AnySQLiteColumn,
+  blob,
 } from "drizzle-orm/sqlite-core";
 
 const id = () =>
@@ -78,7 +79,8 @@ export const entityFolders = sqliteTable(
 
 /**
  * 修订：实体每次保存留存的完整定义快照，可查看/对比/回滚。
- * payload 是该实体的完整定义（含关联：端口、skillIds、toolIds、图的 nodes/edges）。
+ * payload 是该实体的完整定义（含关联：Action 的端口、preloadSkillIds、toolIds；Skill 的 files；
+ * Tool 的契约六字段；工作流的 instructions、settings、skillIds、toolIds 与图的 nodes/edges）。
  */
 export const revisions = sqliteTable(
   "revisions",
@@ -123,19 +125,54 @@ export const skills = sqliteTable("skills", {
   id: id(),
   name: text("name").notNull().unique(),
   description: text("description").notNull().default(""),
-  /** markdown 全文，被引用时强制注入会话上下文 */
+  /**
+   * SKILL.md 的正文（不含 frontmatter）。技能是一个目录：正文加 skill_files 里的资源文件，
+   * 投影到 data/skills/<slug>/，归工作流的技能集所有、对全部 Action 可见，由模型看描述
+   * 自行加载；必定要用上的由 Action 预载（ADR-0016）。
+   */
   content: text("content").notNull(),
   ...timestamps,
 });
 
+/**
+ * 技能目录里的资源文件（参考资料、脚本）。path 是目录内相对路径，写入口校验：不含 ..、
+ * 不以 / 开头、单文件 ≤ 1 MiB、每技能 ≤ 32 个；数据库是唯一真相，磁盘投影随写重建。
+ */
+export const skillFiles = sqliteTable(
+  "skill_files",
+  {
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    content: blob("content", { mode: "buffer" }).notNull(),
+    size: integer("size").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.skillId, t.path] })],
+);
+
+/**
+ * Tool 是 OntoFlow 契约，不是裸 cordis 插件（ADR-0017）：作者只写模型可见的名字、描述、
+ * 参数 schema、可选的输出 schema 与超时，以及一个 execute 模块；平台物化时套上自己维护的
+ * cordis 包装（src/server/harness/tool-plugin.ts）。
+ */
 export const tools = sqliteTable("tools", {
   id: id(),
+  /** 库里的展示名（中文） */
   name: text("name").notNull().unique(),
+  /** 模型可见的工具名：^[a-z][a-z0-9_]{0,63}$，全库唯一；也是 disabledTools 与 Action 收窄用的公名 */
+  publicName: text("public_name").notNull().unique(),
   description: text("description").notNull().default(""),
+  /** 参数的对象根 JSON Schema（上游子集：不允许 type 数组） */
+  parameters: text("parameters", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  /** 返回值的对象根 JSON Schema；省略即不校验返回值 */
+  output: text("output", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  /** 单次调用预算（毫秒）；声明了才受 timeout-policy 约束 */
+  timeoutMs: integer("timeout_ms"),
   /**
-   * 工具源码：一个 cordis 插件（导出 name / inject / apply）。运行时物化到
-   * <运行目录>/plugins/tool-<工具 id>.ts，由每运行组合 include 进去（ADR-0006）。
-   * 模块解析从运行目录向上走到仓库根，因此它能 import node: 内置模块与仓库依赖。
+   * execute 模块源码：`export default async function execute(args, ctx)`，ctx 是
+   * src/server/harness/tool-contract.ts 定义的稳定小面。可以 import node: 内置模块与仓库依赖
+   * （模块解析从运行目录向上走到仓库根），不得 import @deepseek-ai/*。
    */
   code: text("code").notNull(),
   ...timestamps,
@@ -209,20 +246,27 @@ export const actionPorts = sqliteTable(
   ],
 );
 
-export const actionSkills = sqliteTable(
-  "action_skills",
+/**
+ * Action 预载的技能：会话开始时以上游「/技能名」显式调用注入，等同于人在 CLI 里敲斜杠命令。
+ * 只能预载所在工作流技能集里的技能，工作流保存与运行受理时都校验（ADR-0016）。
+ * 预载与可见勾选是在工作流已引用范围内的选择、不是引用，删除保护只看工作流集合；
+ * 实体真被删时这里随之级联，不让一次不受保护的选择把删除撞成外键 500。
+ */
+export const actionPreloads = sqliteTable(
+  "action_preloads",
   {
     actionId: text("action_id")
       .notNull()
       .references(() => actions.id, { onDelete: "cascade" }),
     skillId: text("skill_id")
       .notNull()
-      .references(() => skills.id),
+      .references(() => skills.id, { onDelete: "cascade" }),
     position: integer("position").notNull().default(0),
   },
   (t) => [primaryKey({ columns: [t.actionId, t.skillId] })],
 );
 
+/** Action 可见的 Tool：工作流 Tool 集的子集，未勾选的在该 Action 会话里被收窄掉（ADR-0016）。 */
 export const actionTools = sqliteTable(
   "action_tools",
   {
@@ -231,7 +275,7 @@ export const actionTools = sqliteTable(
       .references(() => actions.id, { onDelete: "cascade" }),
     toolId: text("tool_id")
       .notNull()
-      .references(() => tools.id),
+      .references(() => tools.id, { onDelete: "cascade" }),
   },
   (t) => [primaryKey({ columns: [t.actionId, t.toolId] })],
 );
@@ -256,8 +300,45 @@ export const workflows = sqliteTable("workflows", {
   id: id(),
   name: text("name").notNull().unique(),
   description: text("description").notNull().default(""),
+  /** 工作流级共同指令：原样物化为 workspace/AGENTS.md（ADR-0016） */
+  instructions: text("instructions").notNull().default(""),
+  /** 工作流设置：可切换插件的覆盖与启用的 MCP 子集；形状见 src/lib/workflow-settings.ts */
+  settings: text("settings", { mode: "json" })
+    .$type<{ toggles: Record<string, boolean>; mcpServers: string[] }>()
+    .notNull()
+    .default({ toggles: {}, mcpServers: [] }),
   ...timestamps,
 });
+
+/** 工作流的技能集：symlink 进工作区、对全部 Action 可见的技能（ADR-0016）。 */
+export const workflowSkills = sqliteTable(
+  "workflow_skills",
+  {
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflows.id, { onDelete: "cascade" }),
+    skillId: text("skill_id")
+      .notNull()
+      .references(() => skills.id),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.workflowId, t.skillId] })],
+);
+
+/** 工作流的 Tool 集：全部物化进运行、注册到全局工具面，再由各 Action 收窄（ADR-0016）。 */
+export const workflowTools = sqliteTable(
+  "workflow_tools",
+  {
+    workflowId: text("workflow_id")
+      .notNull()
+      .references(() => workflows.id, { onDelete: "cascade" }),
+    toolId: text("tool_id")
+      .notNull()
+      .references(() => tools.id),
+    position: integer("position").notNull().default(0),
+  },
+  (t) => [primaryKey({ columns: [t.workflowId, t.toolId] })],
+);
 
 export const workflowNodes = sqliteTable("workflow_nodes", {
   id: id(),
@@ -310,6 +391,11 @@ export const runs = sqliteTable("runs", {
    * 证明不了能把旧内容取回来（ADR-0007）。
    */
   imports: text("imports", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  /**
+   * 受理时冻结的三层设置（ADR-0016）：全局设置文档、工作流设置与集合、以及二者合成的生效
+   * 开关与 MCP 子集。运行详情据此解释「那次为什么有 web_search」；形状见 src/lib/workflow-settings.ts。
+   */
+  settingsSnapshot: text("settings_snapshot", { mode: "json" }).$type<Record<string, unknown> | null>(),
   startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
   finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
 });

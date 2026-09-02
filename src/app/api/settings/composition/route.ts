@@ -73,14 +73,16 @@ function previewWorkspace(): RunWorkspace {
 export async function GET() {
   return handle(async () => {
     const settings = readSettings();
-    // 与 runner.ts 受理时交给 launchRun 的组合选项同构：面板推导的就是下一次运行会拿到的那份。
+    // 与 runner.ts 受理时交给 launchRun 的组合选项同构，但只取全局层：工作流设置的
+    // 开关覆盖、MCP 子集与 Tool 集在受理时才合成，面板推导的是「不带工作流覆盖的下一次运行」。
     const mounted = runCompositionEntries(previewWorkspace(), {
       deepseek: {
         apiKeyEnv: settings.modelApiKeyEnv,
         ...(settings.modelBaseUrl ? { baseURL: settings.modelBaseUrl } : {}),
       },
       mcpServers: settings.mcpServers,
-      toggles: { webSearch: settings.webSearchEnabled },
+      // 全局默认开关；工作流的覆盖与 MCP 子集只在受理时合成，面板报的是全局基线（ADR-0016）。
+      toggles: settings.toggles,
     });
     // entries 是下一次运行真正会挂载的组合，不能为了展示把停用项混回这份事实。
     // 停用的 MCP 独立返回，页面另区展示登记状态。

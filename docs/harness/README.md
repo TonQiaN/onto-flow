@@ -92,4 +92,4 @@
 | [07-宿主与界面.md](07-宿主与界面.md) | 组 7：客户端与宿主家族、bundle、typert、storage、settings、cmdline、hmr、stdout logger、include/group、cordis 自指工具、demo 与 test-support |
 | [08-遥测与身份.md](08-遥测与身份.md) | 组 8：会话遥测与 OTel、匿名身份、消息反馈，一律不挂 |
 | [09-替代provider.md](09-替代provider.md) | 组 9：pi-ai 网关、bash-local / fs-local、pwsh 与 Windows 围栏、SQLite 持久化与检索、storage 后端、E2B、Exa / Perplexity、Python 运行时、lsp-stdio、进程外 subagent、hooks 桥、ACP、上游 SDK 服务端与客户端 |
-| [10-本项目自有.md](10-本项目自有.md) | 组 10：`ontoflow-rpc`（fork）、结构化输出运行时（fork）、`composeNodeScope`（包装）、按运行生成的 Tool 插件、`composition.ts`、`runner.ts`；另有「什么算改造、什么不算」 |
+| [10-本项目自有.md](10-本项目自有.md) | 组 10：`ontoflow-rpc`（fork）、结构化输出运行时（fork）、`composeNodeScope`（包装）、Tool 包装生成器 `tool-plugin.ts`（包装）、按运行生成的 Tool 插件、`composition.ts`、`runner.ts`；另有「什么算改造、什么不算」 |

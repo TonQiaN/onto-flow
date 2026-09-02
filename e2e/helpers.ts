@@ -42,3 +42,33 @@ export async function cleanupByPrefix(
     await request.delete(`${listPath}/${row.id}`);
   }
 }
+
+/** 修订是多态引用、没有外键：实体经 API 删除后，按用例记下的精确 id 把历史清掉。 */
+export type RevisionOwnerKind =
+  | "workflow"
+  | "action"
+  | "skill"
+  | "tool"
+  | "object_type";
+
+export function cleanupRevisions(
+  owners: Iterable<{ kind: RevisionOwnerKind; id: string }>,
+): void {
+  const list = [...owners];
+  if (list.length === 0) return;
+  for (const owner of list) {
+    if (!/^[0-9a-f-]{36}$/.test(owner.id))
+      throw new Error(`测试实体 id 不安全：${owner.id}`);
+  }
+  const database = openDb();
+  try {
+    const remove = database.prepare(
+      "delete from revisions where entity_kind = ? and entity_id = ?",
+    );
+    database.transaction(() => {
+      for (const owner of list) remove.run(owner.kind, owner.id);
+    })();
+  } finally {
+    database.close();
+  }
+}

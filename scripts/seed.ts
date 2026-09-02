@@ -3,16 +3,19 @@
  *
  * 运行：npm run db:seed（tsx scripts/seed.ts）；执行前需先 npm run db:push 建表。
  * 幂等：命名实体按 name 查找，存在则 update 内容（id 保持稳定）、不存在则 insert；
- * 关联表（动作端口/技能/工具关联、工作流节点/连线、实体文件夹归属）先删后插，
- * 修订只在该实体尚无任何修订时补写第 1 版——重复执行不产生重复行。
+ * 关联表（动作端口/预载/可见 Tool、工作流技能集/Tool 集、工作流节点/连线、实体文件夹归属）
+ * 先删后插，修订只在该实体尚无任何修订时补写第 1 版——重复执行不产生重复行。
+ *
+ * 三层设置（ADR-0016）：工作流声明技能集与 Tool 集，Action 只在其中选择预载技能与可见 Tool；
+ * Tool 是契约（ADR-0017）：publicName / parameters / output / timeoutMs / execute 模块源码。
  */
 import fs from "node:fs";
 import path from "node:path";
 import { and, asc, eq, isNull } from "drizzle-orm";
 import {
   actionPorts,
+  actionPreloads,
   actions,
-  actionSkills,
   actionTools,
   db,
   type EntityKind,
@@ -22,12 +25,15 @@ import {
   models,
   objectTypes,
   revisions,
-  skills,
+  skills, skillFiles,
   tools,
   workflowEdges,
   workflowNodes,
+  workflowSkills,
+  workflowTools,
   workflows,
 } from "../src/db";
+import { EMPTY_WORKFLOW_SETTINGS, type WorkflowSettings } from "../src/lib/workflow-settings";
 import { recordRevision } from "../src/server/revisions";
 import { PURCHASE_PLAN_PATH_HELPERS_SOURCE } from "./purchase-plan-path";
 import { writeResumeSamples } from "./resume-samples";
@@ -111,16 +117,53 @@ const SKILL_SHENHE_CONTENT = `# 集采计划审核要点
 const REVIEW_JSON_SCHEMA = `{"type":"object","properties":{"conclusion":{"type":"string","enum":["通过","有保留通过","退回"],"description":"审核总结论"},"summary":{"type":"string","description":"总体意见，一段话概括计划质量与主要问题"},"issues":{"type":"array","description":"问题清单，无问题时为空数组","items":{"type":"object","properties":{"checklist_item":{"type":"string","description":"对应审核要点的检查项编号与名称，如「4 汇总-明细一致」"},"category":{"type":"string","enum":["完整性","口径一致性","合规性","可执行性"]},"location":{"type":"string","description":"问题所在章节或明细行位置"},"description":{"type":"string","description":"问题描述"},"suggestion":{"type":"string","description":"修改建议"},"severity":{"type":"string","enum":["高","中","低"],"description":"严重程度，数字错误一律为高"}},"required":["category","location","description","severity"]}}},"required":["conclusion","summary","issues"]}`;
 
 /**
- * save_purchase_plan：一个 cordis 插件（ADR-0006）。
- * 运行时物化为 <运行目录>/plugins/save_purchase_plan.ts 并由每运行组合 include；
- * 数据库与备份目录靠 ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR 定位，两者由引擎注入。
+ * save_purchase_plan：契约形态的 Tool（ADR-0017）。作者只写 execute 模块与参数/输出 schema，
+ * 运行时由平台物化为 <运行目录>/plugins/tool-<id>.execute.ts 并套上自己维护的 cordis 包装；
+ * 数据库与备份目录经 ctx.dbPath / ctx.dataDir 拿到，不再读进程环境。
  */
+const SAVE_PURCHASE_PLAN_PARAMETERS: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    plan_no: { type: "string", description: "集采计划编号，如 CPP-2027-001" },
+    plan_title: { type: "string", description: "计划标题" },
+    plan_type: { type: "string", description: "集采分类；依据不明时含「待确认」原文" },
+    plan_year: { type: "string", description: "计划年度或周期，如 2027" },
+    org_units: { type: "string", description: "涉及需求部门/单位清单，逗号分隔" },
+    category_summary: { type: "string", description: "品类划分摘要" },
+    item_count: { type: "integer", description: "合并后需求明细行数" },
+    total_budget: { type: "number", description: "预算总额（元），口径见 budget_note" },
+    budget_note: { type: "string", description: "预算与价格口径说明" },
+    schedule_summary: { type: "string", description: "时间安排摘要" },
+    pending_issues: { type: "string", description: "风险与待确认事项摘要" },
+    review_conclusion: { type: "string", description: "审核总结论（通过/有保留通过/退回）" },
+    review_feedback: { type: "string", description: "审核评价全文" },
+    plan_content: { type: "string", description: "集采计划 Markdown 全文" },
+  },
+  required: ["plan_no", "plan_title", "plan_content"],
+};
+
+const SAVE_PURCHASE_PLAN_OUTPUT: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    ok: { type: "boolean" },
+    // 上游的 JSON Schema 子集不接受类型数组，写 ["integer","null"] 会被写入口拒绝；
+    // 空值直接省略这个字段。
+    id: { type: "integer" },
+    planNo: { type: "string" },
+    backupPath: { type: "string" },
+    error: { type: "string" },
+  },
+  required: ["ok"],
+};
+
 const SAVE_PURCHASE_PLAN_CODE = `/**
  * 集采计划归档：写入 purchase_plans 表并把计划全文备份为 Markdown。
  *
- * 这是一个 cordis 插件（ADR-0006）：运行时物化到 <运行目录>/plugins/ 并由每运行
- * 组合 include。数据库走 node:sqlite（Node 22+ 内置），路径与备份目录由引擎经
- * ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR 注入。
+ * 这是 OntoFlow Tool 契约的 execute 模块（ADR-0017）：运行时由平台包装调用，ctx 只有
+ * 一个稳定小面（src/server/harness/tool-contract.ts 的 ToolContext）。数据库走
+ * node:sqlite（Node 22+ 内置），路径与备份目录由 ctx.dbPath / ctx.dataDir 给出。
  *
  * 与 Next 进程共用同一个数据库文件，因此设 busy_timeout 并保持写入轻量。
  */
@@ -128,7 +171,6 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
-import type { Context } from "@deepseek-ai/cordis";
 
 ${PURCHASE_PLAN_PATH_HELPERS_SOURCE}
 
@@ -157,6 +199,12 @@ interface Result {
   error?: string;
 }
 
+/** 本模块用到的 ToolContext 字段；完整形状见 src/server/harness/tool-contract.ts。 */
+interface Ctx {
+  dbPath: string;
+  dataDir: string;
+}
+
 // backup_path 与正文在同一条 upsert 里落行；BEGIN IMMEDIATE 还把“读取旧指针、
 // 写入新行”串成一个写入顺序。最后写入者整行获胜，并负责删除它替换掉的旧备份。
 const INSERT = \`INSERT INTO purchase_plans (
@@ -175,157 +223,97 @@ ON CONFLICT(plan_no) DO UPDATE SET
   pending_issues = excluded.pending_issues, backup_path = excluded.backup_path,
   created_at = excluded.created_at\`;
 
-export const name = "save_purchase_plan";
-export const inject = ["tools"];
-
-export function apply(ctx: Context): void {
-  ctx.tools.register({
-    name: "save_purchase_plan",
-    description:
-      "把审核完成的集采计划归档入库：写入 purchase_plans 表（plan_no 冲突时覆盖更新），" +
-      "并把计划全文备份为 Markdown 文件，返回入库记录标识与备份路径。",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        plan_no: { type: "string", description: "集采计划编号，如 CPP-2027-001" },
-        plan_title: { type: "string", description: "计划标题" },
-        plan_type: { type: "string", description: "集采分类；依据不明时含「待确认」原文" },
-        plan_year: { type: "string", description: "计划年度或周期，如 2027" },
-        org_units: { type: "string", description: "涉及需求部门/单位清单，逗号分隔" },
-        category_summary: { type: "string", description: "品类划分摘要" },
-        item_count: { type: "integer", description: "合并后需求明细行数" },
-        total_budget: { type: "number", description: "预算总额（元），口径见 budget_note" },
-        budget_note: { type: "string", description: "预算与价格口径说明" },
-        schedule_summary: { type: "string", description: "时间安排摘要" },
-        pending_issues: { type: "string", description: "风险与待确认事项摘要" },
-        review_conclusion: { type: "string", description: "审核总结论（通过/有保留通过/退回）" },
-        review_feedback: { type: "string", description: "审核评价全文" },
-        plan_content: { type: "string", description: "集采计划 Markdown 全文" },
-      },
-      required: ["plan_no", "plan_title", "plan_content"],
-    },
-    output: {
-      schema: {
-        type: "object",
-        additionalProperties: true,
-        properties: {
-          ok: { type: "boolean" },
-          // 上游的 JSON Schema 子集不接受类型数组，写 ["integer","null"] 会让
-          // 插件加载失败、整次运行起不来；空值直接省略这个字段。
-          id: { type: "integer" },
-          planNo: { type: "string" },
-          backupPath: { type: "string" },
-          error: { type: "string" },
-        },
-        required: ["ok"],
-      },
-      // 签名是 (args, value)：第一个参数是调用参数，第二个才是返回值。
-      render: (_args: unknown, value: Result) => [
-        { type: "text", text: JSON.stringify(value) },
-      ],
-    },
-    execute(args: Args): Promise<Result> {
-      const dbPath = process.env.ONTOFLOW_DB_PATH;
-      const dataDir = process.env.ONTOFLOW_DATA_DIR;
-      if (!dbPath || !dataDir) {
-        return Promise.resolve({
-          ok: false,
-          error: "缺少 ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR，无法定位数据库与备份目录",
-        });
-      }
-      const createdAt = new Date().toISOString();
-      const db = new DatabaseSync(dbPath);
-      let unownedBackupPath: string | null = null;
-      let transactionOpen = false;
+export default async function execute(args: Args, ctx: Ctx): Promise<Result> {
+  const createdAt = new Date().toISOString();
+  const db = new DatabaseSync(ctx.dbPath);
+  let unownedBackupPath: string | null = null;
+  let transactionOpen = false;
+  try {
+    // 与 Next 进程共用同一个库文件，写入前先给足等待窗口。
+    db.exec("PRAGMA busy_timeout = 5000;");
+    // 备份文件名带时刻与完整 UUID：并行运行归档同一 plan_no 时各写各的文件，
+    // 不共享确定性路径；文件先落盘，行再指向它。
+    const stamp =
+      createdAt.replace(/[-:]/g, "").replace(/\\..*$/, "").replace("T", "-") +
+      "-" +
+      randomUUID();
+    const backup = purchasePlanBackupLocation(path, ctx.dataDir, args.plan_no, stamp);
+    unownedBackupPath = backup.absolutePath;
+    fs.mkdirSync(path.dirname(backup.absolutePath), { recursive: true });
+    fs.writeFileSync(backup.absolutePath, args.plan_content, "utf8");
+    // 并发 upsert 必须在同一个写锁内先读旧指针；否则两个调用都可能只看到
+    // 更早的同一指针，后提交者无法得知并清理先提交者刚生成的备份。
+    db.exec("BEGIN IMMEDIATE;");
+    transactionOpen = true;
+    const previous = db
+      .prepare("SELECT backup_path AS backupPath FROM purchase_plans WHERE plan_no = ?")
+      .get(args.plan_no) as { backupPath: string | null } | undefined;
+    db.prepare(INSERT).run(
+      args.plan_no,
+      args.plan_title,
+      args.plan_type ?? null,
+      args.plan_year ?? null,
+      args.org_units ?? null,
+      args.category_summary ?? null,
+      args.item_count ?? null,
+      args.total_budget ?? null,
+      args.budget_note ?? null,
+      args.schedule_summary ?? null,
+      args.review_conclusion ?? null,
+      args.review_feedback ?? null,
+      args.plan_content,
+      args.pending_issues ?? null,
+      backup.relativePath,
+      createdAt,
+    );
+    db.exec("COMMIT;");
+    transactionOpen = false;
+    // commit 后数据库行正式接管这份备份；后续读取回执失败也不能删它。
+    unownedBackupPath = null;
+    const supersededCleanupError = removeSupersededBackup(
+      fs,
+      path,
+      ctx.dataDir,
+      previous?.backupPath ?? null,
+      backup.relativePath,
+    );
+    if (supersededCleanupError) {
+      return {
+        ok: false,
+        planNo: args.plan_no,
+        backupPath: backup.relativePath,
+        error: \`归档已写入，但旧备份清理失败：\${supersededCleanupError}\`,
+      };
+    }
+    const row = db
+      .prepare("SELECT id FROM purchase_plans WHERE plan_no = ?")
+      .get(args.plan_no) as { id: number } | undefined;
+    return {
+      ok: true,
+      ...(row ? { id: row.id } : {}),
+      planNo: args.plan_no,
+      backupPath: backup.relativePath,
+    };
+  } catch (err) {
+    let rollbackError: string | null = null;
+    if (transactionOpen) {
       try {
-        // 与 Next 进程共用同一个库文件，写入前先给足等待窗口。
-        db.exec("PRAGMA busy_timeout = 5000;");
-        // 备份文件名带时刻与完整 UUID：并行运行归档同一 plan_no 时各写各的文件，
-        // 不共享确定性路径；文件先落盘，行再指向它。
-        const stamp =
-          createdAt.replace(/[-:]/g, "").replace(/\\..*$/, "").replace("T", "-") +
-          "-" +
-          randomUUID();
-        const backup = purchasePlanBackupLocation(path, dataDir, args.plan_no, stamp);
-        unownedBackupPath = backup.absolutePath;
-        fs.mkdirSync(path.dirname(backup.absolutePath), { recursive: true });
-        fs.writeFileSync(backup.absolutePath, args.plan_content, "utf8");
-        // 并发 upsert 必须在同一个写锁内先读旧指针；否则两个调用都可能只看到
-        // 更早的同一指针，后提交者无法得知并清理先提交者刚生成的备份。
-        db.exec("BEGIN IMMEDIATE;");
-        transactionOpen = true;
-        const previous = db
-          .prepare("SELECT backup_path AS backupPath FROM purchase_plans WHERE plan_no = ?")
-          .get(args.plan_no) as { backupPath: string | null } | undefined;
-        db.prepare(INSERT).run(
-          args.plan_no,
-          args.plan_title,
-          args.plan_type ?? null,
-          args.plan_year ?? null,
-          args.org_units ?? null,
-          args.category_summary ?? null,
-          args.item_count ?? null,
-          args.total_budget ?? null,
-          args.budget_note ?? null,
-          args.schedule_summary ?? null,
-          args.review_conclusion ?? null,
-          args.review_feedback ?? null,
-          args.plan_content,
-          args.pending_issues ?? null,
-          backup.relativePath,
-          createdAt,
-        );
-        db.exec("COMMIT;");
-        transactionOpen = false;
-        // commit 后数据库行正式接管这份备份；后续读取回执失败也不能删它。
-        unownedBackupPath = null;
-        const supersededCleanupError = removeSupersededBackup(
-          fs,
-          path,
-          dataDir,
-          previous?.backupPath ?? null,
-          backup.relativePath,
-        );
-        if (supersededCleanupError) {
-          return Promise.resolve({
-            ok: false,
-            planNo: args.plan_no,
-            backupPath: backup.relativePath,
-            error: \`归档已写入，但旧备份清理失败：\${supersededCleanupError}\`,
-          });
-        }
-        const row = db
-          .prepare("SELECT id FROM purchase_plans WHERE plan_no = ?")
-          .get(args.plan_no) as { id: number } | undefined;
-        return Promise.resolve({
-          ok: true,
-          ...(row ? { id: row.id } : {}),
-          planNo: args.plan_no,
-          backupPath: backup.relativePath,
-        });
-      } catch (err) {
-        let rollbackError: string | null = null;
-        if (transactionOpen) {
-          try {
-            db.exec("ROLLBACK;");
-          } catch (error) {
-            rollbackError = error instanceof Error ? error.message : String(error);
-          }
-        }
-        const cleanupError = removeUnownedBackup(fs, unownedBackupPath);
-        return Promise.resolve({
-          ok: false,
-          error:
-            (err instanceof Error ? err.message : String(err)) +
-            (rollbackError ? \`；数据库回滚失败：\${rollbackError}\` : "") +
-            (cleanupError ? \`；失败备份清理失败：\${cleanupError}\` : ""),
-        });
-      } finally {
-        db.close();
+        db.exec("ROLLBACK;");
+      } catch (error) {
+        rollbackError = error instanceof Error ? error.message : String(error);
       }
-    },
-  });
+    }
+    const cleanupError = removeUnownedBackup(fs, unownedBackupPath);
+    return {
+      ok: false,
+      error:
+        (err instanceof Error ? err.message : String(err)) +
+        (rollbackError ? \`；数据库回滚失败：\${rollbackError}\` : "") +
+        (cleanupError ? \`；失败备份清理失败：\${cleanupError}\` : ""),
+    };
+  } finally {
+    db.close();
+  }
 }
 `;
 
@@ -444,26 +432,37 @@ function upsertSkill(input: {
   return id;
 }
 
+/** Tool 契约（ADR-0017）：按展示名查找，契约字段整体覆盖。 */
 function upsertTool(input: {
   name: string;
+  publicName: string;
   description: string;
+  parameters: Record<string, unknown>;
+  output: Record<string, unknown> | null;
+  timeoutMs: number | null;
   code: string;
 }): string {
+  const values = {
+    publicName: input.publicName,
+    description: input.description,
+    parameters: input.parameters,
+    output: input.output,
+    timeoutMs: input.timeoutMs,
+    code: input.code,
+  };
+  // 幂等键是模型可见的公名：展示名是可以改的中文，公名才是全库唯一的身份。
   const existing = db
     .select()
     .from(tools)
-    .where(eq(tools.name, input.name))
+    .where(eq(tools.publicName, input.publicName))
     .get();
   if (existing) {
-    db.update(tools)
-      .set({ description: input.description, code: input.code })
-      .where(eq(tools.id, existing.id))
-      .run();
+    db.update(tools).set({ name: input.name, ...values }).where(eq(tools.id, existing.id)).run();
     return existing.id;
   }
   const id = crypto.randomUUID();
   db.insert(tools)
-    .values({ id, ...input })
+    .values({ id, name: input.name, ...values })
     .run();
   return id;
 }
@@ -486,7 +485,9 @@ function upsertAction(input: {
   reasoningEffort: "off" | "low" | "high" | "max";
   inputs: SeedPort[];
   outputs: SeedPort[];
-  skillIds: string[];
+  /** 会话开始时以 /slug 手势注入的技能，必须在所在工作流的技能集里（ADR-0016） */
+  preloadSkillIds: string[];
+  /** 本 Action 可见的 Tool，必须在所在工作流的 Tool 集里 */
   toolIds: string[];
 }): string {
   const values = {
@@ -514,7 +515,7 @@ function upsertAction(input: {
 
   // 关联表：先删后插
   db.delete(actionPorts).where(eq(actionPorts.actionId, actionId)).run();
-  db.delete(actionSkills).where(eq(actionSkills.actionId, actionId)).run();
+  db.delete(actionPreloads).where(eq(actionPreloads.actionId, actionId)).run();
   db.delete(actionTools).where(eq(actionTools.actionId, actionId)).run();
 
   input.inputs.forEach((port, i) => {
@@ -543,8 +544,8 @@ function upsertAction(input: {
       })
       .run();
   });
-  input.skillIds.forEach((skillId, i) => {
-    db.insert(actionSkills).values({ actionId, skillId, position: i }).run();
+  input.preloadSkillIds.forEach((skillId, i) => {
+    db.insert(actionPreloads).values({ actionId, skillId, position: i }).run();
   });
   input.toolIds.forEach((toolId) => {
     db.insert(actionTools).values({ actionId, toolId }).run();
@@ -552,24 +553,47 @@ function upsertAction(input: {
   return actionId;
 }
 
-function upsertWorkflow(input: { name: string; description: string }): string {
+/**
+ * 工作流连同它的三层设置字段（ADR-0016）：指令、开关覆盖与 MCP 子集、技能集、Tool 集。
+ * 两张集合关系表先删后插，position 即数组下标。
+ */
+function upsertWorkflow(input: {
+  name: string;
+  description: string;
+  instructions: string;
+  settings: WorkflowSettings;
+  skillIds: string[];
+  toolIds: string[];
+}): string {
+  const values = {
+    description: input.description,
+    instructions: input.instructions,
+    settings: input.settings,
+  };
   const existing = db
     .select()
     .from(workflows)
     .where(eq(workflows.name, input.name))
     .get();
+  let workflowId: string;
   if (existing) {
-    db.update(workflows)
-      .set({ description: input.description })
-      .where(eq(workflows.id, existing.id))
+    workflowId = existing.id;
+    db.update(workflows).set(values).where(eq(workflows.id, workflowId)).run();
+  } else {
+    workflowId = crypto.randomUUID();
+    db.insert(workflows)
+      .values({ id: workflowId, name: input.name, ...values })
       .run();
-    return existing.id;
   }
-  const id = crypto.randomUUID();
-  db.insert(workflows)
-    .values({ id, ...input })
-    .run();
-  return id;
+  db.delete(workflowSkills).where(eq(workflowSkills.workflowId, workflowId)).run();
+  db.delete(workflowTools).where(eq(workflowTools.workflowId, workflowId)).run();
+  input.skillIds.forEach((skillId, position) => {
+    db.insert(workflowSkills).values({ workflowId, skillId, position }).run();
+  });
+  input.toolIds.forEach((toolId, position) => {
+    db.insert(workflowTools).values({ workflowId, toolId, position }).run();
+  });
+  return workflowId;
 }
 
 /** 文件夹按（同级, name）唯一，已存在则复用；parentId 为 null 表示根层级 */
@@ -708,9 +732,14 @@ const skillShenhe = upsertSkill({
 // ---------------------------------------------------------------------------
 
 const toolSavePlan = upsertTool({
-  name: "save_purchase_plan",
+  name: "集采计划归档入库",
+  publicName: "save_purchase_plan",
   description:
-    "把审核完成的集采计划写入 purchase_plans 表（plan_no 冲突时覆盖），并把计划全文备份为 Markdown 文件，返回入库记录标识与备份路径。",
+    "把审核完成的集采计划归档入库：写入 purchase_plans 表（plan_no 冲突时覆盖更新），" +
+    "并把计划全文备份为 Markdown 文件，返回入库记录标识与备份路径。",
+  parameters: SAVE_PURCHASE_PLAN_PARAMETERS,
+  output: SAVE_PURCHASE_PLAN_OUTPUT,
+  timeoutMs: null,
   code: SAVE_PURCHASE_PLAN_CODE,
 });
 
@@ -736,7 +765,7 @@ const actionTidy = upsertAction({
   outputs: [
     { name: "需求Prompt", objectTypeId: otRequirementPrompt, artifactPath: "requirement-prompt.md" },
   ],
-  skillIds: [],
+  preloadSkillIds: [],
   toolIds: [],
 });
 
@@ -759,7 +788,7 @@ const actionGenerate = upsertAction({
   outputs: [
     { name: "集采计划", objectTypeId: otPlan, artifactPath: "procurement-plan.md" },
   ],
-  skillIds: [skillBianzhi],
+  preloadSkillIds: [skillBianzhi],
   toolIds: [],
 });
 
@@ -782,7 +811,7 @@ const actionReview = upsertAction({
     { name: "审核评价", objectTypeId: otReview, artifactPath: "review.md" },
     { name: "集采计划", objectTypeId: otPlan, artifactPath: "reviewed-plan.md" },
   ],
-  skillIds: [skillShenhe],
+  preloadSkillIds: [skillShenhe],
   toolIds: [],
 });
 
@@ -808,7 +837,7 @@ const actionArchive = upsertAction({
   outputs: [
     { name: "归档回执", objectTypeId: otReceipt, artifactPath: "archive-receipt.md" },
   ],
-  skillIds: [],
+  preloadSkillIds: [],
   toolIds: [toolSavePlan],
 });
 
@@ -816,10 +845,18 @@ const actionArchive = upsertAction({
 // ⑦ Workflow「采购集采计划生成」
 // ---------------------------------------------------------------------------
 
+const WORKFLOW_DESCRIPTION =
+  "输入原始采购需求文件，依次完成需求整理、集采计划生成与审核，审核评价直接输出，同时归档入库并输出归档回执。";
+
+// 技能集与 Tool 集按今天各 Action 引用的内容声明（ADR-0016）：两份规范进技能集并由对应 Action
+// 预载，归档 Tool 进 Tool 集且只对归档 Action 可见；工作流指令原样成为 workspace/AGENTS.md。
 const workflowId = upsertWorkflow({
   name: "采购集采计划生成",
-  description:
-    "输入原始采购需求文件，依次完成需求整理、集采计划生成与审核，审核评价直接输出，同时归档入库并输出归档回执。",
+  description: WORKFLOW_DESCRIPTION,
+  instructions: ["# 采购集采计划生成", "", WORKFLOW_DESCRIPTION, ""].join("\n"),
+  settings: EMPTY_WORKFLOW_SETTINGS,
+  skillIds: [skillBianzhi, skillShenhe],
+  toolIds: [toolSavePlan],
 });
 
 // 图整体重建：先删连线再删节点（节点 id 每次重建，画布保存时同样由前端整图替换）
@@ -1000,7 +1037,8 @@ assignFolder("object_type", otReview, folderJicai);
 
 /**
  * 从库里回读实体的完整定义作为修订 payload——形状与各库 PUT 载荷一致
- * （DESIGN.md「API 面」：Action 含 ports/skillIds/toolIds，Workflow 含 nodes/edges），
+ * （DESIGN.md「API 面」：Action 含 ports/preloadSkillIds/toolIds，Tool 是完整契约，
+ * Workflow 含 instructions/settings/skillIds/toolIds/nodes/edges），
  * 保证回滚能走与 PUT 相同的写入路径。
  */
 function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
@@ -1023,10 +1061,18 @@ function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
     case "skill": {
       const row = db.select().from(skills).where(eq(skills.id, id)).get();
       if (!row) throw new Error(`技能不存在：${id}`);
+      // 修订载荷与 writers/skill.ts 同形状：files 必须在（种子技能今天没有资源文件，即 []）。
+      const files = db
+        .select({ path: skillFiles.path, content: skillFiles.content })
+        .from(skillFiles)
+        .where(eq(skillFiles.skillId, id))
+        .all()
+        .map((file) => ({ path: file.path, contentBase64: file.content.toString("base64") }));
       return {
         name: row.name,
         description: row.description,
         content: row.content,
+        files,
       };
     }
     case "tool": {
@@ -1034,7 +1080,11 @@ function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
       if (!row) throw new Error(`工具不存在：${id}`);
       return {
         name: row.name,
+        publicName: row.publicName,
         description: row.description,
+        parameters: row.parameters,
+        output: row.output,
+        timeoutMs: row.timeoutMs,
         code: row.code,
       };
     }
@@ -1047,11 +1097,11 @@ function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
         .where(eq(actionPorts.actionId, id))
         .orderBy(asc(actionPorts.direction), asc(actionPorts.position))
         .all();
-      const skillLinks = db
+      const preloadLinks = db
         .select()
-        .from(actionSkills)
-        .where(eq(actionSkills.actionId, id))
-        .orderBy(asc(actionSkills.position))
+        .from(actionPreloads)
+        .where(eq(actionPreloads.actionId, id))
+        .orderBy(asc(actionPreloads.position))
         .all();
       const toolLinks = db
         .select()
@@ -1070,8 +1120,10 @@ function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
           name: p.name,
           objectTypeId: p.objectTypeId,
           position: p.position,
+          artifactPath: p.artifactPath,
+          exitName: p.exitName,
         })),
-        skillIds: skillLinks.map((s) => s.skillId),
+        preloadSkillIds: preloadLinks.map((s) => s.skillId),
         toolIds: toolLinks.map((t) => t.toolId),
       };
     }
@@ -1088,9 +1140,25 @@ function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
         .from(workflowEdges)
         .where(eq(workflowEdges.workflowId, id))
         .all();
+      const skillSet = db
+        .select()
+        .from(workflowSkills)
+        .where(eq(workflowSkills.workflowId, id))
+        .orderBy(asc(workflowSkills.position))
+        .all();
+      const toolSet = db
+        .select()
+        .from(workflowTools)
+        .where(eq(workflowTools.workflowId, id))
+        .orderBy(asc(workflowTools.position))
+        .all();
       return {
         name: row.name,
         description: row.description,
+        instructions: row.instructions,
+        settings: row.settings,
+        skillIds: skillSet.map((s) => s.skillId),
+        toolIds: toolSet.map((t) => t.toolId),
         nodes: nodes.map((n) => ({
           id: n.id,
           kind: n.kind,
@@ -1169,9 +1237,11 @@ const counts = {
   工具: db.select().from(tools).all().length,
   动作: db.select().from(actions).all().length,
   动作端口: db.select().from(actionPorts).all().length,
-  动作技能关联: db.select().from(actionSkills).all().length,
-  动作工具关联: db.select().from(actionTools).all().length,
+  动作预载技能: db.select().from(actionPreloads).all().length,
+  动作可见工具: db.select().from(actionTools).all().length,
   工作流: db.select().from(workflows).all().length,
+  工作流技能集: db.select().from(workflowSkills).all().length,
+  工作流工具集: db.select().from(workflowTools).all().length,
   工作流节点: db.select().from(workflowNodes).all().length,
   工作流连线: db.select().from(workflowEdges).all().length,
   文件夹: db.select().from(folders).all().length,

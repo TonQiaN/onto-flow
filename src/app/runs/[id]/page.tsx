@@ -19,6 +19,7 @@ import { StatusBadge } from "../status-badge";
 import { CancelButton } from "./cancel-button";
 import { EventLog } from "./event-log";
 import { NodeCard } from "./node-card";
+import { SettingsSnapshotView } from "./settings-snapshot-view";
 
 /** 节点状态计数的展示顺序与文案 */
 const NODE_STATUS_LABELS: Array<[NodeStatus, string]> = [
@@ -289,6 +290,9 @@ export default function RunDetailPage() {
               </div>
             )}
           </div>
+
+          {/* 设置快照：受理时冻结的三层设置（ADR-0016） */}
+          <SettingsSnapshotView snapshot={run.settingsSnapshot} />
 
           {/* 节点时间线 */}
           <section>

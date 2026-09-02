@@ -144,7 +144,7 @@ function admittedDefinition(): ResolvedActionDefinition {
         },
       ],
     },
-    skills: [],
+    preloads: [],
   };
 }
 
@@ -159,6 +159,8 @@ function context(options?: {
   usage?: Record<string, number>;
   inputs?: ActionNodeContext["inputs"];
   definition?: ResolvedActionDefinition;
+  skills?: ActionNodeContext["skills"];
+  tools?: ActionNodeContext["tools"];
 }): ActionNodeContext {
   const round = options?.round ?? 0;
   const sessionId = round === 0 ? "node-1" : `node-1#${round + 1}`;
@@ -215,6 +217,8 @@ function context(options?: {
     },
     sinks: new Map(),
     round,
+    skills: options?.skills ?? [],
+    tools: options?.tools ?? [],
     toolFilter: undefined,
   };
 }
@@ -304,29 +308,98 @@ describe("Action 执行时边界", () => {
     });
   });
 
-  it("Skill 关系冻结但节点快照记录会话启动前的活投影正文", async () => {
-    const skill = { id: "skill-live", name: "核对规范" };
+  it("技能集关系冻结但节点快照记录会话启动前的活投影正文，并标出预载与可见 Tool", async () => {
+    const live = { id: "skill-live", name: "核对规范", slug: skillSlug({ id: "skill-live" }) };
+    const other = { id: "skill-other", name: "范本", slug: skillSlug({ id: "skill-other" }) };
     const definition = admittedDefinition();
-    definition.skills = [skill];
-    const skillDir = path.join(workspaceRoot, ".agents", "skills", skillSlug(skill));
-    fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(skillDir, "SKILL.md"),
-      "---\nname: live\n---\n\n编辑后的正文\n",
-    );
+    definition.preloads = [live];
+    for (const [skill, body] of [
+      [live, "编辑后的正文"],
+      [other, "范本正文"],
+    ] as const) {
+      const skillDir = path.join(workspaceRoot, ".agents", "skills", skill.slug);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, "SKILL.md"), `---\nname: ${skill.slug}\n---\n\n${body}\n`);
+    }
     fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
 
-    await runActionNode(context({ definition }));
+    await runActionNode(
+      context({
+        definition,
+        skills: [live, other],
+        tools: [
+          { name: "validate_result", visible: true },
+          { name: "archive_result", visible: false },
+        ],
+      }),
+    );
 
     const row = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
     expect(JSON.parse(row.snapshot)).toMatchObject({
       skills: [
         {
+          id: "skill-live",
           name: "核对规范",
-          content: "---\nname: live\n---\n\n编辑后的正文\n",
+          slug: live.slug,
+          preloaded: true,
+          content: `---\nname: ${live.slug}\n---\n\n编辑后的正文\n`,
+        },
+        {
+          id: "skill-other",
+          name: "范本",
+          slug: other.slug,
+          preloaded: false,
+          content: `---\nname: ${other.slug}\n---\n\n范本正文\n`,
         },
       ],
+      tools: [
+        { name: "validate_result", visible: true },
+        { name: "archive_result", visible: false },
+      ],
     });
+  });
+
+  it("预载技能以 /<slug> 行置于提示正文之前，空一行再接任务；无预载时提示不变", async () => {
+    const first = { id: "skill-a", name: "甲", slug: skillSlug({ id: "skill-a" }) };
+    const second = { id: "skill-b", name: "乙", slug: skillSlug({ id: "skill-b" }) };
+    for (const skill of [first, second]) {
+      const skillDir = path.join(workspaceRoot, ".agents", "skills", skill.slug);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, "SKILL.md"), "正文\n");
+    }
+    const definition = admittedDefinition();
+    definition.preloads = [first, second];
+    let renderedPrompt = "";
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+    await runActionNode(
+      context({
+        definition,
+        skills: [first, second],
+        runTurn: async (_sessionId, messages) => {
+          const message = messages[0];
+          renderedPrompt = message?.type === "text" ? message.text : "";
+        },
+      }),
+    );
+    expect(renderedPrompt.startsWith(`/${first.slug}\n/${second.slug}\n\n写报告`)).toBe(true);
+    // 每个手势独占一行，满足上游 (^|\s)/name(?=\s|$) 的扫描。
+    expect(renderedPrompt).toMatch(new RegExp(`(^|\\n)/${first.slug}(\\n|$)`));
+    const snapshot = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
+    expect(JSON.parse(snapshot.snapshot).renderedPrompt).toBe(renderedPrompt);
+
+    sqlite.exec("DELETE FROM run_nodes; INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);");
+    finalizeUnsettledActionUsage("run-1");
+    let plain = "";
+    await runActionNode(
+      context({
+        runTurn: async (_sessionId, messages) => {
+          const message = messages[0];
+          plain = message?.type === "text" ? message.text : "";
+        },
+      }),
+    );
+    expect(plain.startsWith("写报告")).toBe(true);
+    expect(plain).not.toContain("/skill-");
   });
 
   it("回边重入的新会话用量累加到节点历史轮次而不是覆盖", async () => {

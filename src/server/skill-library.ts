@@ -1,12 +1,12 @@
 /**
- * 全局技能库的磁盘投影：把 skills 表的行物化成 dsh 认得的技能目录。
+ * 全局技能库的磁盘投影：把 skills 表的行与 skill_files 的资源文件物化成 dsh 认得的技能目录。
  *
  * 数据库仍是唯一真相，磁盘是它的投影——每次写 Skill 就重写对应目录。
  * 运行工作区里的技能是指向这里的 symlink（ADR-0007），所以「活目录」指的就是
  * 本模块维护的这份投影：全局库改完，下一次运行即生效。
  *
- * 目录形态对齐上游 skill-filesystem：<root>/<slug>/SKILL.md，平铺 frontmatter
- * 必填 name 与 description。
+ * 目录形态对齐上游 skill-filesystem：<root>/<slug>/SKILL.md 加 <root>/<slug>/<path> 的
+ * 资源文件（ADR-0016），平铺 frontmatter 必填 name 与 description。
  *
  * 目录名与 frontmatter 的 name 用的是**派生 slug**而不是库里的名字：上游的
  * 技能名必须匹配 /^[a-z0-9]+(?:-[a-z0-9]+)*$/，而本仓库的实体名一律是中文
@@ -17,7 +17,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { db, skills } from "@/db";
+import { asc, eq } from "drizzle-orm";
+import { db, skillFiles, skills } from "@/db";
 import { DATA_DIR } from "@/server/fs-safety";
 import { assertSafeName } from "@/server/harness/ids";
 
@@ -61,19 +62,36 @@ function skillFile(slug: string): string {
   return path.join(skillDir(slug), "SKILL.md");
 }
 
+/** 投影临时目录都带这个后缀，落在库根、目录外；重建时把残留一并清掉。 */
+const TEMP_SUFFIX = ".tmp";
+
+function isTempEntry(name: string): boolean {
+  return name.startsWith(".skill-") && name.endsWith(TEMP_SUFFIX);
+}
+
+export interface SkillProjectionFile {
+  /** 技能目录内的相对路径，写入口已校验形状（src/server/writers/skill.ts） */
+  path: string;
+  content: Buffer;
+}
+
 /**
- * 把一个 Skill 写进磁盘投影。目录只由 id 决定，改名与正文更新都在同一路径内
- * 原子替换 SKILL.md，已经受理的运行所持活链接不会失效。
+ * 把一个 Skill 写进磁盘投影：正文成为 SKILL.md，资源文件按相对路径落在同一目录。
+ * 目录只由 id 决定，改名、正文与资源文件更新都在同一路径内整目录换名，已经受理的
+ * 运行所持活链接不会失效。
  */
-export function materializeSkill(skill: {
-  id: string;
-  name: string;
-  description: string;
-  content: string;
-}): void {
+export function materializeSkill(
+  skill: {
+    id: string;
+    name: string;
+    description: string;
+    content: string;
+  },
+  files: ReadonlyArray<SkillProjectionFile> = [],
+): void {
   const slug = skillSlug(skill);
   const dir = skillDir(slug);
-  fs.mkdirSync(dir, { recursive: true });
+  fs.mkdirSync(SKILL_LIBRARY_DIR, { recursive: true });
   // 描述里带上库里的中文名：模型只按描述选技能，slug 对它没有信息量。
   const description = `${skill.name}：${skill.description || skill.name}`;
   const frontmatter = [
@@ -83,17 +101,46 @@ export function materializeSkill(skill: {
     "---",
     "",
   ].join("\n");
-  // 原子替换：运行启动时的 digestDirectory 在线程池里读技能目录，与这次写入在
-  // OS 层任意交错；临时文件必须放在目录外，否则摘要枚举会把它也算成技能内容。
-  // 同库根、异目录仍在同一文件系统，rename 保持原子性；唯一名也允许并发写同一技能。
-  const tmp = path.join(SKILL_LIBRARY_DIR, `.skill-${slug}-${crypto.randomUUID()}.tmp`);
+  // 整目录换名：运行启动时的 digestDirectory 在线程池里读技能目录，与这次写入在
+  // OS 层任意交错；临时目录必须放在技能目录外，否则摘要枚举会把半成品算成技能内容。
+  // 同库根、异目录仍在同一文件系统，rename 保持原子性；并发写同一技能时后到者的换名会失败
+  // 并把旧目录换回，磁盘停在最先就位的那份，直到下次写入或启动重建收敛。
+  // POSIX 的 rename 不能覆盖非空目录，所以是「旧目录挪开 → 新目录就位 → 删旧目录」
+  // 两次 rename：中间有一个 <slug> 不存在的微秒级窗口，受理检查撞上会报投影不可读，
+  // 重试即可；这比留 SKILL.md 单文件替换、资源文件逐个覆盖的不一致窗口小得多。
+  const stamp = crypto.randomUUID();
+  const staging = path.join(SKILL_LIBRARY_DIR, `.skill-${slug}-${stamp}${TEMP_SUFFIX}`);
+  const retired = path.join(SKILL_LIBRARY_DIR, `.skill-${slug}-${stamp}-old${TEMP_SUFFIX}`);
   try {
-    fs.writeFileSync(tmp, `${frontmatter}${skill.content}\n`, "utf8");
-    fs.renameSync(tmp, skillFile(slug));
+    fs.mkdirSync(staging);
+    fs.writeFileSync(path.join(staging, "SKILL.md"), `${frontmatter}${skill.content}\n`, "utf8");
+    for (const file of files) {
+      const target = path.join(staging, ...file.path.split("/"));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file.content);
+    }
+    let hadPrevious = true;
+    try {
+      fs.renameSync(dir, retired);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      hadPrevious = false;
+    }
+    try {
+      fs.renameSync(staging, dir);
+    } catch (err) {
+      // 新目录就位失败（例如另一次写入抢先占了 <slug>）：把旧目录换回去，磁盘至少
+      // 停在上一份完整投影，而不是 <slug> 消失；数据库已提交的新内容留给下次写入或
+      // 进程启动的 rebuildSkillLibrary 收敛。
+      if (hadPrevious && !fs.existsSync(dir)) fs.renameSync(retired, dir);
+      throw err;
+    }
+    if (hadPrevious) fs.rmSync(retired, { recursive: true, force: true });
     // 同 id 的修订恢复会重新建立数据库行；成功写回后取消先前的延迟删除意图。
     pendingRemovals.delete(slug);
   } finally {
-    fs.rmSync(tmp, { force: true });
+    fs.rmSync(staging, { recursive: true, force: true });
+    fs.rmSync(retired, { recursive: true, force: true });
   }
 }
 
@@ -182,11 +229,24 @@ export function rebuildSkillLibrary(): void {
   const wanted = new Set(rows.map(skillSlug));
   for (const entry of fs.readdirSync(SKILL_LIBRARY_DIR, { withFileTypes: true })) {
     if (!entry.isDirectory() || wanted.has(entry.name)) continue;
+    if (isTempEntry(entry.name)) {
+      // 上次进程中途倒下留下的半成品：不是任何技能，直接清掉。
+      fs.rmSync(path.join(SKILL_LIBRARY_DIR, entry.name), { recursive: true, force: true });
+      continue;
+    }
     if ((projectionHolds.get(entry.name)?.size ?? 0) > 0) {
       pendingRemovals.add(entry.name);
     } else {
       removeSkillDir(entry.name);
     }
   }
-  for (const row of rows) materializeSkill(row);
+  for (const row of rows) {
+    const files = db
+      .select({ path: skillFiles.path, content: skillFiles.content })
+      .from(skillFiles)
+      .where(eq(skillFiles.skillId, row.id))
+      .orderBy(asc(skillFiles.path))
+      .all();
+    materializeSkill(row, files);
+  }
 }

@@ -2,9 +2,11 @@
  * 能力端到端冒烟（M3）：验证 Skill、Tool 与「默认停用的工具」三条都真的生效。
  *
  * - Skill 物化成全局技能库里的目录，运行工作区以 symlink 指过去，
- *   上游 skill-filesystem 从会话 cwd 发现它，模型看描述自行加载。
- * - Tool 是 cordis 插件源码，物化进运行目录并由每运行组合 include，
- *   注册到工具面后模型可调用。
+ *   上游 skill-filesystem 从会话 cwd 发现它，模型看描述自行加载。技能进工作流的
+ *   技能集但不预载（ADR-0016）——这里验证的是「被发现」，不是「被注入」。
+ * - Tool 是契约（ADR-0017）：execute 模块 + 参数/输出 schema，物化时由平台套上 cordis
+ *   包装写进运行目录并由每运行组合 include，注册到工具面后模型可调用。工作流 Tool 集
+ *   声明它，Action 勾选它为可见。
  * - 全局设置里 disabledTools 列出的工具，对本次运行的每个会话一律拒绝执行。
  *   拦截是靠把工具从会话的工具清单里**摘掉**实现的，所以证据不是一条失败的调用，
  *   而是它根本不在清单里——本冒烟直接读会话记录的请求头来断言这一点。
@@ -16,7 +18,7 @@ import path from "node:path";
 import { and, eq } from "drizzle-orm";
 import {
   actionPorts,
-  actionSkills,
+  actionPreloads,
   actionTools,
   actions,
   db,
@@ -29,6 +31,8 @@ import {
   tools,
   workflowEdges,
   workflowNodes,
+  workflowSkills,
+  workflowTools,
   workflows,
 } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
@@ -46,36 +50,31 @@ const SKILL_CONTENT = `# 三字口令
 被要求"报口令"时，口令恒为 **青山不改**。除此之外不要编造别的口令。
 `;
 
-const TOOL_CODE = `import type { Context } from "@deepseek-ai/cordis";
-
-export const name = "smoke_stamp";
-export const inject = ["tools"];
-
-export function apply(ctx: Context): void {
-  ctx.tools.register({
-    name: "smoke_stamp",
-    description: "把一段文字盖上冒烟印章后返回。要生成印章时必须调用本工具。",
-    parameters: {
-      type: "object",
-      additionalProperties: false,
-      properties: { text: { type: "string", description: "要盖章的文字" } },
-      required: ["text"],
-    },
-    output: {
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: { stamped: { type: "string" } },
-        required: ["stamped"],
-      },
-      render: (_args: unknown, value: { stamped: string }) => [{ type: "text", text: value.stamped }],
-    },
-    execute(args: { text: string }) {
-      return Promise.resolve({ stamped: \`【冒烟印章】\${args.text}【印章完】\` });
-    },
-  });
+/** 契约形态的 Tool（ADR-0017）：只有 execute 模块与 schema，包装由平台生成。 */
+const TOOL_PUBLIC_NAME = "smoke_stamp";
+const TOOL_CODE = `/** 冒烟印章：OntoFlow Tool 契约的 execute 模块（ADR-0017）。 */
+export default async function execute(args: { text: string }): Promise<{ stamped: string }> {
+  return { stamped: \`【冒烟印章】\${args.text}【印章完】\` };
 }
 `;
+const TOOL_CONTRACT = {
+  publicName: TOOL_PUBLIC_NAME,
+  description: "把一段文字盖上冒烟印章后返回。要生成印章时必须调用本工具。",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: { text: { type: "string", description: "要盖章的文字" } },
+    required: ["text"],
+  },
+  output: {
+    type: "object",
+    additionalProperties: false,
+    properties: { stamped: { type: "string" } },
+    required: ["stamped"],
+  },
+  timeoutMs: null,
+  code: TOOL_CODE,
+};
 
 function upsertObjectType(name: string, kind: "text" | "file" | "json"): string {
   const existing = db.select().from(objectTypes).where(eq(objectTypes.name, name)).get();
@@ -131,15 +130,14 @@ async function main(): Promise<void> {
   const slug = skillSlug(skill);
   console.log(`技能投影：${path.join(SKILL_LIBRARY_DIR, slug)}/SKILL.md（slug=${slug}）`);
 
-  // Tool
-  const toolName = "smoke_stamp";
-  let tool = db.select().from(tools).where(eq(tools.name, toolName)).get();
+  // Tool：按公名查找（公名是模型调用与收窄用的身份），契约字段整体覆盖。
+  let tool = db.select().from(tools).where(eq(tools.publicName, TOOL_PUBLIC_NAME)).get();
   if (!tool) {
     const id = crypto.randomUUID();
-    db.insert(tools).values({ id, name: toolName, description: "盖冒烟印章", code: TOOL_CODE }).run();
+    db.insert(tools).values({ id, name: `${PREFIX}印章`, ...TOOL_CONTRACT }).run();
     tool = db.select().from(tools).where(eq(tools.id, id)).get()!;
   } else {
-    db.update(tools).set({ code: TOOL_CODE }).where(eq(tools.id, tool.id)).run();
+    db.update(tools).set(TOOL_CONTRACT).where(eq(tools.id, tool.id)).run();
   }
 
   const tIn = upsertObjectType(`${PREFIX}题目`, "text");
@@ -176,8 +174,8 @@ async function main(): Promise<void> {
       position: 0,
     })
     .run();
-  db.delete(actionSkills).where(eq(actionSkills.actionId, actionId)).run();
-  db.insert(actionSkills).values({ actionId, skillId: skill.id, position: 0 }).run();
+  // 技能不预载：验证的是模型自己从技能集里发现并加载；Tool 勾选为本 Action 可见。
+  db.delete(actionPreloads).where(eq(actionPreloads.actionId, actionId)).run();
   db.delete(actionTools).where(eq(actionTools.actionId, actionId)).run();
   db.insert(actionTools).values({ actionId, toolId: tool!.id }).run();
 
@@ -185,9 +183,21 @@ async function main(): Promise<void> {
   let wf = db.select().from(workflows).where(eq(workflows.name, wfName)).get();
   if (!wf) {
     const id = crypto.randomUUID();
-    db.insert(workflows).values({ id, name: wfName, description: "M3 验收：技能与工具进运行" }).run();
+    db.insert(workflows)
+      .values({
+        id,
+        name: wfName,
+        description: "M3 验收：技能与工具进运行",
+        instructions: `# ${wfName}\n\n技能与工具的能力冒烟。\n`,
+      })
+      .run();
     wf = db.select().from(workflows).where(eq(workflows.id, id)).get()!;
   }
+  // 工作流声明技能集与 Tool 集（ADR-0016）：技能对全部 Action 可见，Tool 声明即物化。
+  db.delete(workflowSkills).where(eq(workflowSkills.workflowId, wf.id)).run();
+  db.insert(workflowSkills).values({ workflowId: wf.id, skillId: skill.id, position: 0 }).run();
+  db.delete(workflowTools).where(eq(workflowTools.workflowId, wf.id)).run();
+  db.insert(workflowTools).values({ workflowId: wf.id, toolId: tool!.id, position: 0 }).run();
   db.delete(workflowEdges).where(eq(workflowEdges.workflowId, wf.id)).run();
   db.delete(workflowNodes).where(eq(workflowNodes.workflowId, wf.id)).run();
   const nIn = crypto.randomUUID();

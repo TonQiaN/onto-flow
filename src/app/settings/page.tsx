@@ -2,7 +2,8 @@
 
 /**
  * 全局设置（开发者面）：模型凭据、凭据引用登记、MCP 服务器、默认停用的工具、
- * 可切换插件的全局默认值（搜索开关），外加一个插件面板。
+ * 可切换插件的全局默认值、默认指令，外加一个插件面板——三层设置的最上层
+ * （ADR-0016）：工作流设置只在允许切换的范围内覆盖这里的开关与 MCP 子集。
  *
  * 设置在**下一次运行**生效：运行启动时读一次并冻结，在跑的运行不受影响
  * （与运行快照同一条纪律）。
@@ -12,9 +13,16 @@
  *
  * 插件面板按 src/server/harness/catalog.ts 的十组分区展示；客户端不能从 @/server
  * 导入值，目录经 /api/settings/composition 投影过来，每行的挂载状态由服务端按
- * 当前设置推导（ADR-0013）。
+ * 当前全局设置推导（ADR-0013），不含任何工作流的覆盖。
  */
 import { useCallback, useEffect, useState } from "react";
+import {
+  COMPOSITION_TOGGLE_KEYS,
+  type CompositionToggleKey,
+  type CompositionToggles,
+  DEFAULT_COMPOSITION_TOGGLES,
+  estimateTokens,
+} from "@/lib/workflow-settings";
 
 interface CredentialRef {
   name: string;
@@ -38,7 +46,8 @@ interface SettingsDoc {
   credentialRefs: CredentialRef[];
   mcpServers: McpServer[];
   disabledTools: string[];
-  webSearchEnabled: boolean;
+  toggles: CompositionToggles;
+  defaultInstructions: string;
 }
 
 interface CompositionEntry {
@@ -76,7 +85,38 @@ const EMPTY: SettingsDoc = {
   credentialRefs: [],
   mcpServers: [],
   disabledTools: [],
-  webSearchEnabled: false,
+  toggles: { ...DEFAULT_COMPOSITION_TOGGLES },
+  defaultInstructions: "",
+};
+
+/** 默认指令的字节上限，与 src/server/settings.ts 的 DEFAULT_INSTRUCTIONS_MAX_BYTES 同值 */
+const DEFAULT_INSTRUCTIONS_MAX_BYTES = 65_536;
+
+/**
+ * 五个可按工作流切换的插件开关的文案；键顺序与 COMPOSITION_TOGGLE_KEYS 一致，
+ * 每个开关控制 catalog.ts 里带同名 `toggle` 字段的那些行。
+ */
+const TOGGLE_COPY: Record<CompositionToggleKey, { label: string; hint: string }> = {
+  webSearch: {
+    label: "DeepSeek 搜索（web_search）",
+    hint: "挂 web / web-search-deepseek / tool-web 三行，模型多一个 web_search 工具，用与模型同一把凭据引用名。DeepSeek 搜索的费用不计入本站用量：搜索是一次独立的辅助模型请求，用量不经 llm/stream，本站的 node_usage 与成本页收不到它，是账外支出。",
+  },
+  fsSearch: {
+    label: "文件搜索（glob / grep）",
+    hint: "tool-fs-search：包内 ripgrep、不经 shell，模型按模式找文件、按正则搜内容。",
+  },
+  strReplaceEditor: {
+    label: "结构化编辑器（str_replace_editor）",
+    hint: "tool-str-replace-editor：view / create / str_replace / insert，对文件做定点替换而不是整份重写；与 edit 并存。",
+  },
+  todo: {
+    label: "待办清单（todo_write）",
+    hint: "tool-todo：模型的自我组织工具，事件进会话日志。",
+  },
+  compaction: {
+    label: "上下文压缩",
+    hint: "token-meter / compaction-basic / tool-result-pruner 三行同进同出：上下文压力到阈值时先剪枝旧工具结果再摘要历史；关掉后长会话会撞上下文上限。",
+  },
 };
 
 /** 组 1–4 与组 10 影响模型怎么干活，默认展开；组 5–9 默认不挂，折叠只露组名与方向。 */
@@ -101,6 +141,10 @@ async function readError(res: Response): Promise<string> {
     // 响应体不是 JSON
   }
   return `请求失败（HTTP ${res.status}）`;
+}
+
+function utf8Bytes(text: string): number {
+  return new TextEncoder().encode(text).length;
 }
 
 export default function SettingsPage() {
@@ -159,13 +203,15 @@ export default function SettingsPage() {
   }
 
   const patch = (next: Partial<SettingsDoc>) => setDoc((d) => ({ ...d, ...next }));
+  const instructionBytes = utf8Bytes(doc.defaultInstructions);
+  const instructionsTooLong = instructionBytes > DEFAULT_INSTRUCTIONS_MAX_BYTES;
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-8">
       <h1 className="text-xl font-semibold text-zinc-900">全局设置</h1>
       <p className="mt-1 text-sm text-zinc-500">
-        这一层管的是 harness 的全局内容。改动在<b>下一次运行</b>生效——运行启动时读一次并冻结，
-        在跑的运行不受影响。
+        这一层是所有工作流共享的引擎基线：工作流设置只在下面标为「可按工作流切换」的范围内覆盖它，
+        Action 从不开关插件。改动在<b>下一次运行</b>生效——运行启动时读一次并冻结，在跑的运行不受影响。
       </p>
 
       {error && (
@@ -194,7 +240,7 @@ export default function SettingsPage() {
 
       <Section
         title="凭据引用"
-        hint="登记的名字构成运行子进程的环境白名单——只有列在这里的变量会被带进去。"
+        hint="登记的名字构成运行子进程的环境白名单——只有列在这里的变量会被带进去；Tool 的 execute 模块经 ctx.env 拿到的也只有它们。"
         onAdd={() =>
           patch({ credentialRefs: [...doc.credentialRefs, { name: "", purpose: "" }] })
         }
@@ -236,7 +282,7 @@ export default function SettingsPage() {
 
       <Section
         title="MCP 服务器"
-        hint="启用的服务器会作为 entry 进入每次运行的组合。env 里不接受凭据形键名——组合配置会原样落盘。"
+        hint="这里是登记表：启用的服务器是候选，工作流设置再从中勾选自己要用的子集，只有两边都选中的才进入那次运行的组合。env 里不接受凭据形键名——组合配置会原样落盘。"
         onAdd={() =>
           patch({
             mcpServers: [
@@ -320,7 +366,7 @@ export default function SettingsPage() {
         )}
       </Section>
 
-      <Section title="默认停用的工具" hint="按工具公名逐行写；对本次运行的每个 Action 会话一律拒绝调用。">
+      <Section title="默认停用的工具" hint="按工具公名逐行写；对每次运行的每个 Action 会话都从工具清单里拿掉，模型看不见它。">
         <textarea
           value={doc.disabledTools.join("\n")}
           onChange={(e) =>
@@ -335,17 +381,54 @@ export default function SettingsPage() {
       </Section>
 
       <Section
-        title="搜索"
-        hint="可切换插件的全局默认值。打开后下一次运行的组合会挂 web / web-search-deepseek / tool-web 三行，模型多一个 web_search 工具，用与模型同一把凭据引用名。DeepSeek 搜索的费用不计入本站用量：搜索是一次独立的辅助模型请求，用量不经 llm/stream，本站的 node_usage 与成本页收不到它，是账外支出。"
+        title="插件开关"
+        hint="可按工作流切换的五组插件的全局默认值。工作流设置里每一项可以选「继承」「开」「关」；没写覆盖的工作流按这里的值挂。"
       >
-        <label className="flex items-center gap-2 text-sm text-zinc-700">
-          <input
-            type="checkbox"
-            checked={doc.webSearchEnabled}
-            onChange={(e) => patch({ webSearchEnabled: e.target.checked })}
-          />
-          启用 DeepSeek 搜索（web_search）
-        </label>
+        {COMPOSITION_TOGGLE_KEYS.map((key) => (
+          <label
+            key={key}
+            data-toggle-key={key}
+            className="flex items-start gap-3 rounded-md border border-zinc-200 px-3 py-2"
+          >
+            <input
+              type="checkbox"
+              checked={doc.toggles[key]}
+              onChange={(e) =>
+                patch({ toggles: { ...doc.toggles, [key]: e.target.checked } })
+              }
+              className="mt-1"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm text-zinc-800">
+                {TOGGLE_COPY[key].label}
+                <span className="ml-2 font-mono text-[11px] text-zinc-400">{key}</span>
+              </span>
+              <span className="mt-0.5 block text-xs leading-5 text-zinc-500">
+                {TOGGLE_COPY[key].hint}
+              </span>
+            </span>
+          </label>
+        ))}
+      </Section>
+
+      <Section
+        title="默认指令（AGENTS.md）"
+        hint="物化为每次运行的 <run>/home/AGENTS.md，每个 Action 会话都无条件读到，放跨工作流的共同底线；工作流自己的指令另落工作区 AGENTS.md，在工作流设置里写。留空即不写用户级指令。"
+      >
+        <textarea
+          value={doc.defaultInstructions}
+          onChange={(e) => patch({ defaultInstructions: e.target.value })}
+          rows={12}
+          spellCheck={false}
+          aria-label="默认指令"
+          className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
+        />
+        <p className={`text-xs ${instructionsTooLong ? "text-red-600" : "text-zinc-400"}`}>
+          约 {estimateTokens(doc.defaultInstructions)} token / 会话，{instructionBytes} 字节
+          {instructionsTooLong
+            ? `——超过 ${DEFAULT_INSTRUCTIONS_MAX_BYTES} 字节上限，保存会被拒绝`
+            : `（上限 ${DEFAULT_INSTRUCTIONS_MAX_BYTES} 字节）`}
+        </p>
       </Section>
 
       <div className="sticky bottom-0 mt-6 flex items-center gap-3 border-t border-zinc-200 bg-white/90 py-3 backdrop-blur">
@@ -361,7 +444,7 @@ export default function SettingsPage() {
 
       <Section
         title="插件面板"
-        hint="面板读的是 src/server/harness/catalog.ts 那一份插件目录——与 catalog.test.ts 钉住组合、docs/harness/ 钉住文档的是同一份——按十组分区，每行的挂载状态按当前设置推导。本项目没有长驻的 harness 宿主树，每次运行自己起一个子进程，所以这里报的是「下一次运行会挂什么」，以及最近一次运行真实落盘的组合。"
+        hint="面板读的是 src/server/harness/catalog.ts 那一份插件目录——与 catalog.test.ts 钉住组合、docs/harness/ 钉住文档的是同一份——按十组分区，每行的挂载状态按当前全局设置推导，不含工作流覆盖。本项目没有长驻的 harness 宿主树，每次运行自己起一个子进程，所以这里报的是「下一次运行会挂什么」，以及最近一次运行真实落盘的组合。"
       >
         {groups.map((group) => (
           <details
@@ -432,7 +515,7 @@ export default function SettingsPage() {
                       <td className="px-3 py-1.5 text-xs whitespace-nowrap">
                         {row.workflowToggle ? (
                           <span
-                            title="单个工作流可以覆盖这一行的全局默认（第二批实现）"
+                            title="单个工作流可以在工作流设置里覆盖这一行的全局默认"
                             className="rounded border border-sky-200 bg-sky-50 px-1 text-sky-700"
                           >
                             可按工作流切换

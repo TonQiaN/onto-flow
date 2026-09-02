@@ -260,7 +260,7 @@ function ActionsLibrary() {
     <>
       <LibraryLayout
         title="Action 库"
-        subtitle="可复用的原子工作单元：Prompt + Rule + 端口 + 模型 + 引用的 Skill / Tool。"
+        subtitle="可复用的原子工作单元：Prompt + Rule + 端口 + 模型，外加在所在工作流集合里选出的预载技能与可见 Tool。"
         tree={
           <FolderTree
             kind="action"
@@ -403,8 +403,8 @@ function ActionsLibrary() {
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-400">
                   <span>模型：{model ? model.displayName : "（未知模型）"}</span>
                   <span>思考强度：{EFFORT_LABEL[action.reasoningEffort]}</span>
-                  <span>Skill × {action.skillIds.length}</span>
-                  <span>Tool × {action.toolIds.length}</span>
+                  <span>预载技能 × {action.preloadSkillIds.length}</span>
+                  <span>可见 Tool × {action.toolIds.length}</span>
                 </div>
 
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">

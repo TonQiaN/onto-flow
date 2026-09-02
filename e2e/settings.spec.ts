@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * 全局设置页（开发者面）。
+ * 全局设置页（开发者面）——三层设置的最上层（ADR-0016）。
  *
  * 设置是**单份文档**而不是可按前缀清理的实体，所以这里的纪律不是 e2e 前缀，
  * 而是先把整份文档存下来、跑完原样写回——用例失败也不会给本机留下残留配置。
@@ -17,7 +17,7 @@ test.describe("全局设置", () => {
     await request.put("/api/settings", { data: saved });
   });
 
-  test("五个分区与插件面板都在，面板列出下次运行会挂的 entry", async ({ page }) => {
+  test("七个分区与插件面板都在，面板列出下次运行会挂的 entry", async ({ page }) => {
     await page.goto("/settings");
 
     for (const section of [
@@ -25,7 +25,8 @@ test.describe("全局设置", () => {
       "凭据引用",
       "MCP 服务器",
       "默认停用的工具",
-      "搜索",
+      "插件开关",
+      "默认指令（AGENTS.md）",
       "插件面板",
     ]) {
       await expect(
@@ -33,6 +34,8 @@ test.describe("全局设置", () => {
         `应有「${section}」分区`,
       ).toBeVisible();
     }
+    // 第一批的「搜索」分区已并入「插件开关」
+    await expect(page.getByRole("heading", { name: "搜索", exact: true })).toHaveCount(0);
 
     // 面板报的是推导结果，和 API 的 entry 清单逐条对齐
     const entries = (
@@ -171,12 +174,30 @@ test.describe("全局设置", () => {
     }
   });
 
-  test("搜索开关保存后进入设置文档，并把搜索三件套挂进下一次运行的组合", async ({ page, request }) => {
+  test("插件开关五项与设置文档的 toggles 逐键对齐；搜索开关保存后把搜索三件套挂进下一次运行的组合", async ({
+    page,
+    request,
+  }) => {
     await page.goto("/settings");
     // 说明文字必须点明这是账外支出
     await expect(page.getByText("DeepSeek 搜索的费用不计入本站用量")).toBeVisible();
     // 设置文档在 useEffect 里异步载入，分组渲染出来才说明文档已到位，此后勾选才不会被载入覆盖
     await expect(page.locator("details[data-plugin-group]")).toHaveCount(10);
+
+    // 五个开关来自文档的 toggles 五键，页面按键渲染、勾选状态与文档一致
+    const before = (await (await request.get("/api/settings")).json()) as {
+      toggles: Record<string, boolean>;
+    };
+    const keys = Object.keys(before.toggles);
+    expect(keys.sort()).toEqual(
+      ["compaction", "fsSearch", "strReplaceEditor", "todo", "webSearch"].sort(),
+    );
+    await expect(page.locator("[data-toggle-key]")).toHaveCount(keys.length);
+    for (const key of keys) {
+      const box = page.locator(`[data-toggle-key="${key}"] input[type=checkbox]`);
+      if (before.toggles[key]) await expect(box, `开关「${key}」应与文档一致`).toBeChecked();
+      else await expect(box, `开关「${key}」应与文档一致`).not.toBeChecked();
+    }
 
     // 等 PUT 真正返回再读 API：「已保存」在点击的同一帧被清空又重设，肉眼可见但不可靠
     const saveAndWait = async () => {
@@ -188,14 +209,14 @@ test.describe("全局设置", () => {
       await expect(page.getByText(/^已保存/)).toBeVisible();
     };
 
-    const toggle = page.getByLabel("启用 DeepSeek 搜索");
+    const toggle = page.locator('[data-toggle-key="webSearch"] input[type=checkbox]');
     await toggle.check();
     await saveAndWait();
 
     const doc = (await (await request.get("/api/settings")).json()) as {
-      webSearchEnabled: boolean;
+      toggles: { webSearch: boolean };
     };
-    expect(doc.webSearchEnabled).toBe(true);
+    expect(doc.toggles.webSearch).toBe(true);
 
     // 面板与 API 同一份推导：开关打开后 tool-web 进入组合，目录行变成「按开关已挂」
     const on = (await (await request.get("/api/settings/composition")).json()) as {
@@ -218,8 +239,45 @@ test.describe("全局设置", () => {
     };
     expect(off.entries.some((e) => e.id === "tool-web")).toBe(false);
     expect(
-      ((await (await request.get("/api/settings")).json()) as { webSearchEnabled: boolean })
-        .webSearchEnabled,
+      ((await (await request.get("/api/settings")).json()) as { toggles: { webSearch: boolean } })
+        .toggles.webSearch,
     ).toBe(false);
+  });
+
+  test("默认指令保存后原样进入设置文档；超过 64 KiB 与非布尔开关被 400 拒绝", async ({
+    page,
+    request,
+  }) => {
+    await page.goto("/settings");
+    await expect(page.locator("details[data-plugin-group]")).toHaveCount(10);
+
+    const text = `# e2e 默认指令\n\n只在本用例里出现的一行：${Date.now()}\n`;
+    const textarea = page.getByLabel("默认指令");
+    await textarea.fill(text);
+    // 计数旁注跟着正文变：字节数是 UTF-8 长度
+    const bytes = Buffer.byteLength(text, "utf8");
+    await expect(page.getByText(`${bytes} 字节`)).toBeVisible();
+
+    const put = page.waitForResponse(
+      (r) => r.url().endsWith("/api/settings") && r.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    expect((await put).ok()).toBe(true);
+    await expect(page.getByText(/^已保存/)).toBeVisible();
+
+    const doc = (await (await request.get("/api/settings")).json()) as {
+      defaultInstructions: string;
+    };
+    expect(doc.defaultInstructions).toBe(text);
+
+    // 写入口的两条校验：默认指令字节上限、开关只收布尔
+    const tooLong = await request.put("/api/settings", {
+      data: { defaultInstructions: "x".repeat(65_537) },
+    });
+    expect(tooLong.status()).toBe(400);
+    const badToggle = await request.put("/api/settings", {
+      data: { toggles: { webSearch: "yes" } },
+    });
+    expect(badToggle.status()).toBe(400);
   });
 });
