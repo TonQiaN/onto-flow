@@ -24,6 +24,7 @@ import {
   type CompositionToggleKey,
   type CompositionToggles,
   COMPOSITION_TOGGLE_LABELS,
+  WORKFLOW_INSTRUCTIONS_MAX_BYTES,
 } from "@/lib/workflow-settings";
 import {
   actionNamesByEntity,
@@ -42,8 +43,6 @@ import {
   type WorkflowDetail,
 } from "../types";
 
-/** 与 src/server/writers/workflow.ts 的 WORKFLOW_INSTRUCTIONS_MAX_BYTES 同值；客户端不能从 @/server 取 */
-const INSTRUCTIONS_MAX_BYTES = 64 * 1024;
 
 /** 全局设置里本页要看的两样：开关默认值（供「继承」显示）与 MCP 登记表 */
 interface GlobalView {
@@ -202,7 +201,7 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
     [mcpServers, global.mcpServers],
   );
   const instructionBytes = utf8Bytes(instructions);
-  const instructionTooLong = instructionBytes > INSTRUCTIONS_MAX_BYTES;
+  const instructionTooLong = instructionBytes > WORKFLOW_INSTRUCTIONS_MAX_BYTES;
 
   // ---------- 保存 ----------
   async function save() {
@@ -331,7 +330,7 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
           }`}
         />
         <p className={`text-xs ${instructionTooLong ? "text-red-600" : "text-zinc-400"}`}>
-          ≈ {estimateTokens(instructions).toLocaleString("zh-CN")} tokens · {instructionBytes.toLocaleString("zh-CN")} / {INSTRUCTIONS_MAX_BYTES.toLocaleString("zh-CN")} 字节
+          ≈ {estimateTokens(instructions).toLocaleString("zh-CN")} tokens · {instructionBytes.toLocaleString("zh-CN")} / {WORKFLOW_INSTRUCTIONS_MAX_BYTES.toLocaleString("zh-CN")} 字节
           {instructionTooLong && "，超过上限"}
         </p>
       </Section>

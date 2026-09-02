@@ -127,8 +127,9 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
   const scanText = (file: string): string => {
     const content = read(file);
     if (rel(file) !== TEMPLATE_CARRIER) return content;
-    const cut = content.indexOf("TOOL_EXECUTE_TEMPLATE");
-    expect(cut, `${TEMPLATE_CARRIER} 里找不到 TOOL_EXECUTE_TEMPLATE，豁免失效`).toBeGreaterThan(0);
+    // 截在声明本身而不是第一次提到这个名字的地方：前面的注释提一句不该把盲区上移
+    const cut = content.indexOf("export const TOOL_EXECUTE_TEMPLATE = `");
+    expect(cut, `${TEMPLATE_CARRIER} 里找不到 TOOL_EXECUTE_TEMPLATE 的声明，豁免失效`).toBeGreaterThan(0);
     return content.slice(0, cut);
   };
   const SERVER_SPECIFIER = /^@\/(?:server|db)(?:\/|$)/;
@@ -304,7 +305,8 @@ describe("AGENTS.md · Conventions · raw SQL", () => {
    * revisions.ts 的 max(version_no)、api/runs/route.ts 的运行列表合计。
    * 两种拼法都要抓：sql`…` 与 sql<T>`…`——只认前者时后三处漏网，本测试曾空绿。
    */
-  const RAW_SQL = /\bsql(<[^>]*>)?`/;
+  // 泛型参数里可以再套尖括号（sql<Record<string, number>>`…`），所以只在反引号与分号前停
+  const RAW_SQL = /\bsql(<[^`;]*>)?`/;
   const ALLOWED_FILES = [
     "src/server/writers/list.ts",
     "src/server/engine/action.ts",

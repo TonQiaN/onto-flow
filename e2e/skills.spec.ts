@@ -13,8 +13,14 @@ function findProjectionDir(relativePath: string, content: string): string | null
   if (!fs.existsSync(SKILLS_ROOT)) return null;
   for (const entry of fs.readdirSync(SKILLS_ROOT, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue;
-    // <slug> 是符号链接：Dirent.isDirectory() 为 false，要 stat 跟过去
-    if (!fs.statSync(path.join(SKILLS_ROOT, entry.name)).isDirectory()) continue;
+    // <slug> 是符号链接：Dirent.isDirectory() 为 false，要 stat 跟过去；悬空链接跳过而不是让整个 spec 倒下
+    let isDir = false;
+    try {
+      isDir = fs.statSync(path.join(SKILLS_ROOT, entry.name)).isDirectory();
+    } catch {
+      continue;
+    }
+    if (!isDir) continue;
     const candidate = path.join(SKILLS_ROOT, entry.name, relativePath);
     if (fs.existsSync(candidate) && fs.readFileSync(candidate, "utf8") === content)
       return path.join(SKILLS_ROOT, entry.name);

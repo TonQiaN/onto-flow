@@ -26,6 +26,7 @@ describe("Tool 契约校验", () => {
     // 保留名：与上游内建同名的包装在 boot 时撞名、整个运行起不来；structured_output 会遮蔽会话数据面
     [{ publicName: "bash" }, "内建"],
     [{ publicName: "structured_output" }, "内建"],
+    [{ publicName: "mcp__filesystem__read_file" }, "MCP 工具的前缀"],
     [{ parameters: { type: "string" } }, "对象根"],
     [{ parameters: "{}" }, "parameters"],
     [{ parameters: { type: "object", properties: { n: { type: ["integer", "null"] } } } }, "type 数组"],

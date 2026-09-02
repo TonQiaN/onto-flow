@@ -22,6 +22,7 @@ import {
   type CompositionToggles,
   DEFAULT_COMPOSITION_TOGGLES,
   estimateTokens,
+  DEFAULT_INSTRUCTIONS_MAX_BYTES,
 } from "@/lib/workflow-settings";
 
 interface CredentialRef {
@@ -89,8 +90,6 @@ const EMPTY: SettingsDoc = {
   defaultInstructions: "",
 };
 
-/** 默认指令的字节上限，与 src/server/settings.ts 的 DEFAULT_INSTRUCTIONS_MAX_BYTES 同值 */
-const DEFAULT_INSTRUCTIONS_MAX_BYTES = 65_536;
 
 /**
  * 五个可按工作流切换的插件开关的文案；键顺序与 COMPOSITION_TOGGLE_KEYS 一致，

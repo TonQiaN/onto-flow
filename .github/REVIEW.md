@@ -72,7 +72,7 @@
 - [ ] 新增 `models` 行走 `scripts/seed.ts` 的 `upsertModel`；新 provider 路由有 `runCompositionEntries` 里的 adapter；没有 route 写 `models`
 - [ ] Tool 仍是契约、包装仍归平台（A Tool is an OntoFlow contract）：库里的 `code` 只是 `export default async function execute(args, ctx)`，没有 `name` / `inject` / `apply`，不 import `@deepseek-ai/*`（写入口拒绝）；上游注册形状只出现在 `src/server/harness/tool-plugin.ts`，改了它就跑 `tool-plugin.test.ts` 与 `composition-boot.test.ts`（真 boot 带样例契约 Tool 的组合）；Tool 要围栏只经 `ctx.run()`，谨慎的 Tool 以 `sandbox.enforced && !sandbox.runnerFailed` 为门禁
 - [ ] JSON Schema 子集在**写入口**拦（`objectSchemaProblem`，`parameters` 与 `output` 都查，客户端 `tool-form.ts` 镜像形状规则）；没有把 type 数组的拒绝寄托在插件加载上——上游 `register` 不校验 `parameters`
-- [ ] Tool 公名不在 `TOOL_RESERVED_PUBLIC_NAMES`（上游内建工具名 + `structured_output` / `run_code` / `web_fetch`）里，写入口拒绝；同名包装会让 boot 撞名倒下、或遮蔽会话的 `structured_output`（A Tool is an OntoFlow contract）
+- [ ] Tool 公名不在 `TOOL_RESERVED_PUBLIC_NAMES`（上游内建工具名 + `structured_output` / `run_code` / `web_fetch`）里、也不以 `mcp__` 开头，写入口拒绝；同名包装会让 boot 撞名倒下、遮蔽会话的 `structured_output`、或让整台 MCP 服务器的工具在同步时被丢弃（A Tool is an OntoFlow contract）
 
 ## 7. 专用付费入口的行为钉死（A specialized paid invocation pins behavior, not names）
 

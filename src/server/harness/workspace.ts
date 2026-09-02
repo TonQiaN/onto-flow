@@ -11,7 +11,7 @@
  * 差异是把快照复制换成 symlink。
  */
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DATA_DIR } from "../fs-safety";
 import { assertSafeId, assertSafeName, newRunId } from "./ids";
@@ -94,10 +94,16 @@ export interface RunWorkspace {
 
 export class RunWorkspaceError extends Error {}
 
-/** 对目录内容做确定性摘要：按相对路径排序，逐文件混入路径与字节。 */
+/**
+ * 对目录内容做确定性摘要：按相对路径排序，逐文件混入路径与字节。
+ * 先把 root 解析成真实路径再遍历：data/skills/<slug> 是指向版本目录的链接，逐路径经链接读
+ * 会在受理期间的技能重写中切到新版本，读到一份哪版都不是的摘要或撞上 ENOENT；技能已在摘要
+ * 前被 retainSkillProjections 持有，旧版本目录不会被删，钉在真实路径上摘要就精确。
+ */
 async function digestDirectory(
-  root: string,
+  sourceDir: string,
 ): Promise<{ digest: string; fileCount: number }> {
+  const root = await realpath(sourceDir);
   const files: string[] = [];
   async function walk(dir: string): Promise<void> {
     for (const entry of await readdir(dir, { withFileTypes: true })) {

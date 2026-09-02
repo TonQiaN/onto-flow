@@ -27,6 +27,9 @@ export const TOOL_RESERVED_PUBLIC_NAMES: ReadonlySet<string> = new Set([
   "structured_output",
 ]);
 
+/** 与 tool-contract.ts 的 TOOL_RESERVED_PUBLIC_NAME_PREFIX 同一份：MCP 工具的公名空间 */
+export const TOOL_RESERVED_PUBLIC_NAME_PREFIX = "mcp__";
+
 export type SchemaParse<T> = { ok: true; value: T } | { ok: false; error: string };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -101,6 +104,8 @@ export function publicNameProblem(publicName: string): string | null {
     return `模型可见的工具名「${publicName}」非法：小写字母开头，只含小写字母、数字与下划线，最长 64 位`;
   if (TOOL_RESERVED_PUBLIC_NAMES.has(publicName))
     return `模型可见的工具名「${publicName}」是上游内建工具或会话数据面工具的名字，契约 Tool 不能占用`;
+  if (publicName.startsWith(TOOL_RESERVED_PUBLIC_NAME_PREFIX))
+    return `模型可见的工具名「${publicName}」用了 MCP 工具的前缀 ${TOOL_RESERVED_PUBLIC_NAME_PREFIX}，契约 Tool 不能占用`;
   return null;
 }
 

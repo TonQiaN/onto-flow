@@ -72,7 +72,6 @@ export const DEFAULT_INSTRUCTIONS = [
 ].join("\n");
 
 /** 默认指令的字节上限，对齐组合里 agent-instructions 的 maxBytes。 */
-export { DEFAULT_INSTRUCTIONS_MAX_BYTES };
 
 export const DEFAULT_SETTINGS: SettingsDocument = {
   modelApiKeyEnv: DEFAULT_CREDENTIAL_ENV,

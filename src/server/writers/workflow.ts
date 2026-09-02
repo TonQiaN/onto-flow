@@ -44,7 +44,6 @@ export interface EdgePayload {
 }
 
 /** 工作流指令原样成为 workspace/AGENTS.md；上限按字节算，防止一份手册撑爆每个会话的首条消息。 */
-export { WORKFLOW_INSTRUCTIONS_MAX_BYTES };
 
 export type WorkflowRow = typeof workflows.$inferSelect;
 

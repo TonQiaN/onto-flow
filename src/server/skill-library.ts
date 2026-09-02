@@ -11,8 +11,9 @@
  * <root>/<slug> 本身是一个符号链接，指向 <root>/.versions/<slug>-<stamp>/ 里的一份完整投影。
  * 重写技能时先把新版本整目录写好，再用一次 rename 把新链接换到 <slug> 上：路径没有任何
  * 不存在的瞬间，运行工作区里指向 <slug> 的链接、受理检查、节点读投影、上游 pre-step 的技能
- * 读取都不会撞上半成品或空档。旧版本目录在没有已受理运行持有该技能时立即删除，否则等最后
- * 一个持有者收束后再删——上游若在发现技能时记住了真实路径，运行中途也不会读到已删的目录。
+ * 读取都不会撞上半成品或空档；多文件遍历（受理时的目录摘要）先解析真实路径再读，也不会
+ * 混到两个版本。旧版本目录在没有已受理运行持有该技能时立即删除，否则等最后一个持有者
+ * 收束后再删——持有期间无论经链接还是真实路径读，都读得到。
  *
  * 目录名与 frontmatter 的 name 用的是**派生 slug**而不是库里的名字：上游的
  * 技能名必须匹配 /^[a-z0-9]+(?:-[a-z0-9]+)*$/，而本仓库的实体名一律是中文
@@ -112,7 +113,10 @@ function isHeld(slug: string): boolean {
   return (projectionHolds.get(slug)?.size ?? 0) > 0;
 }
 
-/** 删一个版本目录；技能仍被已受理运行持有时先记下，等释放后再删。 */
+/**
+ * 删一个版本目录；技能仍被已受理运行持有时先记下，等释放后再删。删不掉只记日志：调用它时
+ * 新链接已经换好、数据库已经提交，投影是对的，不能因为清理旧版本失败把写入报成 500。
+ */
 function retireVersion(slug: string, versionName: string): void {
   if (isHeld(slug)) {
     const names = pendingVersionRemovals.get(slug) ?? new Set<string>();
@@ -120,7 +124,11 @@ function retireVersion(slug: string, versionName: string): void {
     pendingVersionRemovals.set(slug, names);
     return;
   }
-  fs.rmSync(path.join(VERSIONS_DIR, versionName), { recursive: true, force: true });
+  try {
+    fs.rmSync(path.join(VERSIONS_DIR, versionName), { recursive: true, force: true });
+  } catch (err) {
+    console.error("[skills] 删除旧版本目录失败，下次启动重建收敛", slug, versionName, err);
+  }
 }
 
 function flushRetiredVersions(slug: string): void {
