@@ -153,6 +153,11 @@
   （它们只依赖模型表与内置类型），跑两遍仍幂等、pin 不变。
 - 系统健康页磁盘行里 `data/documents` 一行删除（`src/app/monitor/health/`、`src/server/monitor/disk.ts`
   以实际出现处为准）。
+- 其余残留一并清：`docs/harness/10-本项目自有.md` 的「三个种子 Tool」与 `save_purchase_plan` 句、
+  `docs/DESIGN-V2.md` 第 91 行附近的引用示例、`src/` 下以采购为例子的 UI 占位文案与单测夹具名
+  （对象类型 / Skill / Tool / Action 编辑器的占位改成简历案例的例子）、`src/server/writers/*.test.ts`
+  与 `references.test.ts` 里的采购字面量；`rg` 验收表达式排除 `docs/adr/`、`docs/simplifications/`
+  与本文。
 - e2e：`e2e/documents.spec.ts` 删除；`actions` / `library-v2` / `object-types` / `skills` / `tools` /
   `workflow-editor` / `workflow-settings` 七个 spec 改为 `beforeAll` 经 API 自建 `e2e-` 前缀夹具
   （对象类型、Skill、Tool、带端口 / 预载 / 可见 Tool 的 Action、文件夹树、带节点与连线的工作流），
@@ -197,8 +202,12 @@
 - 返回 `{ items, total, page, pageSize, summary }`：`items` 每行现有字段 + `source`，按
   `startedAt` 倒序；`summary = { runs, tokens, cost, byModel: [{ providerId, modelId, tokens, cost }] }`
   按同一组筛选（不分页）聚合：`runs` 是筛选集里 **distinct** 的 `runs.id` 数（零用量的运行——
-  免费的输入→输出工作流、首次模型调用前就失败的运行——也算），`tokens` / `cost` 与 `byModel` 来自
-  按 `run_id` 预聚合的 `node_usage` 子查询 **left join** 到筛选集，不能用内连接把无用量的运行挤掉。
+  免费的输入→输出工作流、首次模型调用前就失败的运行——也算）；`tokens` / `cost` 与 `items` 每行的
+  总量同源，都从 **`run_nodes`** 求和——它是节点用量的权威汇总（`node_usage` 插入瞬时失败时，那一
+  chunk 只经内存回退折进 `run_nodes`，不会补出 `node_usage` 行）；只有 `byModel` 必须按模型拆，来自
+  按 `run_id + provider + model` 预聚合的 `node_usage` 子查询 **left join** 到筛选集（不能用内连接把
+  无用量的运行挤掉），因此 `byModel` 各行之和在极少数回退场景下可能略小于 `tokens`，接口注释与页面
+  文案说明这一点。
 - 现有数组消费者**全部**改读 `items`，每个 stacked PR 都必须自己能跑：`src/components/nav.tsx`
   （`?status=running&pageSize=100`）、`src/app/workflows/page.tsx`（同上）、`src/app/monitor/page.tsx`
   （最近失败）、`src/app/monitor/trace/page.tsx`（运行下拉）、`src/app/monitor/logs/page.tsx`（运行
