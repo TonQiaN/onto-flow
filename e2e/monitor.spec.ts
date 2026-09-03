@@ -418,7 +418,7 @@ async function captureJson<T>(
   matches: (url: URL) => boolean,
   action: () => Promise<unknown>,
 ): Promise<T> {
-  let captured = null as { value: T } | null;
+  let captured = null as { value: T; body: string } | null;
   let settle!: () => void;
   const first = new Promise<void>((resolve) => {
     settle = resolve;
@@ -426,23 +426,23 @@ async function captureJson<T>(
   await page.route(
     (url) => matches(url),
     async (route: Route) => {
-      if (route.request().method() !== "GET" || captured) {
+      if (route.request().method() !== "GET") {
         await route.continue();
         return;
       }
-      const res = await route.fetch();
-      const body = await res.text();
+      // 捕获之后的每一次匹配请求（strict mode 的第二次、自动刷新）都回同一份正文：页面无论哪次
+      // 请求的状态更新胜出，渲染的都是断言拿到的那一份，不会被中途变化的真实数据替换。
       if (!captured) {
-        expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
-        captured = { value: JSON.parse(body) as T };
-        settle();
+        const res = await route.fetch();
+        const body = await res.text();
+        if (!captured) {
+          expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
+          captured = { value: JSON.parse(body) as T, body };
+          settle();
+        }
       }
       // 只回传状态与内容类型：原响应头里的 content-encoding 与已解码的正文对不上
-      await route.fulfill({
-        status: res.status(),
-        contentType: res.headers()["content-type"] ?? "application/json",
-        body,
-      });
+      await route.fulfill({ status: 200, contentType: "application/json", body: captured.body });
     },
   );
   let timer: ReturnType<typeof setTimeout> | undefined;

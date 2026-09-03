@@ -241,8 +241,8 @@
    过程只能靠抽屉的轨迹与节点列表；不想留就用系统健康页的清理删掉。形状定义在
    `src/lib/run-graph.ts`（纯类型 + 校验函数），见下。
 2. 新表 `run_node_rounds`：一轮执行一行——`{ id, runId, nodeId, round（0 起）, sessionId, status
-   （running / success / failed / cancelled）, startedAt, finishedAt, exitName（本轮所走出口；无具名
-   出口为 null）, error, inputs, outputs, snapshot }`，唯一键 `(run_id, node_id, round)`，随 `runs`
+   （running / success / failed / cancelled / skipped）, startedAt, finishedAt, exitName（本轮所走出口；
+   无具名出口为 null）, error, inputs, outputs, snapshot }`，唯一键 `(run_id, node_id, round)`，随 `runs`
    级联删除。`inputs` / `outputs` / `snapshot` 是这一轮自己的 PortValue 映射与运行快照（`runOne` /
    `action.ts` 今天写进 `run_nodes` 的同一份内容，快照里含本轮真实生效的产物路径与出口归属）——
    重入会覆盖 `run_nodes` 上的这三列，抽屉的「输入输出」「快照」页签必须读光标所在那一轮的行，
@@ -318,8 +318,10 @@ interface RunGraph {
 - **数据源**：现 `use-run-visuals.ts` 搬到 `src/app/runs/[id]/use-run-stream.ts`，只负责 SSE
   订阅（snapshot / log 去重 / 一次重连）与 1Hz `now`；视觉一律经 `visualsAt(t)`。进行中默认
   `t = now` 跟随，往回拖即暂停跟随，「跟随」按钮回到现在；已结束默认 `t = finishedAt`。
-- **时间轴**（画布下方）：每个节点一行，一轮一段（来自 `run_node_rounds`；左 = 相对 `startedAt`
-  偏移，宽 = 时长），事件按 `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
+- **时间轴**（画布下方）：每个节点一行（行来自 `run_nodes`，按 `startedAt` 排序；行名可点击，打开
+  该节点的抽屉——这也是早于本批、画布为空的运行进入抽屉的入口），一轮一段（段来自
+  `run_node_rounds`；左 = 相对 `startedAt` 偏移，宽 = 时长；没有轮次行的节点这一行没有段），事件按
+  `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
 - **抽屉**（点节点打开，右侧）：错误置顶；三页签「轨迹 / 输入输出 / 快照」读**光标所在那一轮**的
   `run_node_rounds` 行（轨迹页签按该轮会话 id 定位到对应会话），复用
   `agent-trajectory.tsx`、`port-value-view.tsx`、`snapshot-view.tsx`；轨迹组件加 `cursorMs`
@@ -342,7 +344,8 @@ interface RunGraph {
 - `npm run check`、`npm run build`；单测 `visuals-at.test.ts`、`run-graph.test.ts`（构造与校验）、
   `runner.test.ts` 补「回边重入写出两行轮次、事件带会话 id」。
 - e2e：`runs.spec.ts` 夹具行带 `graph`，断言画布节点数与 `graph.nodes` 一致、点节点开抽屉且轨迹
-  面板可检索（沿用现有轨迹用例）、时间轴行数与轮次行数一致；`parallel-ui.spec.ts` 改为：导航面板两路各深链 `/runs/<id>`，运行页概要栏状态为运行中、
+  面板可检索（沿用现有轨迹用例）、时间轴行数与 `run_nodes` 数一致、段数与轮次行数一致、旧运行
+  （空图、无轮次行）仍能从时间轴行名打开抽屉看轨迹；`parallel-ui.spec.ts` 改为：导航面板两路各深链 `/runs/<id>`，运行页概要栏状态为运行中、
   取消按钮指向正确的 run；`parallel-runs.spec.ts` 免费真跑后运行页画布节点全部成功、光标在末尾。
   `workflow-editor.spec.ts` 补一条：编辑器不再出现 `run-switcher` / 运行条元素。
 - 付费：停掉 dev server 后跑一次 `npx tsx scripts/smoke-engine.ts`，确认真实运行的 `runs.graph`
