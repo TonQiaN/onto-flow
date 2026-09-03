@@ -154,11 +154,16 @@
   `DELETE FROM purchase_plans`；`src/server/writers/tool.test.ts` 的夹具改成中性名字。
 - 种子：`scripts/seed.ts` 只保留 ① 内置对象类型（text / file / json）与 ③ 模型表；②④⑤⑥⑦⑧⑨⑩
   （案例对象类型、Skill、Tool、Action、工作流、文件夹、v1 修订、示例需求文件）与
-  `SAVE_PURCHASE_PLAN_*` 全部删除；`scripts/run-procurement.ts`、`scripts/purchase-plan-path.test.ts`
-  删除；`data/samples/采购需求示例.txt` 不再写出。`seed-resume.ts` / `seed-leetcode.ts` 不动
+  `SAVE_PURCHASE_PLAN_*` 全部删除；`scripts/run-procurement.ts`、`scripts/purchase-plan-path.ts`（只被
+  种子的 Tool 源码与它的测试引用）、`scripts/purchase-plan-path.test.ts` 删除；`data/samples/采购需求示例.txt` 不再写出。`seed-resume.ts` / `seed-leetcode.ts` 不动
   （它们只依赖模型表与内置类型），跑两遍仍幂等、pin 不变。
 - 系统健康页磁盘行里 `data/documents` 一行删除（`src/app/monitor/health/`、`src/server/monitor/disk.ts`
   以实际出现处为准）。
+- 其余残留一并清：`docs/harness/10-本项目自有.md` 的「三个种子 Tool」与 `save_purchase_plan` 句、
+  `docs/DESIGN-V2.md` 第 91 行附近的引用示例、`src/` 下以采购为例子的 UI 占位文案与单测夹具名
+  （对象类型 / Skill / Tool / Action 编辑器的占位改成简历案例的例子）、`src/server/writers/*.test.ts`
+  与 `references.test.ts` 里的采购字面量；`rg` 验收表达式排除 `docs/adr/`、`docs/simplifications/`
+  与本文。
 - e2e：`e2e/documents.spec.ts` 删除；`actions` / `library-v2` / `object-types` / `skills` / `tools` /
   `workflow-editor` / `workflow-settings` 七个 spec 改为 `beforeAll` 经 API 自建 `e2e-` 前缀夹具
   （对象类型、Skill、Tool、带端口 / 预载 / 可见 Tool 的 Action、文件夹树、带节点与连线的工作流），
@@ -203,13 +208,20 @@
 - 返回 `{ items, total, page, pageSize, summary }`：`items` 每行现有字段 + `source`，按
   `startedAt` 倒序；`summary = { runs, tokens, cost, byModel: [{ providerId, modelId, tokens, cost }] }`
   按同一组筛选（不分页）聚合：`runs` 是筛选集里 **distinct** 的 `runs.id` 数（零用量的运行——
-  免费的输入→输出工作流、首次模型调用前就失败的运行——也算），`tokens` / `cost` 与 `byModel` 来自
-  按 `run_id` 预聚合的 `node_usage` 子查询 **left join** 到筛选集，不能用内连接把无用量的运行挤掉。
+  免费的输入→输出工作流、首次模型调用前就失败的运行——也算）；`tokens` / `cost` 与 `items` 每行的
+  总量同源，都从 **`run_nodes`** 求和——它是节点用量的权威汇总（`node_usage` 插入瞬时失败时，那一
+  chunk 只经内存回退折进 `run_nodes`，不会补出 `node_usage` 行）；只有 `byModel` 必须按模型拆，来自
+  按 `run_id + provider + model` 预聚合的 `node_usage` 子查询 **left join** 到筛选集（不能用内连接把
+  无用量的运行挤掉），因此 `byModel` 各行之和在极少数回退场景下可能略小于 `tokens`，接口注释与页面
+  文案说明这一点。
 - 现有数组消费者**全部**改读 `items`，每个 stacked PR 都必须自己能跑：`src/components/nav.tsx`
   （`?status=running&pageSize=100`）、`src/app/workflows/page.tsx`（同上）、`src/app/monitor/page.tsx`
   （最近失败）、`src/app/monitor/trace/page.tsx`（运行下拉）、`src/app/monitor/logs/page.tsx`（运行
   筛选下拉）、`src/app/workflows/[id]/editor.tsx`（`runsInFlight` 轮询）——后四者在第 3、4 批才删除，
-  本批只改读法保持绿。合并前 `rg -n '"/api/runs' src` 逐个核对没有漏网的数组读法。
+  本批只改读法保持绿；`src` 之外的消费者同样要改：`scripts/run-resume.ts`（付费验收按数组
+  `history.find`）、`e2e/workflow-settings.spec.ts` 与 `e2e/parallel-runs.spec.ts` 的 teardown、
+  `e2e/monitor.spec.ts` 的 Trace 下拉断言。合并前 `rg -n '"/api/runs' src e2e scripts` 逐个核对没有
+  漏网的数组读法。
 
 **页面 `/runs`**（`src/app/runs/page.tsx` 重写）
 
@@ -223,7 +235,8 @@
 - 工作流卡片「历史」与运行页「该工作流全部运行」都只是带 `workflowId` 的链接。
 
 **监控台成本页随之删除**：`src/app/monitor/cost/`、`src/app/api/monitor/cost/`、`getCost` 与其单测，
-监控台 layout 标签去掉「成本分析」，`monitor.spec.ts` 的成本用例删除。
+监控台 layout 标签去掉「成本分析」，`monitor.spec.ts` 的成本用例删除；`docs/DESIGN-V2.md` 「阶段三」
+的六标签改五标签（每个 stacked PR 都是当时为真的状态，监控台文档随每批递减，第 4 批收成一页）。
 
 **文档同步**：DESIGN.md `/api/runs` 行改信封与参数；AGENTS.md「All five library list GETs return…」
 改为「五个库与 `/api/runs`…」并保持 `rules.test.ts` 的信封 import 断言覆盖；监控台描述里去掉成本
@@ -258,7 +271,11 @@
    update 终态、`finishedAt`、`exitName`、`outputs`、`error`。**Action 侧的收口一律带条件
    `where status = 'running'`**：取消可能在 Action 正等待最后一次 `sessionOutput` / `closeSession`
    时到达，`cancelRun` 先把这一行写成 cancelled，Action 侧随后无条件写 success 就把取消覆盖掉了；
-   条件更新让先到的终态赢，`runner.test.ts` 加一条「Action 完成前一刻被取消」的用例。`runner.test.ts` 覆盖一条会话开始前
+   条件更新让先到的终态赢。反过来的次序——Action 侧已把轮次写成 success、取消在 `runActionNode`
+   返回到 runner 的 post-await 取消检查之前到达——节点会被写成 cancelled，这时 runner 的取消分支
+   同样把这一轮的轮次行**无条件**改成 cancelled（节点与轮次终态一致，回放不会在成功的段上叠一个
+   取消的节点）。`runner.test.ts` 两条用例：「Action 完成前一刻被取消」（轮次行仍是 cancelled）、
+   「Action 已成功收口、取消先于 runner 检查」（轮次行被改成 cancelled）。`runner.test.ts` 覆盖一条会话开始前
    就失败的 Action（产物路径非法），断言它也有一行 failed 轮次。**必须有它的原因**：
    `run_nodes` 一个节点只有一行，回边重入会覆盖它的 `startedAt` / `finishedAt` / `outputs` /
    `sessionId` / `snapshot`，只看 `run_nodes` 回放不出「第 1 轮走了打回、第 2 轮走了通过」。
@@ -288,16 +305,38 @@
    把 `run_nodes` 写成 failed 时必须同时把 `run_nodes.finishedAt` 写成耗尽时刻并留下 error，回放据此
    在最后一轮成功之后的那个时刻把节点翻成失败（见下面的推导规则）。
 3. `run_events.session_id: text`：`events.ts` 的通用落库从 `ctx.sessionId` 写入；`action.ts` 里
+   （`events.test.ts` 与 `action.test.ts` 手写的内存库 DDL 同步加这一列，否则它们调用被测模块时会撞
+   `no column named session_id`；`runner.test.ts` 的 DDL 若也建了 `run_events`，同样加）；`action.ts` 里
    `refreshUnsettledUsageRollup()` 自己插的 `usage` 事件（`usageEventPayload()` 已带该会话 id）也
    必须写这一列——两处插入点都改，别只改一处。事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
    `<节点id>#<轮次+1>`，见 `engine/action.ts`）。列保持可空只是为了早于本批的历史行；新写入的事件
    没有一条允许为 null，`runner.test.ts` 断言之。
 
-**数据路径**：`GET /api/runs/[id]` 返回 `{ run, nodes, rounds }`；SSE `/api/runs/[id]/events` 的
+**数据路径**：`GET /api/runs/[id]` 返回 `{ run, nodes, rounds }`，SSE `/api/runs/[id]/events` 的
 `snapshot` 帧同样带 `rounds`（轮次行有变化就重发 snapshot，与 `nodes` 同一指纹），`log` 帧就是带
-`sessionId` 的 `run_events` 行。运行状态只从这两处取；抽屉的轨迹页签仍按需调用现有的
+`sessionId` 的 `run_events` 行——但两处的 `rounds` 都**只带骨架列**（轮次、会话、起止、终态、出口、
+错误），不带 `inputs` / `outputs` / `snapshot`：快照含技能集全文，循环运行每轮一份，SSE 每 500 ms
+的轮询一有变化就整份重发，会把页面与服务端一起拖慢。`nodes` 同理只带骨架列（`run_nodes` 去掉
+`inputs` / `outputs` / `snapshot`，`select` 时不取）——最新一轮那份重载荷同样不该随每帧 snapshot
+走；trajectory 路由在服务端读 `node.snapshot` 取技能名映射，不受影响。抽屉打开某一轮时另行
+`GET /api/runs/[id]/nodes/[nodeId]/rounds/[round]` 取这一轮的重载荷（`handle()` 里，404 为无此轮，
+置空过的列返回 null）。运行状态只从这两处取；抽屉的轨迹页签仍按需调用现有的
 `GET /api/runs/[id]/nodes/[nodeId]/trajectory`（会话 JSONL 是轨迹的权威源，事件表里没有它），
-这条接口保留不动。
+这条接口保留不动。`readAgentTrajectory` 最多读 128 个会话目录（`MAX_SESSION_FILES`），超过即抛，
+而 `maxReentries` 今天没有上限——写边界收口：`parseActionPayload` 把 `maxReentries` 限在 `0..100`
+（`MAX_REENTRIES` 常量，`src/app/actions/` 的编辑器同值校验），超出 400；但嵌套 / 重叠的回边可以
+让一个下游 Action 被多个环体反复重置，单个目标的上限管不住它的总轮次，所以引擎再设**每节点每次
+运行的总轮次上限** `MAX_NODE_ROUNDS = 100`（与 `MAX_REENTRIES` 同源，`src/lib/graph.ts`）：给某节点
+分配的下一轮次号超过它时不再重入，而是走**重入耗尽 `onExhausted: "fail"` 同一条路径**：被封顶的
+**目标**节点的 `run_nodes` 写 failed + `finishedAt` + error「重入总轮次超过上限 100」（不新增轮次行），
+触发回边的来源节点保持 success，然后把带目标节点标识的错误记入调度闭包的 `firstError`（不是直接调
+`failWholeRun()`：它只改数据库行、不停调度；也不能在 `onNodeSuccess(来源)` 里直接抛——task catch
+会把错误记到来源节点头上、连它已成功的轮次一起写成 failed，回放与错误归属都错），于是不再启动
+新节点、仍在跑的轮次收口、pending 节点补 skipped、运行以目标节点的错误失败。`runner.test.ts` 加一条
+嵌套回边把同一节点推过上限的用例：运行 failed 且错误含上限与目标节点名、目标节点 failed、来源节点
+及其最后一轮仍是 success、上限触发后没有任何新节点开始、无行残留 running；读侧 128 的上限因此
+永远读得下。
+DESIGN.md 的 Action 载荷行与引擎 spec 同步。
 
 **保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
 重载荷（`inputs` / `outputs` / `snapshot`；快照含 prompt、rule、渲染后的提示与技能集全文，循环运行
@@ -322,8 +361,10 @@ interface RunGraph {
 }
 ```
 
-`startResolvedRun` 从 `resolved.nodeRows`（kind / label / x / y / actionId / objectTypeId）与
-`resolved.nodes` 的端口构造它，与 `runs` 行同一事务写入。`GET /api/runs/[id]` 返回它。
+`startResolvedRun` 从 `resolved.nodeRows` 取几何与标识（kind / x / y / actionId / objectTypeId），从
+`resolved.nodes` 取 **label** 与端口——`resolveWorkflow` 会把 `workflow_nodes.label` 替换成 Action
+当前的名字，画布上的名字必须与执行的定义、`run_nodes.label` 一致，不能用行里的旧名——与 `runs` 行
+同一事务写入。`GET /api/runs/[id]` 返回它。
 
 **页面 `/runs/[id]`**（重写 `src/app/runs/[id]/page.tsx`，三段式）
 
@@ -339,8 +380,10 @@ interface RunGraph {
   `{ state }`、总计。节点在 `t` 时刻的状态取**该节点在 `t` 之前最后开始的那一轮**（`startedAt`
   相同——零时长的 skipped 行与紧接着的重入行可能落在同一毫秒——按 `round` 大者为准）：
   `startedAt > t` 等待、`startedAt ≤ t < finishedAt` 运行中、`finishedAt ≤ t` 取该轮终态；没有任何
-  轮次行的节点恒为等待。在此之上叠加**节点终态覆盖**：`run_nodes.status` 为 failed / cancelled 且
-  `run_nodes.finishedAt ≤ t` 时节点按该终态画（重入耗尽、整运行失败、取消都落在这条规则上）。
+  轮次行的节点恒为等待。在此之上叠加**节点终态覆盖**——**只对有轮次行的节点生效**：`run_nodes.status`
+  为 failed / cancelled 且 `run_nodes.finishedAt ≤ t` 时节点按该终态画（重入耗尽、整运行失败、取消
+  都落在这条规则上）；没有轮次行的节点（早于轮次表的运行，无论它当时成功还是失败）一律等待，
+  不让旧的失败运行画成失败、旧的成功运行却画成等待。
   连线在上游节点于 `t` 之前最后开始的那一轮已成功、且该轮 `exitName` 等于连线源端口的出口
   （无具名出口、以及输入节点，全部输出端口生效）时激活；活动取 `session_id` 属于当前轮且 `ts ≤ t` 的最后一条 tool 与累计 text 字数。
   事件被清理后只剩轮次级。单测 `visuals-at.test.ts` 覆盖等待 / 运行中 / 终态 / 出口未走 /
@@ -353,8 +396,9 @@ interface RunGraph {
   `t = now` 跟随，往回拖即暂停跟随，「跟随」按钮回到现在；已结束默认 `t = finishedAt`。
 - **时间轴**（画布下方）：每个节点一行（行来自 `run_nodes`，按 `startedAt` 排序；行名可点击，打开
   该节点的抽屉——这也是早于本批、画布为空的运行进入抽屉的入口），一轮一段（段来自
-  `run_node_rounds`；左 = 相对 `startedAt` 偏移，宽 = 时长；没有轮次行的节点这一行没有段），事件按
-  `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
+  `run_node_rounds`；左 = 相对 `startedAt` 偏移，宽 = 时长，但**有最小可见宽度与点击热区**——输入 /
+  输出节点与被跳过的轮次是零时长行，纯按时长画就是零宽、点不到；定位仍用精确时刻；没有轮次行的
+  节点这一行没有段），事件按 `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
 - **抽屉**（点节点打开，右侧）：错误置顶；「输入输出」「快照」两页签读**光标所在那一轮**的
   `run_node_rounds` 行；「轨迹」页签对任何运行都一样——调 trajectory 接口拿该节点**全部**会话的轨迹
   （接口本就按节点读各轮 JSONL，不依赖轮次表），光标所在轮的会话 id 只用来定位到对应会话并高亮，
@@ -367,7 +411,8 @@ interface RunGraph {
   运行对话框成功后 `router.push('/runs/<runId>')`。导航「运行中」面板与工作流卡片深链改
   `/runs/<id>`；运行页不再有「回画布看动画」。
 - **监控台 Trace 删除**：`src/app/monitor/trace/`、`src/app/api/monitor/trace/`、`getTrace` 与其
-  单测；layout 标签去掉 Trace。它按节点只画最后一轮，轮次表落地后没有它能画而运行页画不了的东西。
+  单测；layout 标签去掉 Trace；`docs/DESIGN-V2.md` 「阶段三」五标签改四标签。它按节点只画最后一轮，
+  轮次表落地后没有它能画而运行页画不了的东西。
 
 **文档同步**：DESIGN.md「多路运行的界面契约」段整段替换为运行页契约，`/api/runs/[id]` 行加
 `graph`；AGENTS.md Repository layout 里 `workflows/[id]/`、`runs/[id]/`、`monitor/` 三行改写，
@@ -389,6 +434,17 @@ interface RunGraph {
 - Chrome 验收：打开一条已结束运行，拖光标看节点由等待→运行中→终态、连线随之激活；点节点看三页签，
   拖光标时轨迹高亮跟着走，点轨迹记录光标跳过去；用免费的输入→输出工作流发起一次运行，跳到运行页后
   看直播跟随、往回拖暂停、「跟随」回到现在；导航「运行中」面板深链到运行页。
+
+### 第 3 批之后的附加 PR：回边重入等待环体收束
+
+`reenter()` 今天把回边下游的全部节点直接重置为 pending，不看 `running` 表：环体扇出时，一条快分支
+满足回边、另一条慢分支还在跑，调度器就会用同一个节点 id 启动慢分支的下一轮、替换掉正在跟踪的
+promise，先前那次完成写进的是已经代表另一轮的状态——轮次号按节点递增只避免了唯一键冲突，避免
+不了这种串轮。这是早于本次清理的引擎行为，轮次表让它可见；作为紧随第 3 批的独立 PR 处理：
+回边触发时若受影响的节点里还有在跑的，把重入挂起，等它们全部收束（各自按本轮写终态与轮次行）
+再重置、再推进轮次；`runner.test.ts` 加「扇出环体、一条慢分支仍在跑时回边触发」用例，断言慢分支的
+完成落在它自己的轮次、下一轮在它收束后才开始、轮次行无串轮；DESIGN.md 引擎 spec 与 AGENTS.md
+「回边」那句同步。
 
 ## 第 4 批：监控台收口
 
