@@ -1004,7 +1004,10 @@ test.describe("运行列表筛选", () => {
     await page.goto(`/runs?workflowId=${listFixture.workflowId}`);
     const today = localDate(listFixture.apiStartedAt);
 
+    // 两个日期各等一次 URL 落地再填下一个：两次 router.replace 挤在同一瞬间时，
+    // 后一次可能在前一次的导航尚未提交时被吞掉（CI 与本机高负载下都撞到过），人手不会这么快。
     await page.getByTestId("runs-filter-from").fill(today);
+    await page.waitForURL((url) => url.searchParams.has("from"));
     await page.getByTestId("runs-filter-to").fill(today);
     await page.waitForURL((url) => url.searchParams.has("from") && url.searchParams.has("to"));
 
