@@ -212,7 +212,10 @@
   （`?status=running&pageSize=100`）、`src/app/workflows/page.tsx`（同上）、`src/app/monitor/page.tsx`
   （最近失败）、`src/app/monitor/trace/page.tsx`（运行下拉）、`src/app/monitor/logs/page.tsx`（运行
   筛选下拉）、`src/app/workflows/[id]/editor.tsx`（`runsInFlight` 轮询）——后四者在第 3、4 批才删除，
-  本批只改读法保持绿。合并前 `rg -n '"/api/runs' src` 逐个核对没有漏网的数组读法。
+  本批只改读法保持绿；`src` 之外的消费者同样要改：`scripts/run-resume.ts`（付费验收按数组
+  `history.find`）、`e2e/workflow-settings.spec.ts` 与 `e2e/parallel-runs.spec.ts` 的 teardown、
+  `e2e/monitor.spec.ts` 的 Trace 下拉断言。合并前 `rg -n '"/api/runs' src e2e scripts` 逐个核对没有
+  漏网的数组读法。
 
 **页面 `/runs`**（`src/app/runs/page.tsx` 重写）
 
