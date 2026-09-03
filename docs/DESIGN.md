@@ -57,7 +57,7 @@ src/
 - 运行之间并行且互相独立：同一个工作流可同时发起多次运行，跨运行状态一律按 runId 隔离（工作区目录、子进程、globalThis 上的取消/进程/输入表）。唯一的准入闸门在 `startRun`：同时 running 的运行数达 `MAX_CONCURRENT_RUNS`（16）即返回 429 而不排队——每个运行是一整个 node+tsx+dsh 子进程，队列归外部调用方管。仓库内付费批量脚本实行全有或全撤：任一项被拒时取消并等齐同批已经受理的运行后才报错。
 - 运行页是看一次运行的唯一地方（ADR-0018）：`/runs/<id>` 只读画受理时冻结进 `runs.graph` 的图（从不回查 `workflow_nodes` / `workflow_edges`，早于该决定的运行拿到空图，同一条渲染路径），底部时间轴一节点一行、一轮一段（段来自 `run_node_rounds`），事件按 `run_events.session_id` 落在所属段上；单一时间光标经纯函数 `visualsAt(t)` 推出任一时刻每个节点处于哪一轮、什么状态、哪些连线已激活，进行中默认钉在「现在」跟 SSE、往回拖即暂停跟随，已结束默认停在 `finishedAt`，事件被清理后退化为轮次级；点节点开抽屉看**光标所在那一轮**的轨迹、输入输出与快照。多路并行的切换在导航与运行列表上：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running&pageSize=100`，一页取完不翻页），每一路深链 `/runs/<runId>`；工作流卡片的「运行中」徽标链到按该工作流筛选的运行列表。编辑器只编排与发起——运行对话框受理成功即跳 `/runs/<runId>`，画布上没有运行条、没有并行切换器、没有 `?runId=` 深链。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。全部输入物化到 `workspace/inputs/<节点id>/`——文件拷原件，文字物化为 `<节点名>.md`、JSON 为 `<节点名>.json`，提示里只给路径不内联（ADR-0012）；Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
-- 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`，每条 `run_events` 行带 `session_id`（`events.ts` 的通用落库与 `action.ts` 自插的 `usage` 事件两处都写），事件据此归到轮；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
+- 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`，每条 `run_events` 行带 `session_id`（`events.ts` 的通用落库与 `action.ts` 自插的 `usage` 事件两处都写），事件据此归到轮；运行页那条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
 - 专用工作流调用入口可注册完成门禁；门禁核对最终产物后，引擎在同一事务内把完成证据写进 run 元数据、把精确 UTF-8 结果写进 `run_results`，随后才把运行标为 success。工作区与事件清理不删除持久业务结果；删除 run 时由外键级联删除。
 - 清理的保留分层（ADR-0018）：轮次行分骨架（轮次、会话、起止、终态、出口、错误）与重载荷（`inputs` / `outputs` / `snapshot`）。events 目标删 `run_events`（按事件自己的 `ts` 够龄），并把**够龄运行**的轮次行与 `run_nodes` 行上那三个重载荷列一起置空（`run_nodes` 上那三列是最新一轮的副本，不一起清就仍会整行经 `/api/runs/[id]` 返回），**保留骨架**——回放退化到轮次级仍要有依据；runs 目标与单条删除才随 `runs` 级联删掉整行。置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不按「该运行有够龄事件行」算：免费的输入→输出运行与首个事件之前就失败的 Action 都没有 `run_events` 行，按事件推运行集合会把它们的重载荷永远留在库里。预览与真做共用同一份统计，两者报出的行数逐字相同。快照被清空后轨迹面板退回显示技能 slug，是这条策略的既定代价。
 
@@ -215,9 +215,8 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   run_events，正文在 sessions/*.jsonl 与轨迹面板）；带 `error` 的 `compaction/end` 落
   `status: "error"`，正常关闭只是释放锁、不记；`compaction/prune` 落
   `{ op: "prune", status: "ok", shadowedNodes, shadowedTokenCount }`。以 `surfaceOp.op === "replace"`
-  进入表层的 `tool/result` 是裁剪副本，原始结果已经落库，不再落第二条 tool 事件。运行详情事件
-  日志与监控日志把 compaction 渲染为一行「上下文已压缩：…」（`compactionEventLine`），画布运行条
-  忽略它。
+  进入表层的 `tool/result` 是裁剪副本，原始结果已经落库，不再落第二条 tool 事件。compaction
+  事件成行展示只在 Action 轨迹面板（见下段的轨迹投影）。
   轨迹投影把一次压缩的完整生命周期合成一条 context 记录：`compaction/start` 开锁、
   `compaction/summary` 记录摘要与调用事实、紧随其后带 `source.plugin === "compact"` 的 replace
   `user/message` 才是模型此后真正看到的检查点、`compaction/end` 释放锁；记录带摘要、替换后的
@@ -231,7 +230,7 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   工具调用与结果可见。
   正常会话与隔离会话都用会话前节点基线幂等结算；节点累计与 usage 事件任一写入失败，
   都保留结算状态并在子进程退出后持续重试，不能只留数字而永久缺失事件。
-  DeepSeek 的 `outputTokens` 已含 reasoning；运行详情、历史 API、画布运行条、轨迹与监控汇总
+  DeepSeek 的 `outputTokens` 已含 reasoning；运行详情、历史 API、画布运行条与轨迹
   均只把 input/output/cacheRead/cacheWrite 计入总 token，reasoning 只保留为拆分明细。
   运行详情展开某个 Action 时，从数据库记录的 `runDir` 枚举 `nodeId` 与 `nodeId#N` 会话，使用
   dsh 公共 codec 解包 chunk 行，再按回合与步骤折叠、按 `callId` 配对 Tool 调用与结果。界面只

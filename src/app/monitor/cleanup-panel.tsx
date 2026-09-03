@@ -10,7 +10,6 @@
 
 import { useCallback, useState } from "react";
 import { formatDateTime } from "@/app/runs/lib";
-import { Num, Panel } from "../ui";
 import {
   asCleanupResult,
   formatBytes,
@@ -18,6 +17,7 @@ import {
   type CleanupResult,
   type CleanupTarget,
 } from "./lib";
+import { Num, Panel } from "./ui";
 
 const CONFIRM_WORD = "确认删除";
 
@@ -45,7 +45,7 @@ const SPECS: TargetSpec[] = [
     title: "事件明细",
     what: "删除 run_events 中早于 N 天的事件行（文本增量、工具调用、会话错误/空闲）。",
     impact:
-      "运行与节点状态、快照、用量全部保留，但这些运行的事件日志会变成空——日志检索里查不到，运行页的回放退化到轮次级。",
+      "运行与节点状态、快照、用量全部保留，但这些运行的事件日志会变成空——运行页的回放退化到轮次级。",
     defaultDays: 30,
   },
   {
@@ -81,8 +81,8 @@ export function CleanupPanel({
       <Panel
         title="手动清理"
         subtitle="本版没有任何自动/定时清理，三项都要人工触发"
-        right={<span className="font-mono text-[11px] text-red-400/80">删除不可撤销</span>}
-        bodyClassName="divide-y divide-zinc-800"
+        right={<span className="font-mono text-[11px] text-red-600">删除不可撤销</span>}
+        bodyClassName="divide-y divide-zinc-200"
       >
         {SPECS.map((spec) => (
           <CleanupItem
@@ -163,14 +163,14 @@ function CleanupItem({
     <div data-testid="cleanup-item" data-target={spec.key} className="px-4 py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-medium text-zinc-100">{spec.title}</h3>
+          <h3 className="text-sm font-medium text-zinc-800">{spec.title}</h3>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-zinc-500">{spec.what}</p>
         </div>
         <div
           className={`shrink-0 rounded border px-2.5 py-1 font-mono text-[11px] ${
             warn
-              ? "border-amber-700/60 bg-amber-950/40 text-amber-300"
-              : "border-zinc-700 bg-zinc-950 text-zinc-400"
+              ? "border-amber-200 bg-amber-50 text-amber-700"
+              : "border-zinc-200 bg-zinc-50 text-zinc-600"
           }`}
         >
           当前占用 <Num>{usageText}</Num>
@@ -178,7 +178,7 @@ function CleanupItem({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-2 text-xs text-zinc-400">
+        <label className="flex items-center gap-2 text-xs text-zinc-600">
           保留最近
           <input
             type="number"
@@ -189,11 +189,11 @@ function CleanupItem({
               const v = Number(e.target.value);
               changeDays(Number.isFinite(v) && v >= 1 ? Math.floor(v) : 1);
             }}
-            className="w-20 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-right font-mono text-xs text-zinc-100 outline-none focus:border-zinc-500"
+            className="w-20 rounded border border-zinc-300 bg-white px-2 py-1 text-right font-mono text-xs text-zinc-800 outline-none focus:border-zinc-500"
           />
           天
         </label>
-        <span className="font-mono text-[11px] text-zinc-600">
+        <span className="font-mono text-[11px] text-zinc-500">
           截止 {formatDateTime(cutoff)} 之前
         </span>
 
@@ -201,7 +201,7 @@ function CleanupItem({
           type="button"
           onClick={() => void runPreview()}
           disabled={busy !== null}
-          className="rounded border border-zinc-700 bg-zinc-800 px-3 py-1 text-xs text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-50"
+          className="rounded border border-zinc-300 bg-white px-3 py-1 text-xs text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50"
         >
           {busy === "preview" ? "预览中…" : "预览影响"}
         </button>
@@ -212,14 +212,14 @@ function CleanupItem({
             if (!preview && busy === null) void runPreview();
           }}
           disabled={busy !== null}
-          className="rounded border border-red-900 bg-red-950/60 px-3 py-1 text-xs text-red-300 transition-colors hover:bg-red-900/60 disabled:opacity-50"
+          className="rounded border border-red-300 bg-red-50 px-3 py-1 text-xs text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50"
         >
           执行清理
         </button>
       </div>
 
       {preview && (
-        <p className="mt-2 font-mono text-xs text-zinc-300">
+        <p className="mt-2 font-mono text-xs text-zinc-700">
           预览：将删除 {formatCount(preview.items)} 项
           {preview.bytes > 0 && ` · 释放约 ${formatBytes(preview.bytes)}`}
           {preview.items === 0 && "（没有符合条件的数据，无需清理）"}
@@ -228,7 +228,7 @@ function CleanupItem({
       )}
 
       {result && (
-        <p className="mt-2 font-mono text-xs text-emerald-400">
+        <p className="mt-2 font-mono text-xs text-emerald-700">
           已清理 {formatCount(result.items)} 项
           {result.bytes > 0 && ` · 释放 ${formatBytes(result.bytes)}`}
           {result.note && <span className="text-zinc-500"> · {result.note}</span>}
@@ -236,7 +236,7 @@ function CleanupItem({
       )}
 
       {error && (
-        <p className="mt-2 rounded border border-red-900 bg-red-950/50 px-3 py-2 font-mono text-xs text-red-300">
+        <p className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 font-mono text-xs text-red-700">
           {error}
         </p>
       )}
@@ -280,29 +280,29 @@ function ConfirmDialog({
   const ready = word.trim() === CONFIRM_WORD && !previewing && !running;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-6">
       <div
         role="dialog"
         aria-modal="true"
         aria-label={`确认清理 ${spec.title}`}
-        className="w-full max-w-lg rounded-lg border border-red-900/70 bg-zinc-900 shadow-xl"
+        className="w-full max-w-lg rounded-lg border border-red-200 bg-white shadow-xl"
       >
-        <header className="border-b border-zinc-800 px-5 py-3">
-          <h3 className="text-sm font-medium text-red-300">确认清理：{spec.title}</h3>
+        <header className="border-b border-zinc-200 px-5 py-3">
+          <h3 className="text-sm font-medium text-red-700">确认清理：{spec.title}</h3>
         </header>
 
-        <div className="space-y-3 px-5 py-4 text-xs leading-5 text-zinc-300">
+        <div className="space-y-3 px-5 py-4 text-xs leading-5 text-zinc-700">
           <dl className="grid grid-cols-[6rem_1fr] gap-y-1.5 font-mono text-[11px]">
             <dt className="text-zinc-500">清理项</dt>
-            <dd className="text-zinc-200">
+            <dd className="text-zinc-800">
               {spec.title}（{spec.key}）
             </dd>
             <dt className="text-zinc-500">保留窗口</dt>
-            <dd className="text-zinc-200">最近 {days} 天</dd>
+            <dd className="text-zinc-800">最近 {days} 天</dd>
             <dt className="text-zinc-500">删除范围</dt>
-            <dd className="text-zinc-200">{formatDateTime(cutoff)} 之前</dd>
+            <dd className="text-zinc-800">{formatDateTime(cutoff)} 之前</dd>
             <dt className="text-zinc-500">影响面</dt>
-            <dd className="text-zinc-200">
+            <dd className="text-zinc-800">
               {previewing ? (
                 <span className="text-zinc-500">正在计算…</span>
               ) : preview ? (
@@ -312,12 +312,12 @@ function ConfirmDialog({
                   {preview.note && <span className="text-zinc-500"> · {preview.note}</span>}
                 </>
               ) : (
-                <span className="text-amber-400">预览失败，影响面未知</span>
+                <span className="text-amber-700">预览失败，影响面未知</span>
               )}
             </dd>
           </dl>
 
-          <p className="rounded border border-red-900/70 bg-red-950/40 px-3 py-2 text-red-200">
+          <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-red-700">
             {spec.impact}
             <br />
             <strong className="font-semibold">
@@ -330,25 +330,25 @@ function ConfirmDialog({
           )}
 
           <label className="block">
-            <span className="text-zinc-400">
-              请输入 <code className="text-zinc-100">{CONFIRM_WORD}</code> 以确认你已理解上述影响：
+            <span className="text-zinc-600">
+              请输入 <code className="text-zinc-900">{CONFIRM_WORD}</code> 以确认你已理解上述影响：
             </span>
             <input
               autoFocus
               value={word}
               onChange={(e) => setWord(e.target.value)}
               placeholder={CONFIRM_WORD}
-              className="mt-1.5 w-full rounded border border-zinc-700 bg-zinc-950 px-3 py-1.5 font-mono text-xs text-zinc-100 outline-none focus:border-red-700"
+              className="mt-1.5 w-full rounded border border-zinc-300 bg-white px-3 py-1.5 font-mono text-xs text-zinc-800 outline-none focus:border-red-400"
             />
           </label>
         </div>
 
-        <footer className="flex justify-end gap-2 border-t border-zinc-800 px-5 py-3">
+        <footer className="flex justify-end gap-2 border-t border-zinc-200 px-5 py-3">
           <button
             type="button"
             onClick={onCancel}
             disabled={running}
-            className="rounded border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-50"
+            className="rounded border border-zinc-300 bg-white px-3 py-1.5 text-xs text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50"
           >
             取消
           </button>
@@ -356,7 +356,7 @@ function ConfirmDialog({
             type="button"
             onClick={onConfirm}
             disabled={!ready}
-            className="rounded bg-red-700 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:bg-red-900/60 disabled:text-red-300/60"
+            className="rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-red-200 disabled:text-red-400"
           >
             {running ? "清理中…" : "确认删除"}
           </button>

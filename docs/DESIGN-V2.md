@@ -4,7 +4,7 @@ v1 与现行 DeepSeek Harness 引擎契约见 [DESIGN.md](./DESIGN.md)，领域�
 [../CONTEXT.md](../CONTEXT.md)。文件夹决策见 ADR-0005；ADR-0010 已推翻 ADR-0004，但节点自带
 定义的迁移尚未实现，因此本文涉及共享 Action 的部分只描述当前代码，不是目标领域模型。
 
-v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 监控页。本文件是三阶段共同的接口基准。
+v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 系统健康页。本文件是三阶段共同的接口基准。
 
 ## 已定的地基（schema 已 push，勿改）
 
@@ -78,7 +78,7 @@ refCount: number   // 被引用次数，见第三节
 |---|---|---|
 | `/api/references?kind=&id=` | GET | 谁在引用这个实体 |
 | `/api/references/counts?kind=` | GET | `{ [entityId]: number }`，供列表页批量取引用数 |
-| `/api/references/orphans?kind=` | GET | 未被任何人引用的实体清单（监控页孤儿检测复用） |
+| `/api/references/orphans?kind=` | GET | 未被任何人引用的实体清单（系统健康页的孤儿检测复用） |
 | `/api/references/impact` | POST | 改动前的影响预览，见下 |
 
 `GET /api/references` 响应：
@@ -199,6 +199,8 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 - 阶段二：节点面板按文件夹路径分组（单归属，未归类沉底）+ 关键词搜索；双击节点 → 复用 Action 编辑器（同一组件）+ ReferencesPanel +
   影响预览 + 「复制为新 Action 并替换本节点」；五态视觉 + 边流动动画 + 自动跟随 + 取消运行
   （`session/cancel` + 标记 cancelled + 下游 skipped）。
-- 阶段三：`/monitor` 四标签（总览 / 实时会话 / 日志检索 / 系统健康），
-  全局 SSE `/api/monitor/stream`，手动清理（工作区 / 事件明细 / 旧运行）与孤儿检测。
-  左下角入口，与主导航分区。
+- 阶段三：`/monitor` 系统健康一页（引擎就绪、运行子进程、数据库与磁盘占用、孤儿运行与孤儿实体、
+  手动清理）。路由只有 `GET /api/monitor/health` 与 `POST /api/monitor/cleanup` 两条；
+  清理三项（工作区 / 事件明细 / 旧运行）一律先 dryRun 预览再二次确认。用工作台的普通浅色外壳，
+  左下角入口「系统健康」，与主导航分区。跨运行的实时与检索不在这里：一次运行看 `/runs/<id>`
+  （ADR-0018），token 与费用的归集看 `/runs` 列表的筛选汇总。

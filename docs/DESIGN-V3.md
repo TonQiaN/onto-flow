@@ -15,7 +15,7 @@
 | 1 删采购演示与归档链条；seed 只种平台级；e2e 自建夹具 | `cleanup/1-remove-procurement` | #21 | 待合并（stacked 于 #20） |
 | 2 运行列表：信封、来源读时推导、筛选与用量汇总 | `cleanup/2-runs-list` | #22 | 待合并（stacked 于 #21） |
 | 3 运行页：`graph` 列、只读画布、回放、抽屉；编辑器剥离跟随 | `cleanup/3-run-page` | 待补 | 待合并（stacked 于 #22） |
-| 4 监控台收口为系统健康一页 | `cleanup/4-monitor-health-only` | — | 未开始 |
+| 4 监控台收口为系统健康一页 | `cleanup/4-monitor-health-only` | 待补 | 进行中 |
 | 5 `find-simplifications` 第一轮 | `cleanup/5-simplifications-round-1` | — | 未开始 |
 
 顺序 0 → 0a → 0b → 1 → 2 → 3 → 4 → 5；1 与 2 互不依赖，可并行开发、按序合并；3 依赖 2；
