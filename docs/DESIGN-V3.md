@@ -34,8 +34,8 @@
   AGENTS.md 只陈述仓库**已经**遵守的规则：某批落地前，不把它的规则提前写进去。
 - **CI 作业名不改**：`main` 的分支保护按作业名 `typecheck · vitest · build` 与 `playwright` 认必过
   检查，只在作业里加步骤。
-- **付费脚本**只在本文点名处跑（第 3 批收尾 `smoke-engine`）；跑之前先停 `next dev`——
-  `reconcileOrphanRuns` 会把外部进程的 running 运行失败化。
+- **付费脚本**只在本文点名处跑（第 3 批收尾的 `smoke-engine` 与 `smoke-graph` 两条）；跑之前先停
+  `next dev`——`reconcileOrphanRuns` 会把外部进程的 running 运行失败化。
 - **验收口径**：每批至少 `npm run check`（0b 起含 lint 与 fmt:check）+ `npm run build`（触及
   `src/app/` 时）+ 本批点名的 e2e spec；界面批次（2、3、4）另在真实 Chrome 里按「Chrome 验收」
   清单走一遍并把结论写进 PR。
@@ -182,13 +182,12 @@
 
 ## 第 2 批：运行列表
 
-**schema**：`runs.source: text("source").notNull().default("workflow")`；`startResolvedRun` 在
-`runs` insert 里从 `invocation.source` 写入（`workflow` / `resume-match-api`），`imports.invocation`
-原样保留（专用 GET 仍凭它核对来源证明）。默认值只是 SQLite 给非空新列的要求，**不是**历史行的
-来源：凡是装着运行历史的库（开发机、部署机），`db:push` 之后紧接着执行一次
-`sqlite3 data/ontoflow.db "UPDATE runs SET source = coalesce(json_extract(imports, '$.invocation.source'), 'workflow')"`
-把每一行的来源从它自己的来源证明里填回去；这是一次性的运维步骤，写在本批 PR 描述与 README 的
-升级说明里，不进代码。CI 的库是新建的，没有历史行。
+**来源不加列**：受理来源已经是 `runs.imports.invocation.source`（`workflow` / `resume-match-api`，
+专用 GET 凭它核对来源证明），再加一列是同一事实的第二份表示，回填历史行又是仓库不做的迁移。
+`GET /api/runs` 的 `items[].source`、`source=` 筛选与 `summary` 一律读时推导：
+`coalesce(json_extract(runs.imports, '$.invocation.source'), 'workflow')`——没有 `invocation` 的行只能
+是调用入口出现之前由画布发起的，coalesce 是语义不是兼容。该文件本就在 raw-sql 允许名单里；
+`runs` 表只有几千行量级，不需要索引。schema 不动。
 
 **API `GET /api/runs`**（`src/app/api/runs/route.ts`，仍在 raw-sql 允许名单）
 
