@@ -887,7 +887,7 @@ async function executeRun(
           usageError instanceof Error ? usageError.message : String(usageError)
         }`;
         console.error("[engine] 退出后的用量结算失败", runId, usageError);
-        scheduleUsageSettlementRetry(runId);
+        void scheduleUsageSettlementRetry(runId);
       }
       disposalFailures.delete(runId);
     } catch (err) {
@@ -929,7 +929,7 @@ async function executeRun(
           tx.update(runs)
             .set({
               imports: {
-                ...(row.imports ?? {}),
+                ...row.imports,
                 completion: completion.evidence,
               },
             })

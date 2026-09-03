@@ -24,7 +24,7 @@ export function skillFilePathProblem(path: string): string | null {
   if (path === "") return "资源文件路径不能为空";
   if (path.length > SKILL_FILE_PATH_MAX_LENGTH)
     return `资源文件路径「${path.slice(0, 40)}…」超过 ${SKILL_FILE_PATH_MAX_LENGTH} 个字符`;
-  // 控制字符与 NUL 在文件名里是货真价实的坑
+  // oxlint-disable-next-line no-control-regex -- 控制字符与 NUL 在文件名里是货真价实的坑
   if (/[\u0000-\u001f\u007f]/.test(path)) return "资源文件路径不能含控制字符";
   if (path.startsWith("/")) return `资源文件路径「${path}」不能是绝对路径`;
   if (path.includes("\\")) return `资源文件路径「${path}」只能用 / 分段`;

@@ -105,7 +105,7 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
   // ---------- 加载 ----------
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         // 库列表是分页信封（DESIGN-V2 第一节），集合要全量，翻到底而不是只取第一页
         const [wfRes, settingsRes, skillRes, toolRes, actRes] = await Promise.all([

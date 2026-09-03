@@ -9,9 +9,9 @@
 
 | 批 | 分支 | PR | 状态 |
 |---|---|---|---|
-| 0 共识文档（CONTEXT 术语、ADR-0018/0019、本文） | `cleanup/0-consensus-docs` | — | 进行中 |
-| 0a 格式化基线 | `cleanup/0a-format-baseline` | — | 未开始 |
-| 0b lint / knip / CI / 记录树 / skill / proposed 记录 | `cleanup/0b-toolchain-and-notes` | — | 未开始 |
+| 0 共识文档（CONTEXT 术语、ADR-0018/0019、本文） | `cleanup/0-consensus-docs` | #18 | 待合并 |
+| 0a 格式化基线 | `cleanup/0a-format-baseline` | #19 | 待合并（stacked 于 #18） |
+| 0b lint / knip / CI / 记录树 / skill / proposed 记录 | `cleanup/0b-toolchain-and-notes` | — | 进行中（stacked 于 #19） |
 | 1 删采购演示与归档链条；seed 只种平台级；e2e 自建夹具 | `cleanup/1-remove-procurement` | — | 未开始 |
 | 2 运行列表：信封、`source` 列、筛选与用量汇总 | `cleanup/2-runs-list` | — | 未开始 |
 | 3 运行页：`graph` 列、只读画布、回放、抽屉；编辑器剥离跟随 | `cleanup/3-run-page` | — | 未开始 |
@@ -77,10 +77,15 @@
   `plugins: ["typescript", "react", "nextjs", "import"]`；`categories.correctness: "error"`；
   显式 error：`typescript/await-thenable`（机械化「never `await db.…`」）、
   `typescript/no-floating-promises`、`typescript/no-misused-promises`、`react/rules-of-hooks`、
-  `react/exhaustive-deps`；`ignorePatterns` 同 `.oxfmtrc.json`。`overrides` 只为
-  `*.test.ts` / `e2e/**` 放宽确有必要的规则，每条放宽带一行注释说明为什么。
-- 脚本：`"lint": "oxlint --type-aware --max-warnings 0"`。首轮把所有报告逐条修掉；确实是误报的
-  用行内 `// oxlint-disable-next-line <rule> -- 原因` 关闭，不整文件关闭、不在配置里删规则。
+  `react/exhaustive-deps`；`ignorePatterns` 同 `.oxfmtrc.json`（Markdown 不在 lint 范围，不必排除）。
+  react 插件 correctness 类里的 **React Compiler 规则族**（`set-state-in-effect` / `purity` / `refs` /
+  `immutability` / `preserve-manual-memoization`）在配置里显式 `off` 并写明理由：仓库的取数模式
+  （`"use client"` + useEffect 里 fetch，AGENTS.md 规定）在 effect 里同步写 loading 态，34 处被判为
+  级联渲染；采用 Compiler 的编程模型是另一个决定，不在门禁批次里顺手做。`.oxlintrc.json` 允许
+  `//` 注释（已验证），每条关闭都带理由。
+- `options.typeAware: true` 与 `options.maxWarnings: 0` 写在配置里，脚本只是 `"lint": "oxlint"`，
+  编辑器插件与 CI 跑同一套。首轮把其余报告逐条修掉；确实是有意为之的（控制字符正则、测试里的
+  `new Function` 装载种子源码）用行内 `// oxlint-disable-next-line <rule> -- 原因` 关闭，不整文件关闭。
 - `npm run check` 改为 `npm run typecheck && npm run lint && npm run fmt:check && npm test`。
 - CI `check` 作业（名字不变）在 `npm run typecheck` 后加 `npm run lint`、`npm run fmt:check` 两步。
 

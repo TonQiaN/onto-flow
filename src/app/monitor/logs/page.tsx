@@ -101,7 +101,8 @@ function pretty(payload: Record<string, unknown> | null): string {
   try {
     return JSON.stringify(payload, null, 2);
   } catch {
-    return String(payload);
+    // 走到这里说明 payload 有环或含 BigInt；String() 只会给出 [object Object]，不如直说
+    return "（payload 无法序列化）";
   }
 }
 

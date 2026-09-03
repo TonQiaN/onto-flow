@@ -64,6 +64,7 @@ describe("运行 Tool 能力", () => {
     expect(entry.id).toBe("tool-abc-123");
     expect(entry.modulePath).toBe(path.join(ws.pluginsDir, "tool-abc-123.ts"));
     expect(entry.executeModulePath).toBe(path.join(ws.pluginsDir, "tool-abc-123.execute.ts"));
+    // oxlint-disable-next-line no-control-regex -- 断言的就是「插件路径只含 ASCII」，控制字符属于合法 ASCII 区间
     expect(entry.modulePath).toMatch(/^[\x00-\x7f]+$/);
     expect(fs.readFileSync(entry.executeModulePath, "utf8")).toBe(code);
     const wrapper = fs.readFileSync(entry.modulePath, "utf8");

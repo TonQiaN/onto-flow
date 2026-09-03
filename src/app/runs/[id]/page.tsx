@@ -96,7 +96,7 @@ export default function RunDetailPage() {
       };
     };
 
-    (async () => {
+    void (async () => {
       try {
         const res = await fetch(`/api/runs/${id}`, { cache: "no-store" });
         const data = await res.json();

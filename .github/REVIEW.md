@@ -6,7 +6,8 @@
 
 ## 0. 门槛先看（PR 描述「跑了哪些命令」一节）
 
-- [ ] 写明跑过 `npm run check`（typecheck + vitest）。仓库没有 CI 之外的任何钩子，命令就是全部门槛（Checks）
+- [ ] 写明跑过 `npm run check`（typecheck + lint + fmt:check + vitest）。仓库没有 CI 之外的任何钩子，命令就是全部门槛（Checks）
+- [ ] 关掉一条 lint 规则只在 `.oxlintrc.json` 里带理由地关，行内 `oxlint-disable-next-line` 必须带 `-- 理由`；没有整文件关闭（Checks / ADR-0019）
 - [ ] diff 触及 `src/app/`、`next.config.ts` 或 `tsconfig.json` → 写明跑过 `npm run build`；`build` 抓得到 `typecheck` 抓不到的路由与配置破损（Checks）
 - [ ] 用户可见的改动 → 跑了**对应的那一个** e2e spec 并写明是哪个，不是「跑了全套」也不是没跑（Checks）
 - [ ] 触及 harness 接缝（会话、事件、用量、取消、组合）→ 写明是否跑了付费冒烟（`smoke-harness` / `smoke-engine`）与结论；没跑要说为什么可以不跑（The harness seam）
@@ -103,3 +104,4 @@
 - [ ] 被取代的 ADR 原地留着，新旧互相链接（ADR-0003 ↔ ADR-0005 的写法）
 - [ ] 代码里引用 ADR 用裸 id，写在被该决定约束的那一行的注释里（`（ADR-0005）`）
 - [ ] 改了 AGENTS.md → 只陈述仓库已经遵守的规则；代码不再遵守的那条要删掉，不是改软
+- [ ] 删减类改动有对应的 `docs/simplifications/` 记录：实施 PR 链接它、合并时移到 `done/` 并补「落地」；否决理由留在 `rejected/`，不回流 AGENTS.md（Decisions and the glossary）

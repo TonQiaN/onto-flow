@@ -32,7 +32,6 @@ import {
   type SessionOutputResult,
   type SessionPromptParams,
   type SessionPromptResult,
-  type ReasoningEffortLevel,
 } from "./types";
 
 interface SessionRecord {
@@ -169,7 +168,7 @@ export class OntoflowRpcServer {
 
   private async performShutdown(): Promise<Record<string, never>> {
     this.shuttingDown = true;
-    await Promise.allSettled([...this.sessionCreations.values()]);
+    await Promise.allSettled(this.sessionCreations.values());
     this.sessionCreations.clear();
     const records = [...this.sessions.values()];
     this.sessions.clear();

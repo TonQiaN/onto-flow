@@ -6,7 +6,7 @@
 
 ## 跑了哪些命令
 
-- [ ] `npm run check`（typecheck + vitest）
+- [ ] `npm run check`（typecheck + lint + fmt:check + vitest）
 - [ ] `npm run build`（触及 `src/app/`、`next.config.ts`、`tsconfig.json` 时必跑）
 - [ ] e2e：`npx playwright test e2e/<哪一个>.spec.ts` ← 写明是哪个 spec；没有用户可见改动写「不适用」
 - [ ] 付费冒烟：`smoke-harness` / `smoke-engine` / 都没跑 ← 触及 harness 接缝时写明跑了哪个与结论

@@ -8,7 +8,6 @@ import type { ValidationIssue } from "@/lib/graph";
 import {
   COMPOSITION_TOGGLE_KEYS,
   estimateTokens,
-  type CompositionToggleKey,
   type CompositionToggles,
   type WorkflowSettings,
 } from "@/lib/workflow-settings";

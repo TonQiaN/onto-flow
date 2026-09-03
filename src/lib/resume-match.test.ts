@@ -219,6 +219,7 @@ describe("简历匹配 JSON 结果契约", () => {
   });
 
   it("嵌入 Tool 的函数源码只需携带转译器的 __name 辅助函数", () => {
+    // oxlint-disable-next-line typescript/no-implied-eval -- 测的就是「嵌入 Tool 的函数源码字符串可独立执行」，只能把它装回函数
     const restored = Function(
       `const __name = (target) => target; return (${validateResumeMatchResult.toString()})`,
     )() as typeof validateResumeMatchResult;

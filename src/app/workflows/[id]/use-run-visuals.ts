@@ -541,7 +541,7 @@ export function useRunVisuals(): RunVisualsController {
       if (!node) return;
       const width = node.measured?.width ?? node.width ?? 240;
       const height = node.measured?.height ?? node.height ?? 120;
-      setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+      void setCenter(node.position.x + width / 2, node.position.y + height / 2, {
         zoom: getZoom(),
         duration: durationMs,
       });
