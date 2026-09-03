@@ -409,7 +409,9 @@ async function expectMetricHasValue(page: Page, label: string): Promise<string> 
  *
  * 用请求拦截而不是 waitForResponse + json()：进行中的自动刷新紧接着再发一次同样的请求时，
  * 浏览器会丢掉上一份响应体，Playwright 报 `Network.getResponseBody` 协议错误。这里由测试
- * 自己取回响应、留下正文、再原样交给页面，页面渲染的就是断言拿到的那一份，没有第二次请求。
+ * 自己取回响应、留下正文、再交给页面，页面渲染的就是断言拿到的那一份。dev 模式下页面会对
+ * 同一接口连发两次（strict mode），两次各自用自己取回的响应 fulfill；捕获之后不 unroute——
+ * 请求还在 fetch 时 unroute 会被 Playwright 按 fallback 放行，随后的 fulfill 就撞上「已处理」。
  */
 async function captureJson<T>(
   page: Page,
@@ -421,31 +423,39 @@ async function captureJson<T>(
   const first = new Promise<void>((resolve) => {
     settle = resolve;
   });
-  const handler = async (route: Route) => {
-    if (route.request().method() !== "GET" || captured) {
-      await route.continue();
-      return;
-    }
-    const res = await route.fetch();
-    const body = await res.text();
-    expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
-    captured = { value: JSON.parse(body) as T };
-    await route.fulfill({ response: res, body, headers: res.headers() });
-    settle();
-  };
-  // route / unroute 按同一个匹配器引用配对，否则拦截会留到页面生命周期结束
-  const matcher = (url: URL) => matches(url);
-  await page.route(matcher, handler);
+  await page.route(
+    (url) => matches(url),
+    async (route: Route) => {
+      if (route.request().method() !== "GET" || captured) {
+        await route.continue();
+        return;
+      }
+      const res = await route.fetch();
+      const body = await res.text();
+      if (!captured) {
+        expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
+        captured = { value: JSON.parse(body) as T };
+        settle();
+      }
+      // 只回传状态与内容类型：原响应头里的 content-encoding 与已解码的正文对不上
+      await route.fulfill({
+        status: res.status(),
+        contentType: res.headers()["content-type"] ?? "application/json",
+        body,
+      });
+    },
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await action();
     await Promise.race([
       first,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("15s 内没有截获到匹配的 GET 请求")), 15_000),
-      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("15s 内没有截获到匹配的 GET 请求")), 15_000);
+      }),
     ]);
   } finally {
-    await page.unroute(matcher, handler);
+    clearTimeout(timer);
   }
   return captured!.value;
 }
