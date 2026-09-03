@@ -207,7 +207,8 @@
 
 **页面 `/runs`**（`src/app/runs/page.tsx` 重写）
 
-- 顶部筛选：工作流选择器（`GET /api/workflows` 列表，默认全部）、状态、来源（全部 / 画布发起
+- 顶部筛选：工作流选择器（消费 `GET /api/workflows` 的信封并按 `total` / `pageSize` 取齐**每一页**，
+  默认页长只有 30；默认全部）、状态、来源（全部 / 画布发起
   `workflow` / 调用入口 = 其余值，按值分组显示）、时间范围（起止日期，转 epoch 毫秒）。
 - 全部筛选与页码住 URL（`?workflowId=&status=&source=&from=&to=&page=`），与库页面
   `use-library-query` 同一习惯（可抽公共 hook，不复制）。
