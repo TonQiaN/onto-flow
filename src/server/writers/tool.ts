@@ -131,12 +131,7 @@ export function writeTool(id: string, raw: unknown): WriteResult<ToolRow> {
   const p = parsed.data;
 
   const row = db.transaction((tx) => {
-    const updated = tx
-      .update(tools)
-      .set(p)
-      .where(eq(tools.id, id))
-      .returning()
-      .get();
+    const updated = tx.update(tools).set(p).where(eq(tools.id, id)).returning().get();
     recordRevision("tool", id, revisionPayload(p), "", tx);
     return updated;
   });

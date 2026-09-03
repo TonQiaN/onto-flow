@@ -29,8 +29,7 @@ function formatUsedBy(usedBy: unknown): string {
     return usedBy
       .map((u) => {
         if (typeof u === "string") return u;
-        if (u && typeof u === "object" && "name" in u)
-          return String((u as { name: unknown }).name);
+        if (u && typeof u === "object" && "name" in u) return String((u as { name: unknown }).name);
         return JSON.stringify(u);
       })
       .join("、");
@@ -39,10 +38,7 @@ function formatUsedBy(usedBy: unknown): string {
 }
 
 /** 从扁平文件夹清单还原带完整路径的 FolderRef（新建默认归属用）；拿不到时返回 null */
-function folderRefFrom(
-  folders: FolderDto[],
-  id: string | null,
-): FolderRef | null {
+function folderRefFrom(folders: FolderDto[], id: string | null): FolderRef | null {
   if (!id) return null;
   const byId = new Map(folders.map((f) => [f.id, f]));
   const target = byId.get(id);
@@ -60,27 +56,15 @@ function folderRefFrom(
 
 export default function ToolsPage() {
   return (
-    <Suspense
-      fallback={<p className="p-8 text-sm text-zinc-400">加载 Tool 库…</p>}
-    >
+    <Suspense fallback={<p className="p-8 text-sm text-zinc-400">加载 Tool 库…</p>}>
       <ToolsLibrary />
     </Suspense>
   );
 }
 
 function ToolsLibrary() {
-  const {
-    q,
-    folder,
-    sort,
-    page,
-    highlight,
-    setQ,
-    setFolder,
-    setSort,
-    setPage,
-    openEntity,
-  } = useLibraryQuery();
+  const { q, folder, sort, page, highlight, setQ, setFolder, setSort, setPage, openEntity } =
+    useLibraryQuery();
 
   const [data, setData] = useState<ListEnvelope<ToolItem> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -161,8 +145,7 @@ function ToolsLibrary() {
   // highlight 定位：列表加载后把高亮卡片滚到视口中央（每个目标只滚一次）
   const scrolledRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!highlight || data === null || scrolledRef.current === highlight)
-      return;
+    if (!highlight || data === null || scrolledRef.current === highlight) return;
     const el = document.getElementById(`entity-${highlight}`);
     if (el) {
       el.scrollIntoView({ block: "center" });
@@ -173,8 +156,7 @@ function ToolsLibrary() {
   const items = data?.items ?? [];
 
   async function remove(tool: ToolItem) {
-    if (!window.confirm(`确认删除 Tool「${tool.name}」？此操作不可撤销。`))
-      return;
+    if (!window.confirm(`确认删除 Tool「${tool.name}」？此操作不可撤销。`)) return;
     setRowError((prev) => ({ ...prev, [tool.id]: "" }));
     try {
       const res = await fetch(`/api/tools/${tool.id}`, { method: "DELETE" });
@@ -260,9 +242,7 @@ function ToolsLibrary() {
                 e.dataTransfer.effectAllowed = "move";
               }}
               className={`rounded-lg border bg-white p-4 ${
-                highlight === tool.id
-                  ? "border-zinc-900 ring-1 ring-zinc-900"
-                  : "border-zinc-200"
+                highlight === tool.id ? "border-zinc-900 ring-1 ring-zinc-900" : "border-zinc-200"
               }`}
             >
               <div className="flex items-start justify-between gap-4">
@@ -276,9 +256,7 @@ function ToolsLibrary() {
                       {tool.publicName}
                     </span>
                   </h2>
-                  <p className="mt-1 text-sm text-zinc-500">
-                    {tool.description || "（无描述）"}
-                  </p>
+                  <p className="mt-1 text-sm text-zinc-500">{tool.description || "（无描述）"}</p>
                 </div>
                 <div className="flex shrink-0 gap-2">
                   <button
@@ -299,9 +277,7 @@ function ToolsLibrary() {
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
                 <FolderBadge folder={tool.folder} onEnter={setFolder} />
                 <RefCount count={tool.refCount} />
-                <span className="text-zinc-400">
-                  更新于 {formatTime(tool.updatedAt)}
-                </span>
+                <span className="text-zinc-400">更新于 {formatTime(tool.updatedAt)}</span>
               </div>
 
               {rowError[tool.id] && (
@@ -316,9 +292,7 @@ function ToolsLibrary() {
         <ToolEditor
           initial={editor.mode === "edit" ? editor.tool : null}
           initialFolder={
-            editor.mode === "edit"
-              ? editor.tool.folder
-              : folderRefFrom(folders, folder)
+            editor.mode === "edit" ? editor.tool.folder : folderRefFrom(folders, folder)
           }
           onClose={() => setEditor(null)}
           onSaved={() => {

@@ -38,9 +38,7 @@ export function LibraryLayout({
       </header>
 
       <div className="flex min-h-0 flex-1 gap-6">
-        {tree && (
-          <aside className="w-60 shrink-0 overflow-hidden">{tree}</aside>
-        )}
+        {tree && <aside className="w-60 shrink-0 overflow-hidden">{tree}</aside>}
 
         <div className="flex min-w-0 flex-1 flex-col">
           {error && (

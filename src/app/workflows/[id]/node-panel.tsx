@@ -9,12 +9,7 @@
  * - 整个面板可折叠，把宽度让给画布。
  */
 import { useMemo, useState } from "react";
-import {
-  actionPorts,
-  typeColor,
-  type ActionItem,
-  type ObjectTypeRow,
-} from "./types";
+import { actionPorts, typeColor, type ActionItem, type ObjectTypeRow } from "./types";
 
 export const ACTION_DRAG_MIME = "application/ontoflow-action";
 
@@ -73,9 +68,7 @@ export function NodePanel({
       (a) =>
         a.name.toLowerCase().includes(keyword) ||
         a.description.toLowerCase().includes(keyword) ||
-        a.ports.some((p) =>
-          `${p.name}${p.objectTypeName}`.toLowerCase().includes(keyword),
-        ),
+        a.ports.some((p) => `${p.name}${p.objectTypeName}`.toLowerCase().includes(keyword)),
     );
   }, [actions, query]);
 
@@ -85,9 +78,7 @@ export function NodePanel({
     const keyword = typeQuery.trim().toLowerCase();
     if (!keyword) return objectTypes;
     return objectTypes.filter(
-      (t) =>
-        t.name.toLowerCase().includes(keyword) ||
-        t.kind.toLowerCase().includes(keyword),
+      (t) => t.name.toLowerCase().includes(keyword) || t.kind.toLowerCase().includes(keyword),
     );
   }, [objectTypes, typeQuery]);
 
@@ -117,9 +108,7 @@ export function NodePanel({
       <div className="flex items-center gap-2 border-b border-zinc-200 px-3 py-2.5">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-zinc-900">节点面板</h2>
-          <p className="mt-0.5 truncate text-[11px] text-zinc-400">
-            点击或拖拽加入画布
-          </p>
+          <p className="mt-0.5 truncate text-[11px] text-zinc-400">点击或拖拽加入画布</p>
         </div>
         <button
           type="button"
@@ -184,9 +173,7 @@ export function NodePanel({
               ))}
               {visibleTypes.length === 0 && (
                 <p className="px-2 py-2 text-xs text-zinc-400">
-                  {objectTypes.length === 0
-                    ? "暂无对象类型"
-                    : "没有匹配的对象类型"}
+                  {objectTypes.length === 0 ? "暂无对象类型" : "没有匹配的对象类型"}
                 </p>
               )}
             </div>
@@ -235,18 +222,12 @@ export function NodePanel({
                   >
                     <span className="w-3">{folded ? "▸" : "▾"}</span>
                     <span className="truncate">{group.label}</span>
-                    <span className="ml-auto tabular-nums">
-                      {group.items.length}
-                    </span>
+                    <span className="ml-auto tabular-nums">{group.items.length}</span>
                   </button>
                   {!folded && (
                     <div className="flex flex-col gap-2">
                       {group.items.map((a) => (
-                        <ActionCard
-                          key={`${group.key}:${a.id}`}
-                          action={a}
-                          onAdd={onAddAction}
-                        />
+                        <ActionCard key={`${group.key}:${a.id}`} action={a} onAdd={onAddAction} />
                       ))}
                     </div>
                   )}
@@ -283,9 +264,7 @@ function ActionCard({
       title={action.description || action.name}
       className="cursor-grab rounded-lg border border-zinc-200 bg-white px-2.5 py-2 text-left shadow-sm transition-all hover:-translate-y-px hover:border-zinc-400 hover:shadow active:cursor-grabbing"
     >
-      <span className="block truncate text-sm font-medium text-zinc-900">
-        {action.name}
-      </span>
+      <span className="block truncate text-sm font-medium text-zinc-900">{action.name}</span>
 
       <span className="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-zinc-500">
         {inputs.length === 0 ? (

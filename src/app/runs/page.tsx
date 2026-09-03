@@ -18,9 +18,7 @@ import { StatusBadge } from "./status-badge";
 
 export default function RunsPage() {
   return (
-    <Suspense
-      fallback={<div className="px-8 py-6 text-sm text-zinc-500">加载中…</div>}
-    >
+    <Suspense fallback={<div className="px-8 py-6 text-sm text-zinc-500">加载中…</div>}>
       <RunsList />
     </Suspense>
   );
@@ -48,9 +46,7 @@ function RunsList() {
         const data = await res.json();
         if (!isCurrent()) return; // 筛选已切换，丢弃过期响应
         if (!res.ok) {
-          setError(
-            typeof data?.error === "string" ? data.error : "加载运行列表失败",
-          );
+          setError(typeof data?.error === "string" ? data.error : "加载运行列表失败");
           return;
         }
         setError(null);
@@ -87,17 +83,14 @@ function RunsList() {
     router.replace(`/runs${qs ? `?${qs}` : ""}`, { scroll: false });
   };
 
-  const filteredName =
-    workflowId && rows && rows.length > 0 ? rows[0].workflowName : null;
+  const filteredName = workflowId && rows && rows.length > 0 ? rows[0].workflowName : null;
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-6">
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-semibold text-zinc-900">运行历史</h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            工作流的执行记录，点击行查看详情
-          </p>
+          <p className="mt-1 text-sm text-zinc-500">工作流的执行记录，点击行查看详情</p>
         </div>
         <button
           type="button"
@@ -116,9 +109,7 @@ function RunsList() {
             onClick={() => setStatus(f.value)}
             aria-pressed={status === f.value}
             className={`rounded-md px-3 py-1 text-sm transition-colors ${
-              status === f.value
-                ? "bg-zinc-900 text-white"
-                : "text-zinc-600 hover:bg-zinc-100"
+              status === f.value ? "bg-zinc-900 text-white" : "text-zinc-600 hover:bg-zinc-100"
             }`}
           >
             {f.label}
@@ -153,9 +144,7 @@ function RunsList() {
       ) : rows.length === 0 ? (
         <div className="rounded-lg border border-zinc-200 bg-white px-4 py-12 text-center text-sm text-zinc-500">
           {status
-            ? `暂无${
-                RUN_STATUS_FILTERS.find((f) => f.value === status)?.label ?? ""
-              }的运行记录`
+            ? `暂无${RUN_STATUS_FILTERS.find((f) => f.value === status)?.label ?? ""}的运行记录`
             : "暂无运行记录"}
         </div>
       ) : (
@@ -180,9 +169,7 @@ function RunsList() {
                     onClick={() => router.push(`/runs/${row.id}`)}
                     className="cursor-pointer border-t border-zinc-100 transition-colors hover:bg-zinc-50"
                   >
-                    <td className="px-4 py-3 font-medium text-zinc-900">
-                      {row.workflowName}
-                    </td>
+                    <td className="px-4 py-3 font-medium text-zinc-900">{row.workflowName}</td>
                     <td className="px-4 py-3">
                       <StatusBadge status={row.status} />
                     </td>

@@ -56,9 +56,9 @@ async function main(): Promise<void> {
         },
       ],
       {
-      nodeOptions: { outputSchema, reasoningEffort: effort },
-      timeoutMs: 300_000,
-    },
+        nodeOptions: { outputSchema, reasoningEffort: effort },
+        timeoutMs: 300_000,
+      },
     );
     console.log(`[${el()}] 一轮对话结束`);
 
@@ -70,7 +70,9 @@ async function main(): Promise<void> {
     console.log(`[${el()}] 会话事件数：${proc.eventCountOf("node-1")}`);
   } finally {
     const exit = await proc.dispose();
-    console.log(`[${el()}] 子进程收束：code=${String(exit.code)} expected=${String(exit.expected)}`);
+    console.log(
+      `[${el()}] 子进程收束：code=${String(exit.code)} expected=${String(exit.expected)}`,
+    );
     if (keep) {
       console.log(`[${el()}] 运行目录保留：${ws.runDir}`);
     } else {

@@ -69,13 +69,22 @@ function upsertAction(input: {
     onExhausted: input.onExhausted ?? ("fail" as const),
   };
   if (existing) db.update(actions).set(row).where(eq(actions.id, id)).run();
-  else db.insert(actions).values({ id, ...row }).run();
+  else
+    db.insert(actions)
+      .values({ id, ...row })
+      .run();
 
   db.delete(actionPorts).where(eq(actionPorts.actionId, id)).run();
   input.inputs.forEach((p, i) =>
     db
       .insert(actionPorts)
-      .values({ actionId: id, direction: "input", name: p.name, objectTypeId: p.objectTypeId, position: i })
+      .values({
+        actionId: id,
+        direction: "input",
+        name: p.name,
+        objectTypeId: p.objectTypeId,
+        position: i,
+      })
       .run(),
   );
   input.outputs.forEach((p, i) =>
@@ -110,7 +119,8 @@ async function main(): Promise<void> {
 
   const aDraft = upsertAction({
     name: `${PREFIX}·起草`,
-    prompt: "按需求写一份不超过 6 行的中文草稿。若「意见」这一项本轮有内容，先读它，按意见改写上一轮的草稿。",
+    prompt:
+      "按需求写一份不超过 6 行的中文草稿。若「意见」这一项本轮有内容，先读它，按意见改写上一轮的草稿。",
     rule: "只写草稿正文。有意见时必须逐条落实，不要原样重交。",
     modelId: model.id,
     inputs: [
@@ -173,30 +183,130 @@ async function main(): Promise<void> {
   const nOut = crypto.randomUUID();
   db.insert(workflowNodes)
     .values([
-      { id: nIn, workflowId: wf.id, kind: "input", objectTypeId: tNeed, label: "需求", x: 0, y: 120 },
-      { id: nDraft, workflowId: wf.id, kind: "action", actionId: aDraft, label: "起草", x: 220, y: 120 },
-      { id: nA, workflowId: wf.id, kind: "action", actionId: aCriticA, label: "评委甲", x: 440, y: 20 },
-      { id: nB, workflowId: wf.id, kind: "action", actionId: aCriticB, label: "评委乙", x: 440, y: 220 },
-      { id: nJudge, workflowId: wf.id, kind: "action", actionId: aJudge, label: "裁决", x: 660, y: 120 },
-      { id: nOut, workflowId: wf.id, kind: "output", objectTypeId: tNote, label: "产出", x: 880, y: 120 },
+      {
+        id: nIn,
+        workflowId: wf.id,
+        kind: "input",
+        objectTypeId: tNeed,
+        label: "需求",
+        x: 0,
+        y: 120,
+      },
+      {
+        id: nDraft,
+        workflowId: wf.id,
+        kind: "action",
+        actionId: aDraft,
+        label: "起草",
+        x: 220,
+        y: 120,
+      },
+      {
+        id: nA,
+        workflowId: wf.id,
+        kind: "action",
+        actionId: aCriticA,
+        label: "评委甲",
+        x: 440,
+        y: 20,
+      },
+      {
+        id: nB,
+        workflowId: wf.id,
+        kind: "action",
+        actionId: aCriticB,
+        label: "评委乙",
+        x: 440,
+        y: 220,
+      },
+      {
+        id: nJudge,
+        workflowId: wf.id,
+        kind: "action",
+        actionId: aJudge,
+        label: "裁决",
+        x: 660,
+        y: 120,
+      },
+      {
+        id: nOut,
+        workflowId: wf.id,
+        kind: "output",
+        objectTypeId: tNote,
+        label: "产出",
+        x: 880,
+        y: 120,
+      },
     ])
     .run();
   // 边 id 显式给定：回边判定按 id 排序遍历，固定 id 让判定结果可复现。
   db.insert(workflowEdges)
     .values([
-      { id: "e1", workflowId: wf.id, sourceNodeId: nIn, sourcePort: "value", targetNodeId: nDraft, targetPort: "需求" },
-      { id: "e2", workflowId: wf.id, sourceNodeId: nDraft, sourcePort: "草稿", targetNodeId: nA, targetPort: "草稿" },
-      { id: "e3", workflowId: wf.id, sourceNodeId: nDraft, sourcePort: "草稿", targetNodeId: nB, targetPort: "草稿" },
-      { id: "e4", workflowId: wf.id, sourceNodeId: nA, sourcePort: "评语", targetNodeId: nJudge, targetPort: "评语" },
-      { id: "e5", workflowId: wf.id, sourceNodeId: nB, sourcePort: "评语", targetNodeId: nJudge, targetPort: "评语" },
-      { id: "e6", workflowId: wf.id, sourceNodeId: nJudge, sourcePort: "意见", targetNodeId: nDraft, targetPort: "意见" },
-      { id: "e7", workflowId: wf.id, sourceNodeId: nJudge, sourcePort: "裁决书", targetNodeId: nOut, targetPort: "value" },
+      {
+        id: "e1",
+        workflowId: wf.id,
+        sourceNodeId: nIn,
+        sourcePort: "value",
+        targetNodeId: nDraft,
+        targetPort: "需求",
+      },
+      {
+        id: "e2",
+        workflowId: wf.id,
+        sourceNodeId: nDraft,
+        sourcePort: "草稿",
+        targetNodeId: nA,
+        targetPort: "草稿",
+      },
+      {
+        id: "e3",
+        workflowId: wf.id,
+        sourceNodeId: nDraft,
+        sourcePort: "草稿",
+        targetNodeId: nB,
+        targetPort: "草稿",
+      },
+      {
+        id: "e4",
+        workflowId: wf.id,
+        sourceNodeId: nA,
+        sourcePort: "评语",
+        targetNodeId: nJudge,
+        targetPort: "评语",
+      },
+      {
+        id: "e5",
+        workflowId: wf.id,
+        sourceNodeId: nB,
+        sourcePort: "评语",
+        targetNodeId: nJudge,
+        targetPort: "评语",
+      },
+      {
+        id: "e6",
+        workflowId: wf.id,
+        sourceNodeId: nJudge,
+        sourcePort: "意见",
+        targetNodeId: nDraft,
+        targetPort: "意见",
+      },
+      {
+        id: "e7",
+        workflowId: wf.id,
+        sourceNodeId: nJudge,
+        sourcePort: "裁决书",
+        targetNodeId: nOut,
+        targetPort: "value",
+      },
     ])
     .run();
   console.log(`工作流已就绪：${wfName}（${wf.id}）`);
 
   const started = await startRun(wf.id, {
-    [nIn]: { kind: "text", text: "写一段说明：为什么 Agent 工作流的中间产物应该落在文件里，而不是沿连线传值。" },
+    [nIn]: {
+      kind: "text",
+      text: "写一段说明：为什么 Agent 工作流的中间产物应该落在文件里，而不是沿连线传值。",
+    },
   });
   if (!started.ok) throw new Error(`启动失败：${JSON.stringify(started)}`);
   console.log(`运行已启动：${started.runId}`);

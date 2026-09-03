@@ -29,8 +29,19 @@ describe("Tool 契约校验", () => {
     [{ publicName: "mcp__filesystem__read_file" }, "MCP 工具的前缀"],
     [{ parameters: { type: "string" } }, "对象根"],
     [{ parameters: "{}" }, "parameters"],
-    [{ parameters: { type: "object", properties: { n: { type: ["integer", "null"] } } } }, "type 数组"],
-    [{ output: { type: "object", properties: { items: { type: "array", items: { type: ["string", "null"] } } } } }, "type 数组"],
+    [
+      { parameters: { type: "object", properties: { n: { type: ["integer", "null"] } } } },
+      "type 数组",
+    ],
+    [
+      {
+        output: {
+          type: "object",
+          properties: { items: { type: "array", items: { type: ["string", "null"] } } },
+        },
+      },
+      "type 数组",
+    ],
     [{ output: { type: "array" } }, "对象根"],
     [{ timeoutMs: 0 }, "正整数"],
     [{ timeoutMs: 1.5 }, "正整数"],
@@ -42,7 +53,11 @@ describe("Tool 契约校验", () => {
     [{ code: 'import { x } from "@deepseek-ai/dsh-core";' }, "@deepseek-ai"],
   ])("拒绝 %j", (patch, fragment) => {
     const result = createTool({ ...valid, ...patch });
-    expect(result).toMatchObject({ ok: false, status: 400, error: expect.stringContaining(fragment) });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining(fragment),
+    });
   });
 
   it("type 数组的错误指到具体路径", () => {
@@ -50,14 +65,21 @@ describe("Tool 契约校验", () => {
       ...valid,
       parameters: { type: "object", properties: { n: { type: ["integer", "null"] } } },
     });
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("parameters.properties.n.type") });
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("parameters.properties.n.type"),
+    });
   });
 
   it("output 与 timeoutMs 可省略，落库为 null", () => {
     const result = createTool({ ...valid, output: undefined, timeoutMs: undefined });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data).toMatchObject({ publicName: "save_purchase_plan", output: null, timeoutMs: null });
+    expect(result.data).toMatchObject({
+      publicName: "save_purchase_plan",
+      output: null,
+      timeoutMs: null,
+    });
     expect(result.data.parameters).toEqual(valid.parameters);
   });
 });
@@ -69,7 +91,11 @@ describe("Tool 写入", () => {
     if (!created.ok) return;
     expect(created.data).toMatchObject({ ...valid });
 
-    const updated = writeTool(created.data.id, { ...valid, publicName: "archive_plan", timeoutMs: null });
+    const updated = writeTool(created.data.id, {
+      ...valid,
+      publicName: "archive_plan",
+      timeoutMs: null,
+    });
     expect(updated.ok).toBe(true);
     if (!updated.ok) return;
     expect(updated.data).toMatchObject({ publicName: "archive_plan", timeoutMs: null });
@@ -79,7 +105,11 @@ describe("Tool 写入", () => {
         "select payload from revisions where entity_kind = 'tool' and entity_id = ? order by version_no desc limit 1",
       )
       .get(created.data.id) as { payload: string };
-    expect(JSON.parse(revision.payload)).toEqual({ ...valid, publicName: "archive_plan", timeoutMs: null });
+    expect(JSON.parse(revision.payload)).toEqual({
+      ...valid,
+      publicName: "archive_plan",
+      timeoutMs: null,
+    });
   });
 
   it("publicName 重复由数据库唯一约束拒绝（handle() 映射为 409）", () => {

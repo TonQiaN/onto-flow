@@ -52,13 +52,9 @@ test.describe("Skill 库", () => {
 
     // 新建
     await page.getByRole("button", { name: "新建 Skill" }).click();
-    await expect(
-      page.getByRole("heading", { name: "新建 Skill" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "新建 Skill" })).toBeVisible();
     await page.getByPlaceholder("如：集采计划编制规范").fill(name);
-    await page
-      .getByPlaceholder("一句话说明这个 Skill 的用途")
-      .fill("e2e 初始描述");
+    await page.getByPlaceholder("一句话说明这个 Skill 的用途").fill("e2e 初始描述");
     await page.getByPlaceholder("Skill 全文…").fill("# e2e 测试内容\n仅供测试。");
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByRole("heading", { name: "新建 Skill" })).toBeHidden();
@@ -77,12 +73,8 @@ test.describe("Skill 库", () => {
 
     // 编辑描述
     await card.getByRole("button", { name: "编辑" }).click();
-    await expect(
-      page.getByRole("heading", { name: "编辑 Skill" }),
-    ).toBeVisible();
-    await page
-      .getByPlaceholder("一句话说明这个 Skill 的用途")
-      .fill("e2e 修改后的描述");
+    await expect(page.getByRole("heading", { name: "编辑 Skill" })).toBeVisible();
+    await page.getByPlaceholder("一句话说明这个 Skill 的用途").fill("e2e 修改后的描述");
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByRole("heading", { name: "编辑 Skill" })).toBeHidden();
     await expect(card.getByText("e2e 修改后的描述")).toBeVisible();
@@ -135,9 +127,7 @@ test.describe("Skill 库", () => {
     expect(detail.files).toHaveLength(1);
     expect(detail.files[0].path).toBe("references/guide.md");
     expect(detail.files[0].size).toBe(Buffer.byteLength(fileContent, "utf8"));
-    expect(Buffer.from(detail.files[0].contentBase64, "base64").toString("utf8")).toBe(
-      fileContent,
-    );
+    expect(Buffer.from(detail.files[0].contentBase64, "base64").toString("utf8")).toBe(fileContent);
 
     // 投影是目录：data/skills/<slug>/references/guide.md 与 SKILL.md 同在
     const dir = findProjectionDir("references/guide.md", fileContent);

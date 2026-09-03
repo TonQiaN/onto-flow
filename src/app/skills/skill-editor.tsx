@@ -104,9 +104,7 @@ export function SkillEditor({
   const [description, setDescription] = useState(initial?.description ?? "");
   const [content, setContent] = useState(initial?.content ?? "");
   const [files, setFiles] = useState<SkillFileDraft[]>([]);
-  const [filesStatus, setFilesStatus] = useState<FilesStatus>(
-    initial ? "loading" : "ready",
-  );
+  const [filesStatus, setFilesStatus] = useState<FilesStatus>(initial ? "loading" : "ready");
   const [filesError, setFilesError] = useState<string | null>(null);
   const [folder, setFolder] = useState<FolderRef | null>(initialFolder);
   const [saving, setSaving] = useState(false);
@@ -217,19 +215,16 @@ export function SkillEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(
-        initial ? `/api/skills/${initial.id}` : "/api/skills",
-        {
-          method: initial ? "PUT" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: name.trim(),
-            description,
-            content,
-            files: files.map((f) => ({ path: f.path, contentBase64: f.contentBase64 })),
-          }),
-        },
-      );
+      const res = await fetch(initial ? `/api/skills/${initial.id}` : "/api/skills", {
+        method: initial ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          description,
+          content,
+          files: files.map((f) => ({ path: f.path, contentBase64: f.contentBase64 })),
+        }),
+      });
       if (!res.ok) {
         setError(await readError(res));
         return;
@@ -259,10 +254,7 @@ export function SkillEditor({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/30"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
       <div
         className="flex h-full w-full max-w-xl flex-col bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
@@ -271,10 +263,7 @@ export function SkillEditor({
           <h2 className="text-base font-semibold text-zinc-900">
             {initial ? "编辑 Skill" : "新建 Skill"}
           </h2>
-          <button
-            onClick={onClose}
-            className="text-sm text-zinc-400 hover:text-zinc-600"
-          >
+          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-600">
             关闭
           </button>
         </div>
@@ -302,9 +291,7 @@ export function SkillEditor({
           {tab === "basic" && (
             <>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  名称
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">名称</span>
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -313,9 +300,7 @@ export function SkillEditor({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  描述
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">描述</span>
                 <input
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -327,9 +312,7 @@ export function SkillEditor({
                 </span>
               </label>
               <div>
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  文件夹
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">文件夹</span>
                 <FolderPicker
                   kind="skill"
                   entityId={initial?.id ?? ""}
@@ -443,9 +426,7 @@ export function SkillEditor({
             </>
           )}
 
-          {tab === "refs" && initial && (
-            <ReferencesPanel kind="skill" id={initial.id} />
-          )}
+          {tab === "refs" && initial && <ReferencesPanel kind="skill" id={initial.id} />}
 
           {tab === "revisions" && initial && (
             <RevisionPanel

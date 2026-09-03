@@ -82,14 +82,20 @@ describe("插件目录 ↔ 组合", () => {
 
   it("每个开关键都恰好控制目录里标了它的那些行", () => {
     for (const key of COMPOSITION_TOGGLE_KEYS) {
-      const rows = PLUGIN_CATALOG.filter((r) => r.toggle === key && r.entry !== undefined && "id" in r.entry);
+      const rows = PLUGIN_CATALOG.filter(
+        (r) => r.toggle === key && r.entry !== undefined && "id" in r.entry,
+      );
       expect(rows.length, `开关「${key}」在目录里没有对应的行`).toBeGreaterThan(0);
       const ids = rows.map((r) => (r.entry as { id: string }).id);
       const on = new Set(
-        runCompositionEntries(previewWorkspace(), { toggles: { ...DEFAULT_COMPOSITION_TOGGLES, [key]: true } }).map((e) => e.id),
+        runCompositionEntries(previewWorkspace(), {
+          toggles: { ...DEFAULT_COMPOSITION_TOGGLES, [key]: true },
+        }).map((e) => e.id),
       );
       const off = new Set(
-        runCompositionEntries(previewWorkspace(), { toggles: { ...DEFAULT_COMPOSITION_TOGGLES, [key]: false } }).map((e) => e.id),
+        runCompositionEntries(previewWorkspace(), {
+          toggles: { ...DEFAULT_COMPOSITION_TOGGLES, [key]: false },
+        }).map((e) => e.id),
       );
       for (const id of ids) {
         expect(on.has(id), `开关「${key}」打开时「${id}」应在组合里`).toBe(true);
@@ -103,7 +109,8 @@ describe("插件目录 ↔ 组合", () => {
 
   it("标了开关键的行必须允许按工作流切换", () => {
     for (const row of PLUGIN_CATALOG) {
-      if (row.toggle !== undefined) expect(row.workflowToggle, `「${row.package}」有开关键却不可切换`).toBe(true);
+      if (row.toggle !== undefined)
+        expect(row.workflowToggle, `「${row.package}」有开关键却不可切换`).toBe(true);
     }
   });
 
@@ -111,7 +118,10 @@ describe("插件目录 ↔ 组合", () => {
     for (const row of PLUGIN_CATALOG) {
       expect(PLUGIN_GROUPS[row.group], `「${row.package}」的组号非法`).toBeDefined();
       if (row.workflowToggle) {
-        expect([2, 3].includes(row.group), `「${row.package}」标为可按工作流切换，但它在组 ${row.group}`).toBe(true);
+        expect(
+          [2, 3].includes(row.group),
+          `「${row.package}」标为可按工作流切换，但它在组 ${row.group}`,
+        ).toBe(true);
       }
     }
   });
@@ -152,7 +162,10 @@ describe("插件目录 ↔ 文档", () => {
 
   it("README 记的上游版本与目录、package.json 钉版一致", () => {
     const readme = fs.readFileSync(path.join(DOCS_DIR, "README.md"), "utf8");
-    expect(readme.includes(UPSTREAM_VERSION), `docs/harness/README.md 没有出现 ${UPSTREAM_VERSION}`).toBe(true);
+    expect(
+      readme.includes(UPSTREAM_VERSION),
+      `docs/harness/README.md 没有出现 ${UPSTREAM_VERSION}`,
+    ).toBe(true);
     const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")) as {
       dependencies: Record<string, string>;
       overrides?: Record<string, string>;
@@ -186,7 +199,9 @@ describe("插件目录 ↔ 上游源码（_reference 存在时）", () => {
       const upstream = row.customization?.upstream;
       if (upstream === undefined) continue;
       const file = path.join(REFERENCE_DIR, upstream.path);
-      expect(fs.existsSync(file), `「${row.package}」记的上游文件不存在：${upstream.path}`).toBe(true);
+      expect(fs.existsSync(file), `「${row.package}」记的上游文件不存在：${upstream.path}`).toBe(
+        true,
+      );
     }
   });
   if (!present) {

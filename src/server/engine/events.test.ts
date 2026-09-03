@@ -23,11 +23,8 @@ CREATE TABLE node_usage (
 `);
 (globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
 
-const {
-  clearUnpersistedUsageForSession,
-  recordSessionEvent,
-  unpersistedUsageForSession,
-} = await import("./events");
+const { clearUnpersistedUsageForSession, recordSessionEvent, unpersistedUsageForSession } =
+  await import("./events");
 const context = {
   runId: "run-1",
   nodeId: "node-1",
@@ -123,10 +120,7 @@ describe("用量明细写入失败兜底", () => {
     };
 
     try {
-      recordSessionEvent(
-        { ...context, modelId: "deepseek-v4-flash" },
-        event,
-      );
+      recordSessionEvent({ ...context, modelId: "deepseek-v4-flash" }, event);
     } finally {
       sqlite.exec("DROP TRIGGER fail_usage_insert;");
       log.mockRestore();
@@ -256,12 +250,18 @@ describe("上下文压缩记账", () => {
       type: "compaction/end",
       seq: 12,
       time: summaryTime,
-      data: { compactionId: "c-2", turn: 3, error: "summary is not smaller than the shadowed content" },
+      data: {
+        compactionId: "c-2",
+        turn: 3,
+        error: "summary is not smaller than the shadowed content",
+      },
     });
 
     expect(sqlite.prepare("select count(*) as count from node_usage").get()).toEqual({ count: 0 });
     const payloads = (
-      sqlite.prepare("select payload from run_events order by id").all() as Array<{ payload: string }>
+      sqlite.prepare("select payload from run_events order by id").all() as Array<{
+        payload: string;
+      }>
     ).map((row) => JSON.parse(row.payload) as Record<string, unknown>);
     expect(payloads).toEqual([
       { op: "summary", status: "running", compactionId: "c-2", turn: 3 },
@@ -298,7 +298,11 @@ describe("上下文压缩记账", () => {
       data: {
         message: {
           content: [
-            { type: "tool-result", toolCallId: "call-1", content: [{ type: "text", text: "原始结果" }] },
+            {
+              type: "tool-result",
+              toolCallId: "call-1",
+              content: [{ type: "text", text: "原始结果" }],
+            },
           ],
         },
       },
@@ -316,7 +320,11 @@ describe("上下文压缩记账", () => {
       data: {
         message: {
           content: [
-            { type: "tool-result", toolCallId: "call-1", content: [{ type: "text", text: "[已裁剪]" }] },
+            {
+              type: "tool-result",
+              toolCallId: "call-1",
+              content: [{ type: "text", text: "[已裁剪]" }],
+            },
           ],
         },
       },
@@ -327,10 +335,16 @@ describe("上下文压缩记账", () => {
         type: string;
         payload: string;
       }>
-    ).map((row) => ({ type: row.type, payload: JSON.parse(row.payload) as Record<string, unknown> }));
+    ).map((row) => ({
+      type: row.type,
+      payload: JSON.parse(row.payload) as Record<string, unknown>,
+    }));
     expect(rows).toEqual([
       { type: "tool", payload: expect.objectContaining({ tool: "read", status: "running" }) },
-      { type: "tool", payload: expect.objectContaining({ tool: "read", status: "ok", output: "原始结果" }) },
+      {
+        type: "tool",
+        payload: expect.objectContaining({ tool: "read", status: "ok", output: "原始结果" }),
+      },
       {
         type: "compaction",
         payload: { op: "prune", status: "ok", shadowedNodes: 1, shadowedTokenCount: 900 },

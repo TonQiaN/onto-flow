@@ -28,9 +28,7 @@ export async function cleanupByPrefix(
 ): Promise<void> {
   // v2 起列表 GET 返回信封 { items, total, page, pageSize }；按前缀搜索并放大页长，
   // 保证一次拿全（MAX_PAGE_SIZE = 100）。
-  const res = await request.get(
-    `${listPath}?q=${encodeURIComponent(prefix)}&pageSize=100`,
-  );
+  const res = await request.get(`${listPath}?q=${encodeURIComponent(prefix)}&pageSize=100`);
   if (!res.ok()) return;
   const body = (await res.json()) as {
     items?: Array<{ id: string; name: string; builtin?: boolean }>;
@@ -44,21 +42,13 @@ export async function cleanupByPrefix(
 }
 
 /** 修订是多态引用、没有外键：实体经 API 删除后，按用例记下的精确 id 把历史清掉。 */
-export type RevisionOwnerKind =
-  | "workflow"
-  | "action"
-  | "skill"
-  | "tool"
-  | "object_type";
+export type RevisionOwnerKind = "workflow" | "action" | "skill" | "tool" | "object_type";
 
-export function cleanupRevisions(
-  owners: Iterable<{ kind: RevisionOwnerKind; id: string }>,
-): void {
+export function cleanupRevisions(owners: Iterable<{ kind: RevisionOwnerKind; id: string }>): void {
   const list = [...owners];
   if (list.length === 0) return;
   for (const owner of list) {
-    if (!/^[0-9a-f-]{36}$/.test(owner.id))
-      throw new Error(`测试实体 id 不安全：${owner.id}`);
+    if (!/^[0-9a-f-]{36}$/.test(owner.id)) throw new Error(`测试实体 id 不安全：${owner.id}`);
   }
   const database = openDb();
   try {

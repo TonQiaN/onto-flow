@@ -60,7 +60,11 @@ async function createFixture(request: APIRequestContext): Promise<Fixture> {
 
   const skillName = `${PREFIX}技能-${suffix}`;
   const skillRes = await request.post("/api/skills", {
-    data: { name: skillName, description: "设置验收用技能", content: "# 设置验收\n\n只在 e2e 里出现。" },
+    data: {
+      name: skillName,
+      description: "设置验收用技能",
+      content: "# 设置验收\n\n只在 e2e 里出现。",
+    },
   });
   expect(skillRes.ok()).toBeTruthy();
   const skillId = ((await skillRes.json()) as { id: string }).id;
@@ -73,7 +77,11 @@ async function createFixture(request: APIRequestContext): Promise<Fixture> {
       name: toolName,
       publicName: toolPublicName,
       description: "设置验收用 Tool",
-      parameters: { type: "object", properties: { input: { type: "string" } }, required: ["input"] },
+      parameters: {
+        type: "object",
+        properties: { input: { type: "string" } },
+        required: ["input"],
+      },
       code: EXECUTE_MODULE,
     },
   });
@@ -93,15 +101,33 @@ async function createFixture(request: APIRequestContext): Promise<Fixture> {
       maxReentries: 0,
       onExhausted: "fail",
       ports: [
-        { direction: "input", name: "输入", objectTypeId, position: 0, artifactPath: null, exitName: null },
-        { direction: "output", name: "输出", objectTypeId, position: 0, artifactPath: "out.md", exitName: null },
+        {
+          direction: "input",
+          name: "输入",
+          objectTypeId,
+          position: 0,
+          artifactPath: null,
+          exitName: null,
+        },
+        {
+          direction: "output",
+          name: "输出",
+          objectTypeId,
+          position: 0,
+          artifactPath: "out.md",
+          exitName: null,
+        },
       ],
       preloadSkillIds: [skillId],
       toolIds: [toolId],
     },
   });
   expect(actionRes.ok()).toBeTruthy();
-  const action = (await actionRes.json()) as { id: string; preloadSkillIds: string[]; toolIds: string[] };
+  const action = (await actionRes.json()) as {
+    id: string;
+    preloadSkillIds: string[];
+    toolIds: string[];
+  };
   expect(action.preloadSkillIds).toEqual([skillId]);
   expect(action.toolIds).toEqual([toolId]);
   owners.push({ kind: "action", id: action.id });
@@ -126,13 +152,49 @@ function actionGraph(fx: Fixture) {
   const outputId = randomUUID();
   return {
     nodes: [
-      { id: inputId, kind: "input", actionId: null, objectTypeId: fx.objectTypeId, label: "输入", x: 0, y: 0 },
-      { id: actionNodeId, kind: "action", actionId: fx.actionId, objectTypeId: null, label: fx.actionName, x: 320, y: 0 },
-      { id: outputId, kind: "output", actionId: null, objectTypeId: fx.objectTypeId, label: "输出", x: 640, y: 0 },
+      {
+        id: inputId,
+        kind: "input",
+        actionId: null,
+        objectTypeId: fx.objectTypeId,
+        label: "输入",
+        x: 0,
+        y: 0,
+      },
+      {
+        id: actionNodeId,
+        kind: "action",
+        actionId: fx.actionId,
+        objectTypeId: null,
+        label: fx.actionName,
+        x: 320,
+        y: 0,
+      },
+      {
+        id: outputId,
+        kind: "output",
+        actionId: null,
+        objectTypeId: fx.objectTypeId,
+        label: "输出",
+        x: 640,
+        y: 0,
+      },
     ],
     edges: [
-      { id: randomUUID(), sourceNodeId: inputId, sourcePort: "value", targetNodeId: actionNodeId, targetPort: "输入" },
-      { id: randomUUID(), sourceNodeId: actionNodeId, sourcePort: "输出", targetNodeId: outputId, targetPort: "value" },
+      {
+        id: randomUUID(),
+        sourceNodeId: inputId,
+        sourcePort: "value",
+        targetNodeId: actionNodeId,
+        targetPort: "输入",
+      },
+      {
+        id: randomUUID(),
+        sourceNodeId: actionNodeId,
+        sourcePort: "输出",
+        targetNodeId: outputId,
+        targetPort: "value",
+      },
     ],
   };
 }
@@ -297,13 +359,17 @@ test.describe("工作流设置", () => {
     }
 
     // 集合项按 API 勾选，并标出画布上的 Action 正预载 / 看见它
-    const skillRow = page.locator("label").filter({ has: page.getByText(fx.skillName, { exact: true }) });
+    const skillRow = page
+      .locator("label")
+      .filter({ has: page.getByText(fx.skillName, { exact: true }) });
     await expect(skillRow.getByRole("checkbox")).toBeChecked();
     await expect(skillRow.getByText(/≈ \d+ tokens/)).toBeVisible();
     await expect(
       skillRow.getByText(`被 Action「${fx.actionName}」预载，移出后保存会被拒绝`),
     ).toBeVisible();
-    const toolRow = page.locator("label").filter({ has: page.getByText(fx.toolName, { exact: true }) });
+    const toolRow = page
+      .locator("label")
+      .filter({ has: page.getByText(fx.toolName, { exact: true }) });
     await expect(toolRow.getByRole("checkbox")).toBeChecked();
     await expect(toolRow.getByText(fx.toolPublicName, { exact: true })).toBeVisible();
     await expect(
@@ -392,9 +458,13 @@ test.describe("工作流设置", () => {
     const hint = page.getByTestId("inspector-candidate-hint");
     await expect(hint).toContainText("技能集（1）");
     await expect(hint).toContainText("Tool 集（1）");
-    const preloadRow = page.locator("label").filter({ has: page.getByText(fx.skillName, { exact: true }) });
+    const preloadRow = page
+      .locator("label")
+      .filter({ has: page.getByText(fx.skillName, { exact: true }) });
     await expect(preloadRow.getByRole("checkbox")).toBeChecked();
-    const toolRow = page.locator("label").filter({ has: page.getByText(fx.toolName, { exact: true }) });
+    const toolRow = page
+      .locator("label")
+      .filter({ has: page.getByText(fx.toolName, { exact: true }) });
     await expect(toolRow.getByRole("checkbox")).toBeChecked();
     // 种子技能不在这个工作流的技能集里，画布侧的候选看不到它
     await expect(page.getByText("集采计划编制规范", { exact: true })).toHaveCount(0);
@@ -413,11 +483,33 @@ test.describe("工作流设置", () => {
     const put = await request.put(`/api/workflows/${workflowId}`, {
       data: {
         nodes: [
-          { id: inputNodeId, kind: "input", actionId: null, objectTypeId: fx.objectTypeId, label: "输入", x: 0, y: 0 },
-          { id: outputNodeId, kind: "output", actionId: null, objectTypeId: fx.objectTypeId, label: "输出", x: 240, y: 0 },
+          {
+            id: inputNodeId,
+            kind: "input",
+            actionId: null,
+            objectTypeId: fx.objectTypeId,
+            label: "输入",
+            x: 0,
+            y: 0,
+          },
+          {
+            id: outputNodeId,
+            kind: "output",
+            actionId: null,
+            objectTypeId: fx.objectTypeId,
+            label: "输出",
+            x: 240,
+            y: 0,
+          },
         ],
         edges: [
-          { id: randomUUID(), sourceNodeId: inputNodeId, sourcePort: "value", targetNodeId: outputNodeId, targetPort: "value" },
+          {
+            id: randomUUID(),
+            sourceNodeId: inputNodeId,
+            sourcePort: "value",
+            targetNodeId: outputNodeId,
+            targetPort: "value",
+          },
         ],
         instructions: `# 快照验收 ${fx.suffix}\n`,
         settings: { toggles: { todo: false }, mcpServers: [] },

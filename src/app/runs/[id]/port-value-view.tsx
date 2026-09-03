@@ -12,13 +12,10 @@ const TEXT_COLLAPSE_LIMIT = 600;
 function CollapsibleText({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const overflow = text.length > TEXT_COLLAPSE_LIMIT;
-  const shown =
-    expanded || !overflow ? text : `${text.slice(0, TEXT_COLLAPSE_LIMIT)}…`;
+  const shown = expanded || !overflow ? text : `${text.slice(0, TEXT_COLLAPSE_LIMIT)}…`;
   return (
     <div>
-      <pre className={expanded ? `${PRE_CLS} max-h-none` : PRE_CLS}>
-        {shown}
-      </pre>
+      <pre className={expanded ? `${PRE_CLS} max-h-none` : PRE_CLS}>{shown}</pre>
       {overflow && (
         <button
           type="button"
@@ -112,9 +109,7 @@ function FileValue({
           </button>
         )}
       </div>
-      {preview.status === "error" && (
-        <p className="mt-1 text-xs text-red-700">{preview.error}</p>
-      )}
+      {preview.status === "error" && <p className="mt-1 text-xs text-red-700">{preview.error}</p>}
       {preview.status === "loaded" && (
         <div className="mt-2">
           <CollapsibleText text={preview.content ?? ""} />
@@ -152,13 +147,7 @@ export function PortValueView({ value, runId }: { value: unknown; runId?: string
   // 回边进入下一轮时同一端口会换成新的产物路径；key 随路径变化可同时清空
   // 已加载的旧正文并让旧的在途请求失去挂载目标，徽章与预览不会跨轮串线。
   if (runId) {
-    return (
-      <FileValue
-        key={`${runId}:${pv.file.path}`}
-        runId={runId}
-        file={pv.file}
-      />
-    );
+    return <FileValue key={`${runId}:${pv.file.path}`} runId={runId} file={pv.file} />;
   }
   return (
     <div className="flex flex-wrap items-center gap-2">

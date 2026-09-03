@@ -26,22 +26,11 @@ const timestamps = {
 };
 
 /** 五个库共用的实体种类（修订、引用查询都按它区分） */
-export const ENTITY_KINDS = [
-  "workflow",
-  "action",
-  "skill",
-  "tool",
-  "object_type",
-] as const;
+export const ENTITY_KINDS = ["workflow", "action", "skill", "tool", "object_type"] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
 
 /** 可进文件夹的四个库（workflow 明确不分类，ADR-0005） */
-export const FOLDER_ENTITY_KINDS = [
-  "action",
-  "skill",
-  "tool",
-  "object_type",
-] as const;
+export const FOLDER_ENTITY_KINDS = ["action", "skill", "tool", "object_type"] as const;
 export type FolderEntityKind = (typeof FOLDER_ENTITY_KINDS)[number];
 
 /**
@@ -89,9 +78,7 @@ export const revisions = sqliteTable(
     entityKind: text("entity_kind", { enum: ENTITY_KINDS }).notNull(),
     entityId: text("entity_id").notNull(),
     versionNo: integer("version_no").notNull(),
-    payload: text("payload", { mode: "json" })
-      .$type<Record<string, unknown>>()
-      .notNull(),
+    payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     note: text("note").notNull().default(""),
     /** 手动标记保留的版本，清理时跳过 */
     pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
@@ -99,13 +86,7 @@ export const revisions = sqliteTable(
       .notNull()
       .$defaultFn(() => new Date()),
   },
-  (t) => [
-    uniqueIndex("revisions_entity_version").on(
-      t.entityKind,
-      t.entityId,
-      t.versionNo,
-    ),
-  ],
+  (t) => [uniqueIndex("revisions_entity_version").on(t.entityKind, t.entityId, t.versionNo)],
 );
 
 /** 对象类型注册表：端口的 nominal 类型（ADR-0002） */
@@ -241,9 +222,7 @@ export const actionPorts = sqliteTable(
      */
     exitName: text("exit_name"),
   },
-  (t) => [
-    uniqueIndex("action_ports_unique").on(t.actionId, t.direction, t.name),
-  ],
+  (t) => [uniqueIndex("action_ports_unique").on(t.actionId, t.direction, t.name)],
 );
 
 /**
@@ -290,9 +269,7 @@ export const actionTools = sqliteTable(
 export const settings = sqliteTable("settings", {
   /** 恒为 1：这张表只有一行 */
   id: integer("id").primaryKey(),
-  document: text("document", { mode: "json" })
-    .notNull()
-    .$type<Record<string, unknown>>(),
+  document: text("document", { mode: "json" }).notNull().$type<Record<string, unknown>>(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
 
@@ -395,7 +372,10 @@ export const runs = sqliteTable("runs", {
    * 受理时冻结的三层设置（ADR-0016）：全局设置文档、工作流设置与集合、以及二者合成的生效
    * 开关与 MCP 子集。运行详情据此解释「那次为什么有 web_search」；形状见 src/lib/workflow-settings.ts。
    */
-  settingsSnapshot: text("settings_snapshot", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  settingsSnapshot: text("settings_snapshot", { mode: "json" }).$type<Record<
+    string,
+    unknown
+  > | null>(),
   startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
   finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
 });
@@ -434,10 +414,7 @@ export const runNodes = sqliteTable(
      * 运行快照：该节点本次执行实际使用的完整配置（prompt、rule、各 Skill 与 Tool
      * 全文、模型、思考强度、端口定义）。不随实体后续修改而改变。
      */
-    snapshot: text("snapshot", { mode: "json" }).$type<Record<
-      string,
-      unknown
-    > | null>(),
+    snapshot: text("snapshot", { mode: "json" }).$type<Record<string, unknown> | null>(),
     /** 节点各轮会话的累计用量；逐 step 明细来源见 node_usage。 */
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),

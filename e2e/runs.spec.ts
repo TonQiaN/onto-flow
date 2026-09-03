@@ -40,12 +40,7 @@ function encodeSessionSegment(raw: string): string {
   return encoded;
 }
 
-function eventLog(
-  sessionId: string,
-  startedAt: number,
-  marker: string,
-  withTool: boolean,
-): string {
+function eventLog(sessionId: string, startedAt: number, marker: string, withTool: boolean): string {
   const events: FixtureEvent[] = [];
   const push = (type: string, offset: number, data: Record<string, unknown>) => {
     const surface = ["user/message", "assistant/message", "tool/result"].includes(type);
@@ -199,17 +194,8 @@ function eventLog(
   ].join("\n");
 }
 
-async function writeSession(
-  runDir: string,
-  sessionId: string,
-  contents: string,
-): Promise<void> {
-  const dir = path.join(
-    runDir,
-    "sessions",
-    "--e2e-workspace--",
-    encodeSessionSegment(sessionId),
-  );
+async function writeSession(runDir: string, sessionId: string, contents: string): Promise<void> {
+  const dir = path.join(runDir, "sessions", "--e2e-workspace--", encodeSessionSegment(sessionId));
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, "session.jsonl"), contents, "utf8");
 }
@@ -250,16 +236,8 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
       writeFile(artifactB, "合成轨迹产物 B", "utf8"),
     ]);
     await writeSession(runDir, nodeA, eventLog(nodeA, now, "A_ROUND_1", true));
-    await writeSession(
-      runDir,
-      `${nodeA}#2`,
-      eventLog(`${nodeA}#2`, now + 100, "A_ROUND_2", false),
-    );
-    await writeSession(
-      runDir,
-      nodeB,
-      eventLog(nodeB, now + 200, "B_ONLY_SENTINEL", false),
-    );
+    await writeSession(runDir, `${nodeA}#2`, eventLog(`${nodeA}#2`, now + 100, "A_ROUND_2", false));
+    await writeSession(runDir, nodeB, eventLog(nodeB, now + 200, "B_ONLY_SENTINEL", false));
 
     const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
     database.pragma("foreign_keys = ON");
@@ -451,22 +429,20 @@ async function replaceFixtureArtifact(
   database.pragma("foreign_keys = ON");
   database.pragma("busy_timeout = 5000");
   try {
-    database
-      .prepare("update run_nodes set outputs = ? where run_id = ? and node_id = ?")
-      .run(
-        JSON.stringify({
-          结果: {
-            kind: "file",
-            file: {
-              path: path.relative(path.join(process.cwd(), "data"), artifact),
-              name: path.basename(artifact),
-              mime: "text/markdown",
-            },
+    database.prepare("update run_nodes set outputs = ? where run_id = ? and node_id = ?").run(
+      JSON.stringify({
+        结果: {
+          kind: "file",
+          file: {
+            path: path.relative(path.join(process.cwd(), "data"), artifact),
+            name: path.basename(artifact),
+            mime: "text/markdown",
           },
-        }),
-        fixture.runId,
-        fixture.nodeA,
-      );
+        },
+      }),
+      fixture.runId,
+      fixture.nodeA,
+    );
   } finally {
     database.close();
   }
@@ -546,12 +522,11 @@ test.describe("运行历史", () => {
 
     const toggleA = cardA.getByTestId("agent-trajectory-toggle");
     await expect(toggleA).toHaveAttribute("aria-expanded", "false");
-    const initialRequestPromise = page.waitForRequest(
-      (request) => request.url().includes(`/nodes/${current.nodeA}/trajectory`),
+    const initialRequestPromise = page.waitForRequest((request) =>
+      request.url().includes(`/nodes/${current.nodeA}/trajectory`),
     );
     const responsePromise = page.waitForResponse(
-      (response) =>
-        response.url().includes(`/nodes/${current.nodeA}/trajectory`) && response.ok(),
+      (response) => response.url().includes(`/nodes/${current.nodeA}/trajectory`) && response.ok(),
     );
     await toggleA.click();
     await initialRequestPromise;
@@ -596,9 +571,7 @@ test.describe("运行历史", () => {
 
     await panelA.getByRole("button", { name: "第 1 轮", exact: true }).click();
     const roundOne = payload.sessions[0]!;
-    await expect(panelA.getByTestId("trajectory-record")).toHaveCount(
-      roundOne.records.length,
-    );
+    await expect(panelA.getByTestId("trajectory-record")).toHaveCount(roundOne.records.length);
 
     const tool = roundOne.records.find(
       (record) => record.kind === "tool" && record.callId === "call-A_ROUND_1",
@@ -610,14 +583,10 @@ test.describe("运行历史", () => {
       .click();
     for (const detail of tool!.details) {
       await panelA.getByRole("button", { name: detail.label, exact: true }).click();
-      await expect(panelA.getByTestId("trajectory-detail")).toContainText(
-        detail.content,
-      );
+      await expect(panelA.getByTestId("trajectory-detail")).toContainText(detail.content);
     }
 
-    await panelA.getByRole("searchbox", { name: "搜索 Agent 轨迹" }).fill(
-      "TOOL_OUTPUT_A_ROUND_1",
-    );
+    await panelA.getByRole("searchbox", { name: "搜索 Agent 轨迹" }).fill("TOOL_OUTPUT_A_ROUND_1");
     await expect(panelA.getByTestId("trajectory-record")).toHaveCount(1);
     await expect(panelA).not.toContainText("B_ONLY_SENTINEL");
 

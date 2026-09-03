@@ -27,7 +27,11 @@ export const PLUGIN_GROUPS = {
   6: { title: "面向人的交互", file: "06-面向人的交互.md", defaultStance: "不挂：运行中没有人" },
   7: { title: "宿主与界面", file: "07-宿主与界面.md", defaultStance: "不挂：不影响 agent" },
   8: { title: "遥测与身份", file: "08-遥测与身份.md", defaultStance: "不挂：内容不出本机" },
-  9: { title: "同一 seam 的替代 provider", file: "09-替代provider.md", defaultStance: "不挂，记为备选" },
+  9: {
+    title: "同一 seam 的替代 provider",
+    file: "09-替代provider.md",
+    defaultStance: "不挂，记为备选",
+  },
   10: { title: "本项目自有", file: "10-本项目自有.md", defaultStance: "自有" },
 } as const;
 
@@ -115,7 +119,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "必挂",
     entry: { id: "timer" },
     workflowToggle: false,
-    reason: "随 disposal 回收的定时器；app-boot 把它列为依赖、上游 base 第一行。本项目挂的包里没有一个调用 ctx.timeout 家族，保留只因去掉要举证。",
+    reason:
+      "随 disposal 回收的定时器；app-boot 把它列为依赖、上游 base 第一行。本项目挂的包里没有一个调用 ctx.timeout 家族，保留只因去掉要举证。",
   },
   {
     package: "@deepseek-ai/dsh-llm",
@@ -210,7 +215,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "必挂",
     entry: { id: "agent-loop" },
     workflowToggle: false,
-    reason: "一切的基础：默认的 agent 循环驱动器。上游没有步数上限，由 ontoflow-rpc 在会话 scope 上补。",
+    reason:
+      "一切的基础：默认的 agent 循环驱动器。上游没有步数上限，由 ontoflow-rpc 在会话 scope 上补。",
     customization: {
       kind: "配置",
       what: "agents 固定为空数组，会话全部由 RPC 懒创建。",
@@ -250,28 +256,32 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 1,
     decision: "必挂",
     workflowToggle: false,
-    reason: "Loader 的 cordis:include builtin：boot() 用它把运行的 cordis.yml 挂成根 include（激活清单里每行都带 include: 前缀）；分层 patch 的用法不用（ADR-0013）。机制，不是组合行。",
+    reason:
+      "Loader 的 cordis:include builtin：boot() 用它把运行的 cordis.yml 挂成根 include（激活清单里每行都带 include: 前缀）；分层 patch 的用法不用（ADR-0013）。机制，不是组合行。",
   },
   {
     package: "@deepseek-ai/cordis-plugin-group",
     group: 1,
     decision: "必挂",
     workflowToggle: false,
-    reason: "Loader 的 cordis:group builtin，与 include 同为 boot() 注册的机制；平铺清单不用嵌套分组。机制，不是组合行。",
+    reason:
+      "Loader 的 cordis:group builtin，与 include 同为 boot() 注册的机制；平铺清单不用嵌套分组。机制，不是组合行。",
   },
   {
     package: "@deepseek-ai/dsh-home-paths",
     group: 1,
     decision: "必挂",
     workflowToggle: false,
-    reason: "DSH_HOME 路径解析库；attachment-local、skill-filesystem 等已挂行经它把根解析进运行目录。库。",
+    reason:
+      "DSH_HOME 路径解析库；attachment-local、skill-filesystem 等已挂行经它把根解析进运行目录。库。",
   },
   {
     package: "@deepseek-ai/dsh-launch-environment",
     group: 1,
     decision: "必挂",
     workflowToggle: false,
-    reason: "启动环境记录库，app-boot 的依赖；本项目由 Next 侧显式注入白名单环境，不用它的分层来源。库。",
+    reason:
+      "启动环境记录库，app-boot 的依赖；本项目由 Next 侧显式注入白名单环境，不用它的分层来源。库。",
   },
 
   // ───────────────────────── 组 2：模型的手脚 ─────────────────────────
@@ -516,7 +526,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     mountedByDefault: false,
     workflowToggle: true,
     toggle: "webSearch",
-    reason: "DeepSeek 搜索 provider，用与模型相同的凭据引用名。默认关：搜索用量不经 llm/stream，是账外支出。",
+    reason:
+      "DeepSeek 搜索 provider，用与模型相同的凭据引用名。默认关：搜索用量不经 llm/stream，是账外支出。",
   },
   {
     package: "@deepseek-ai/dsh-tool-web",
@@ -538,7 +549,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 2,
     decision: "不挂",
     workflowToggle: false,
-    reason: "Code Mode（run_code）的执行 seam；上游自己标注 DSH_TOOLS_MODE 是临时开关，等它稳定成按会话配置再评估。",
+    reason:
+      "Code Mode（run_code）的执行 seam；上游自己标注 DSH_TOOLS_MODE 是临时开关，等它稳定成按会话配置再评估。",
   },
   {
     package: "@deepseek-ai/dsh-code-runtime-worker-thread",
@@ -594,7 +606,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 2,
     decision: "不挂",
     workflowToggle: false,
-    reason: "匿名 HTTP 抓取 provider；上游自己也不挂：目标由模型选、SSRF 防护未做。网络本就经 bash 不受限。",
+    reason:
+      "匿名 HTTP 抓取 provider；上游自己也不挂：目标由模型选、SSRF 防护未做。网络本就经 bash 不受限。",
   },
 
   // ───────────────────────── 组 3：模型的上下文 ─────────────────────────
@@ -604,7 +617,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "agent-instructions" },
     workflowToggle: false,
-    reason: "从工作区 AGENTS.md 载入工作流级共同指令；工作区内的空 .git 把 projectRoot 钉在运行边界内。",
+    reason:
+      "从工作区 AGENTS.md 载入工作流级共同指令；工作区内的空 .git 把 projectRoot 钉在运行边界内。",
     customization: {
       kind: "配置",
       what: "maxBytes = 全局默认指令上限 + 工作流指令上限 + 帧余量（65536 + 65536 + 4096），不是上游 base 的 65536。",
@@ -624,7 +638,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "spill-local" },
     workflowToggle: false,
-    reason: "超大工具结果整份落盘的私有存储；消费方是 spill-policy 与 glob/grep 的超上限结果。bash 的完整输出由 subprocess-local 自己写在 TMPDIR 下，不经它。",
+    reason:
+      "超大工具结果整份落盘的私有存储；消费方是 spill-policy 与 glob/grep 的超上限结果。bash 的完整输出由 subprocess-local 自己写在 TMPDIR 下，不经它。",
     customization: {
       kind: "配置",
       what: "root 钉到 <run>/home/spill。",
@@ -669,7 +684,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     entry: { id: "compaction-basic" },
     workflowToggle: true,
     toggle: "compaction",
-    reason: "上下文压力到阈值时先剪枝再摘要；产物在文件里，摘要丢的细节模型可重读（ADR-0008）。摘要用量由 engine/events.ts 从 compaction/summary 事件计费；摘要在提交阶段失败时上游不写该事件，那笔费用无法计费。",
+    reason:
+      "上下文压力到阈值时先剪枝再摘要；产物在文件里，摘要丢的细节模型可重读（ADR-0008）。摘要用量由 engine/events.ts 从 compaction/summary 事件计费；摘要在提交阶段失败时上游不写该事件，那笔费用无法计费。",
   },
   {
     package: "@deepseek-ai/dsh-compaction-tool-result-pruner",
@@ -694,7 +710,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "挂",
     entry: { id: "timeout-policy" },
     workflowToggle: false,
-    reason: "对声明了 timeoutMs 的工具加协作式截止；零配置。今天经它的是 tool-web 与 glob/grep；MCP 工具的超时由 MCP SDK 的请求超时自己强制，不经它。",
+    reason:
+      "对声明了 timeoutMs 的工具加协作式截止；零配置。今天经它的是 tool-web 与 glob/grep；MCP 工具的超时由 MCP SDK 的请求超时自己强制，不经它。",
   },
   {
     package: "@deepseek-ai/dsh-timeout",
@@ -815,7 +832,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 4,
     decision: "不挂",
     workflowToggle: false,
-    reason: "按会话投影注册表，服务 Web 列表行与 subagent 目录；我们的投影在 Next 侧（trajectory.ts）。",
+    reason:
+      "按会话投影注册表，服务 Web 列表行与 subagent 目录；我们的投影在 Next 侧（trajectory.ts）。",
   },
   {
     package: "@deepseek-ai/dsh-session-projection-cache",
@@ -908,7 +926,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 5,
     decision: "不挂",
     workflowToggle: false,
-    reason: "上游的「workflow」是模型写的编排脚本；本项目的工作流是人画的图，两套并存没有单一答案（ADR-0014）。",
+    reason:
+      "上游的「workflow」是模型写的编排脚本；本项目的工作流是人画的图，两套并存没有单一答案（ADR-0014）。",
   },
   {
     package: "@deepseek-ai/dsh-workflow-worker-thread",
@@ -1001,7 +1020,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 6,
     decision: "不挂",
     workflowToggle: false,
-    reason: "向人提问的 seam；运行中没有人：只挂 seam 时 ask() 立即抛 NO_PROVIDER，挂了桥接 provider 则挂到墙钟超时，两种都不能要。",
+    reason:
+      "向人提问的 seam；运行中没有人：只挂 seam 时 ask() 立即抛 NO_PROVIDER，挂了桥接 provider 则挂到墙钟超时，两种都不能要。",
   },
   {
     package: "@deepseek-ai/dsh-tool-ask-user",
@@ -1108,7 +1128,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 7,
     decision: "不挂",
     workflowToggle: false,
-    reason: "webserver / frontend-static / apiproxy / plugin-inventory / directory-picker：本项目的宿主是 Next 进程。",
+    reason:
+      "webserver / frontend-static / apiproxy / plugin-inventory / directory-picker：本项目的宿主是 Next 进程。",
   },
   {
     package: "@deepseek-ai/dsh-web-app",
@@ -1157,7 +1178,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 7,
     decision: "不挂",
     workflowToggle: false,
-    reason: "KV 存储枢纽（storage-json / storage-sqlite / storage-domain）；本项目的状态在 SQLite 与运行目录。",
+    reason:
+      "KV 存储枢纽（storage-json / storage-sqlite / storage-domain）；本项目的状态在 SQLite 与运行目录。",
   },
   {
     package: "@deepseek-ai/dsh-workspace",
@@ -1206,14 +1228,16 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 7,
     decision: "不挂",
     workflowToggle: false,
-    reason: "stdout logger：stdout 是 RPC 协议帧，挂了整条协议就坏。harness stderr 写 logs/harness.stderr.log。",
+    reason:
+      "stdout logger：stdout 是 RPC 协议帧，挂了整条协议就坏。harness stderr 写 logs/harness.stderr.log。",
   },
   {
     package: "@deepseek-ai/dsh-cordis-host-runner",
     group: 7,
     decision: "不挂",
     workflowToggle: false,
-    reason: "模型动态挂载插件的 vm 沙箱（tool-cordis 家族）：让模型改运行时与「运行快照冻结定义」冲突。",
+    reason:
+      "模型动态挂载插件的 vm 沙箱（tool-cordis 家族）：让模型改运行时与「运行快照冻结定义」冲突。",
   },
   {
     package: "@deepseek-ai/dsh-tool-cordis",
@@ -1248,7 +1272,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 7,
     decision: "不挂",
     workflowToggle: false,
-    reason: "examples 与 test-support 家族（acp-demo、agent-spine-demo、jsonrpc-demo、llm-replay、llm-mock-server、loader-smoke…）：上游开发用。",
+    reason:
+      "examples 与 test-support 家族（acp-demo、agent-spine-demo、jsonrpc-demo、llm-replay、llm-mock-server、loader-smoke…）：上游开发用。",
   },
 
   // ───────────────────────── 组 8：遥测与身份 ─────────────────────────
@@ -1271,7 +1296,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 8,
     decision: "不挂",
     workflowToggle: false,
-    reason: "匿名身份库：它是 llm-deepseek 的依赖、随每次模型请求作请求头发出，与遥测开关无关；home 钉在运行目录内，每次运行因此是新身份。作为插件行不挂。",
+    reason:
+      "匿名身份库：它是 llm-deepseek 的依赖、随每次模型请求作请求头发出，与遥测开关无关；home 钉在运行目录内，每次运行因此是新身份。作为插件行不挂。",
   },
   {
     package: "@deepseek-ai/dsh-message-feedback",
@@ -1287,7 +1313,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 9,
     decision: "备选",
     workflowToggle: false,
-    reason: "OpenAI 兼容网关的路径（ADR-0006 提到的那条）：挂它并给 provider 配置即得新路由，需要同时在 seed 的 models 表加行。",
+    reason:
+      "OpenAI 兼容网关的路径（ADR-0006 提到的那条）：挂它并给 provider 配置即得新路由，需要同时在 seed 的 models 表加行。",
   },
   {
     package: "@deepseek-ai/dsh-bash-local",
@@ -1308,7 +1335,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 9,
     decision: "备选",
     workflowToggle: false,
-    reason: "Windows 的 PowerShell 执行器家族（pwsh-local / pwsh-sandbox / tool-pwsh / tool-pwsh-persistent）；本项目只跑 macOS。",
+    reason:
+      "Windows 的 PowerShell 执行器家族（pwsh-local / pwsh-sandbox / tool-pwsh / tool-pwsh-persistent）；本项目只跑 macOS。",
   },
   {
     package: "@deepseek-ai/dsh-sandbox-windows-acl",
@@ -1350,7 +1378,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 9,
     decision: "备选",
     workflowToggle: false,
-    reason: "E2B 远程沙箱（e2b / fs-e2b / subprocess-e2b）：把 fs 与 subprocess 指向远程即整套搬走；将来要隔离到云端时走这里。",
+    reason:
+      "E2B 远程沙箱（e2b / fs-e2b / subprocess-e2b）：把 fs 与 subprocess 指向远程即整套搬走；将来要隔离到云端时走这里。",
   },
   {
     package: "@deepseek-ai/dsh-web-search-exa",
@@ -1392,21 +1421,24 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 9,
     decision: "备选",
     workflowToggle: false,
-    reason: "把 Claude Code / Codex 的 hooks.json 桥到 dsh 拦截点；本项目的拦截点由 ontoflow-rpc 直接注册。",
+    reason:
+      "把 Claude Code / Codex 的 hooks.json 桥到 dsh 拦截点；本项目的拦截点由 ontoflow-rpc 直接注册。",
   },
   {
     package: "@deepseek-ai/dsh-acp",
     group: 9,
     decision: "备选",
     workflowToggle: false,
-    reason: "Agent Client Protocol 的 stdio 服务端；本项目的线协议是 ontoflow-rpc（上游 SDK 协议的超集）。",
+    reason:
+      "Agent Client Protocol 的 stdio 服务端；本项目的线协议是 ontoflow-rpc（上游 SDK 协议的超集）。",
   },
   {
     package: "@deepseek-ai/dsh-sdk-jsonrpc-server",
     group: 9,
     decision: "备选",
     workflowToggle: false,
-    reason: "上游的 stdio JSON-RPC 服务端：ontoflow-rpc 的 fork 原型；缺 cancel/close/output 与按会话组合。",
+    reason:
+      "上游的 stdio JSON-RPC 服务端：ontoflow-rpc 的 fork 原型；缺 cancel/close/output 与按会话组合。",
   },
   {
     package: "@deepseek-ai/dsh-sdk-client",
@@ -1436,12 +1468,16 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 10,
     decision: "自有",
     workflowToggle: false,
-    reason: "会话作用域的 structured_output 工具、提示段、终态守卫与两阶段提交：数据面的实现（ADR-0008）。",
+    reason:
+      "会话作用域的 structured_output 工具、提示段、终态守卫与两阶段提交：数据面的实现（ADR-0008）。",
     customization: {
       kind: "fork",
       what: "抄上游进程内 subagent 驱动器的同一机制，去掉 subagent 依赖。",
       why: "那个包的运行时入口经 peer 链拖入 subagent/sandbox/jobs 等本项目不挂的能力。",
-      upstream: { path: "packages/subagent/subagent-in-process-driver/src/structured.ts", version: V },
+      upstream: {
+        path: "packages/subagent/subagent-in-process-driver/src/structured.ts",
+        version: V,
+      },
     },
   },
   {
@@ -1449,7 +1485,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 10,
     decision: "自有",
     workflowToggle: false,
-    reason: "Action 会话的创建期组合：步数上限、思考强度、工具收窄，全在会话 scope 上（ADR-0015）。",
+    reason:
+      "Action 会话的创建期组合：步数上限、思考强度、工具收窄，全在会话 scope 上（ADR-0015）。",
     customization: {
       kind: "包装",
       what: "agent/pre-step 拒绝超步；agent/request waterfall 无条件盖 reasoningEffort；tools.restrict + guard 双层 deny。",
@@ -1462,14 +1499,16 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     decision: "自有",
     entry: { idPrefix: "tool-" },
     workflowToggle: false,
-    reason: "工作流 Tool 集物化的 cordis 插件（平台包装 + execute 模块），按运行生成、以绝对路径进组合；每个 Action 再按可见子集收窄。",
+    reason:
+      "工作流 Tool 集物化的 cordis 插件（平台包装 + execute 模块），按运行生成、以绝对路径进组合；每个 Action 再按可见子集收窄。",
   },
   {
     package: "src/server/harness/tool-plugin.ts",
     group: 10,
     decision: "自有",
     workflowToggle: false,
-    reason: "Tool 契约的 cordis 包装生成器（ADR-0017）：作者只写 execute 模块，注册形状与 ctx.run() 围栏归平台。",
+    reason:
+      "Tool 契约的 cordis 包装生成器（ADR-0017）：作者只写 execute 模块，注册形状与 ctx.run() 围栏归平台。",
     customization: {
       kind: "包装",
       what: "按契约生成 tool-<id>.ts：ctx.tools.register 的 name/parameters/output/timeoutMs 与 render，execute 组装 ToolContext（路径、env 白名单、sandboxPolicy + shell 的 run）。",
@@ -1482,7 +1521,8 @@ export const PLUGIN_CATALOG: readonly PluginCatalogRow[] = [
     group: 10,
     decision: "自有",
     workflowToggle: false,
-    reason: "每运行组合的生成器：相当于上游的 profile + bundle patch，只是平铺、程序化（ADR-0013）。",
+    reason:
+      "每运行组合的生成器：相当于上游的 profile + bundle patch，只是平铺、程序化（ADR-0013）。",
   },
   {
     package: "src/server/harness/runner.ts",
@@ -1502,7 +1542,8 @@ export function catalogRowForEntryId(entryId: string): PluginCatalogRow | undefi
   );
   if (exact) return exact;
   return PLUGIN_CATALOG.find(
-    (row) => row.entry !== undefined && "idPrefix" in row.entry && entryId.startsWith(row.entry.idPrefix),
+    (row) =>
+      row.entry !== undefined && "idPrefix" in row.entry && entryId.startsWith(row.entry.idPrefix),
   );
 }
 

@@ -102,9 +102,7 @@ export default function RunDetailPage() {
         const data = await res.json();
         if (cancelled) return;
         if (!res.ok) {
-          setLoadError(
-            typeof data?.error === "string" ? data.error : "加载运行详情失败",
-          );
+          setLoadError(typeof data?.error === "string" ? data.error : "加载运行详情失败");
           return;
         }
         setRun(data.run as RunRow);
@@ -156,19 +154,18 @@ export default function RunDetailPage() {
     });
   }, [nodes]);
 
-  const nodeLabels = useMemo(
-    () => new Map(nodes.map((n) => [n.nodeId, n.label])),
-    [nodes],
-  );
+  const nodeLabels = useMemo(() => new Map(nodes.map((n) => [n.nodeId, n.label])), [nodes]);
 
   const usage = useMemo(() => totalUsage(nodes), [nodes]);
 
   const statusCounts = useMemo(() => {
     const counts = new Map<NodeStatus, number>();
     for (const n of nodes) counts.set(n.status, (counts.get(n.status) ?? 0) + 1);
-    return NODE_STATUS_LABELS.filter(([s]) => (counts.get(s) ?? 0) > 0).map(
-      ([s, label]) => ({ status: s, label, count: counts.get(s) ?? 0 }),
-    );
+    return NODE_STATUS_LABELS.filter(([s]) => (counts.get(s) ?? 0) > 0).map(([s, label]) => ({
+      status: s,
+      label,
+      count: counts.get(s) ?? 0,
+    }));
   }, [nodes]);
 
   const started = run ? toMillis(run.startedAt) : null;
@@ -177,10 +174,7 @@ export default function RunDetailPage() {
   return (
     <div className="mx-auto max-w-5xl px-8 py-6">
       <div className="mb-6">
-        <Link
-          href="/runs"
-          className="text-sm text-zinc-500 transition-colors hover:text-zinc-900"
-        >
+        <Link href="/runs" className="text-sm text-zinc-500 transition-colors hover:text-zinc-900">
           ← 返回运行历史
         </Link>
         <h1 className="mt-2 text-xl font-semibold text-zinc-900">运行详情</h1>
@@ -199,9 +193,7 @@ export default function RunDetailPage() {
             <div className="flex flex-wrap items-center gap-3">
               <StatusBadge status={run.status} />
               {run.workflowName && (
-                <span className="font-medium text-zinc-900">
-                  {run.workflowName}
-                </span>
+                <span className="font-medium text-zinc-900">{run.workflowName}</span>
               )}
               <span className="font-mono text-xs text-zinc-400">{run.id}</span>
               <span className="flex min-w-0 items-center gap-1 text-xs text-zinc-400">
@@ -258,20 +250,14 @@ export default function RunDetailPage() {
               </div>
               <div>
                 <dt className="text-xs text-zinc-400">总 token</dt>
-                <dd className="mt-0.5 font-mono text-zinc-700">
-                  {formatTokens(usage.tokens)}
-                </dd>
+                <dd className="mt-0.5 font-mono text-zinc-700">{formatTokens(usage.tokens)}</dd>
               </div>
               <div>
                 <dt className="text-xs text-zinc-400">总费用</dt>
-                <dd className="mt-0.5 font-mono text-zinc-700">
-                  {formatCost(usage.cost)}
-                </dd>
+                <dd className="mt-0.5 font-mono text-zinc-700">{formatCost(usage.cost)}</dd>
               </div>
               <div>
-                <dt className="text-xs text-zinc-400">
-                  节点（共 {nodes.length}）
-                </dt>
+                <dt className="text-xs text-zinc-400">节点（共 {nodes.length}）</dt>
                 <dd className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-zinc-700">
                   {statusCounts.length === 0
                     ? "—"
@@ -296,9 +282,7 @@ export default function RunDetailPage() {
 
           {/* 节点时间线 */}
           <section>
-            <h2 className="mb-3 text-sm font-medium text-zinc-900">
-              节点时间线
-            </h2>
+            <h2 className="mb-3 text-sm font-medium text-zinc-900">节点时间线</h2>
             {sortedNodes.length === 0 ? (
               <div className="rounded-lg border border-zinc-200 bg-white px-4 py-8 text-center text-sm text-zinc-500">
                 暂无节点记录

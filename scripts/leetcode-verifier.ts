@@ -22,7 +22,10 @@ export interface SandboxedPythonResult {
   };
 }
 
-function canonicalArtifact(workspaceRoot: string, artifactPath: string): {
+function canonicalArtifact(
+  workspaceRoot: string,
+  artifactPath: string,
+): {
   workspaceRoot: string;
   artifactPath: string;
 } {

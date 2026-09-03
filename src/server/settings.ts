@@ -14,10 +14,7 @@
 import { eq } from "drizzle-orm";
 import { db, settings } from "@/db";
 import { DEFAULT_CREDENTIAL_ENV } from "@/server/harness/entries";
-import {
-  MCP_SERVER_NAME_PATTERN,
-  type McpServerSpec,
-} from "@/server/harness/entries";
+import { MCP_SERVER_NAME_PATTERN, type McpServerSpec } from "@/server/harness/entries";
 import { writeFail, writeOk, type WriteResult } from "@/server/writers/types";
 import {
   COMPOSITION_TOGGLE_KEYS,

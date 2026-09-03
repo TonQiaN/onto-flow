@@ -29,14 +29,9 @@ CREATE TABLE entity_folders (
 );
 CREATE INDEX entity_folders_by_folder ON entity_folders (folder_id);
 `);
-(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(
-  sqlite,
-  { schema },
-);
+(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
 
-const { createFolder, deleteFolder, listFolders, updateFolder } = await import(
-  "./folders"
-);
+const { createFolder, deleteFolder, listFolders, updateFolder } = await import("./folders");
 
 /** 展开 Result，失败时直接让用例挂掉 */
 function unwrap<T>(r: Result<T>): T {

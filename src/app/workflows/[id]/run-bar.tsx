@@ -98,8 +98,7 @@ export function RunBar({
   if (!visible || !runId || !runStatus) return null;
 
   const theme = THEME[runStatus];
-  const percent =
-    totals.total > 0 ? Math.round((totals.done / totals.total) * 100) : 0;
+  const percent = totals.total > 0 ? Math.round((totals.done / totals.total) * 100) : 0;
 
   // 并行切换器：本工作流同时有多路运行，或正跟着的这路已结束而别的还在跑时出现。
   const followedInFlight = runsInFlight.some((run) => run.id === runId);
@@ -128,9 +127,7 @@ export function RunBar({
                 }}
                 className="rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 font-mono text-[11px] text-zinc-700"
               >
-                {!followedInFlight && (
-                  <option value="">{runId.slice(0, 8)}（已结束）</option>
-                )}
+                {!followedInFlight && <option value="">{runId.slice(0, 8)}（已结束）</option>}
                 {runsInFlight.map((run, index) => (
                   <option key={run.id} value={run.id}>
                     第 {index + 1} 路 · {run.id.slice(0, 8)}
@@ -153,9 +150,7 @@ export function RunBar({
         </span>
 
         <Divider />
-        <span className="tabular-nums text-zinc-600">
-          已用时 {formatDuration(elapsedMs)}
-        </span>
+        <span className="tabular-nums text-zinc-600">已用时 {formatDuration(elapsedMs)}</span>
 
         <Divider />
         <span className="tabular-nums text-zinc-600">
@@ -163,9 +158,7 @@ export function RunBar({
         </span>
 
         <Divider />
-        <span className="tabular-nums text-zinc-600">
-          {formatCost(totals.cost)}
-        </span>
+        <span className="tabular-nums text-zinc-600">{formatCost(totals.cost)}</span>
 
         {connection === "error" && (
           <>
@@ -184,11 +177,7 @@ export function RunBar({
                 if (followPaused) resumeFollow();
                 else setFollowMode(!followMode);
               }}
-              title={
-                followPaused
-                  ? "你手动平移过画布，跟随已暂停"
-                  : "自动把正在执行的节点带入视野"
-              }
+              title={followPaused ? "你手动平移过画布，跟随已暂停" : "自动把正在执行的节点带入视野"}
               className={`rounded-md border px-2 py-1 transition-colors ${
                 followMode && !followPaused
                   ? "border-blue-300 bg-blue-100 text-blue-800"
@@ -258,9 +247,7 @@ export function RunBar({
       </div>
 
       {(runError || cancelError) && (
-        <p className="px-4 pb-1.5 text-[11px] text-red-700">
-          {cancelError ?? runError}
-        </p>
+        <p className="px-4 pb-1.5 text-[11px] text-red-700">{cancelError ?? runError}</p>
       )}
 
       {/* 进度细条：已结束节点占比 */}

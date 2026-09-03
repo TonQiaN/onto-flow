@@ -17,9 +17,7 @@ describe("集采计划归档路径", () => {
     const location = purchasePlanBackupLocation(path, dataDir, "../../escape", "20260826");
 
     expect(location.relativePath).toBe("documents/escape-20260826.md");
-    expect(location.absolutePath).toBe(
-      path.join(dataDir, "documents", "escape-20260826.md"),
-    );
+    expect(location.absolutePath).toBe(path.join(dataDir, "documents", "escape-20260826.md"));
     expect(path.relative(dataDir, location.absolutePath)).not.toMatch(/^\.\./);
   });
 

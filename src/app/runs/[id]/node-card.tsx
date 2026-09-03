@@ -65,13 +65,7 @@ function UsageLine({ node }: { node: RunNodeRow }) {
  * 节点时间线卡片：label + 状态徽章 + 耗时 + 用量 + 输入/输出 +
  * 错误全文 + Agent 会话轨迹 + 运行快照。
  */
-export function NodeCard({
-  node,
-  runStatus,
-}: {
-  node: RunNodeRow;
-  runStatus: RunStatus;
-}) {
+export function NodeCard({ node, runStatus }: { node: RunNodeRow; runStatus: RunStatus }) {
   const started = toMillis(node.startedAt);
   const inputs = Object.entries(node.inputs ?? {});
   const outputs = Object.entries(node.outputs ?? {});
@@ -96,12 +90,8 @@ export function NodeCard({
           </span>
         </div>
         <UsageLine node={node} />
-        {inputs.length > 0 && (
-          <PortSection title="输入" entries={inputs} runId={node.runId} />
-        )}
-        {outputs.length > 0 && (
-          <PortSection title="输出" entries={outputs} runId={node.runId} />
-        )}
+        {inputs.length > 0 && <PortSection title="输入" entries={inputs} runId={node.runId} />}
+        {outputs.length > 0 && <PortSection title="输出" entries={outputs} runId={node.runId} />}
         {node.error && (
           <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3 text-sm break-words whitespace-pre-wrap text-red-700">
             {node.error}

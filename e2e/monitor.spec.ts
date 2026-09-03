@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Page,
-} from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { cleanupByPrefix, DATA_DIR, openDb } from "./helpers";
 
 /**
@@ -267,14 +262,38 @@ async function createFixture(request: APIRequestContext): Promise<MonitorFixture
         );
         // 节点汇总 = 该节点各条 node_usage 之和（与引擎的结算口径一致）
         node.run(
-          randomUUID(), runId, nodeA, fixture.labelA, "success", snapshot,
-          1600, 420, 70, 2300, 0.003, nodeA, null,
-          runStart + 1_000, runStart + 6_000,
+          randomUUID(),
+          runId,
+          nodeA,
+          fixture.labelA,
+          "success",
+          snapshot,
+          1600,
+          420,
+          70,
+          2300,
+          0.003,
+          nodeA,
+          null,
+          runStart + 1_000,
+          runStart + 6_000,
         );
         node.run(
-          randomUUID(), runId, nodeB, fixture.labelB, "failed", snapshot,
-          300, 50, 10, 0, 0.0004, nodeB, RUN_ERROR,
-          runStart + 7_000, runStart + 9_500,
+          randomUUID(),
+          runId,
+          nodeB,
+          fixture.labelB,
+          "failed",
+          snapshot,
+          300,
+          50,
+          10,
+          0,
+          0.0004,
+          nodeB,
+          RUN_ERROR,
+          runStart + 7_000,
+          runStart + 9_500,
         );
 
         const event = database.prepare(
@@ -288,16 +307,49 @@ async function createFixture(request: APIRequestContext): Promise<MonitorFixture
           "insert into node_usage (id, run_id, node_id, session_id, message_id, provider_id, model_id, variant, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, cost, ts) values (?, ?, ?, ?, ?, ?, ?, 'high', ?, ?, ?, ?, 0, ?, ?)",
         );
         usage.run(
-          randomUUID(), runId, nodeA, nodeA, "turn1-step1", PROVIDER_ID, MODEL_ID,
-          1200, 300, 50, 800, 0.0021, runStart + 3_400,
+          randomUUID(),
+          runId,
+          nodeA,
+          nodeA,
+          "turn1-step1",
+          PROVIDER_ID,
+          MODEL_ID,
+          1200,
+          300,
+          50,
+          800,
+          0.0021,
+          runStart + 3_400,
         );
         usage.run(
-          randomUUID(), runId, nodeA, nodeA, "turn1-step2", PROVIDER_ID, MODEL_ID,
-          400, 120, 20, 1500, 0.0009, runStart + 5_400,
+          randomUUID(),
+          runId,
+          nodeA,
+          nodeA,
+          "turn1-step2",
+          PROVIDER_ID,
+          MODEL_ID,
+          400,
+          120,
+          20,
+          1500,
+          0.0009,
+          runStart + 5_400,
         );
         usage.run(
-          randomUUID(), runId, nodeB, nodeB, "turn1-step1", PROVIDER_ID, MODEL_ID,
-          300, 50, 10, 0, 0.0004, runStart + 8_500,
+          randomUUID(),
+          runId,
+          nodeB,
+          nodeB,
+          "turn1-step1",
+          PROVIDER_ID,
+          MODEL_ID,
+          300,
+          50,
+          10,
+          0,
+          0.0004,
+          runStart + 8_500,
         );
       });
       insert();
@@ -312,10 +364,7 @@ async function createFixture(request: APIRequestContext): Promise<MonitorFixture
 }
 
 /** 收尾即验收删除：运行经 DELETE /api/runs/[id] 收走（级联行 + 叶子目录），工作流走 cleanupByPrefix。 */
-async function removeFixture(
-  fixture: MonitorFixture,
-  request: APIRequestContext,
-): Promise<void> {
+async function removeFixture(fixture: MonitorFixture, request: APIRequestContext): Promise<void> {
   try {
     const del = await request.delete(`/api/runs/${fixture.runId}`);
     if (!del.ok() && del.status() !== 404) {
@@ -386,9 +435,7 @@ const tab = (page: Page, label: string) =>
 
 /** 指标卡取值：<div data-testid="metric-card" data-label="…"> 里的 metric-value */
 const metricValue = (page: Page, label: string) =>
-  page
-    .locator(`[data-testid="metric-card"][data-label="${label}"]`)
-    .getByTestId("metric-value");
+  page.locator(`[data-testid="metric-card"][data-label="${label}"]`).getByTestId("metric-value");
 
 /** 指标卡渲染出真实数值（不是加载态的「—」，也不是空） */
 async function expectMetricHasValue(page: Page, label: string): Promise<string> {
@@ -424,9 +471,7 @@ async function captureJson<T>(
 const isLogs = (url: URL) => url.pathname === "/api/monitor/logs";
 
 test.describe("监控台 · 导航", () => {
-  test("左下角「监控台」入口进入 /monitor，顶栏六个标签逐个切换且 URL 变化", async ({
-    page,
-  }) => {
+  test("左下角「监控台」入口进入 /monitor，顶栏六个标签逐个切换且 URL 变化", async ({ page }) => {
     await page.goto("/workflows");
 
     // 主导航底部的监控台入口
@@ -434,9 +479,7 @@ test.describe("监控台 · 导航", () => {
     await expect(entry).toBeVisible();
     await entry.click();
     await page.waitForURL(/\/monitor$/);
-    await expect(
-      page.getByRole("heading", { name: "监控台", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "监控台", exact: true })).toBeVisible();
 
     // 六个标签都在，且逐个点过去 URL 都变
     for (const item of TABS) {
@@ -471,9 +514,7 @@ test.describe("监控台 · 总览", () => {
     await expect(page.locator('[data-testid="metric-card"]')).toHaveCount(6);
   });
 
-  test("近 24 小时两张图渲染出 svg（运行量柱状图 + token 折线图）", async ({
-    page,
-  }) => {
+  test("近 24 小时两张图渲染出 svg（运行量柱状图 + token 折线图）", async ({ page }) => {
     await page.goto("/monitor");
 
     const bars = page.locator('svg[aria-label="近 24 小时运行量"]');
@@ -497,9 +538,7 @@ test.describe("监控台 · 实时会话", () => {
   }) => {
     await page.goto("/monitor/sessions");
 
-    await expect(
-      page.getByRole("heading", { name: "进行中的会话" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "进行中的会话" })).toBeVisible();
 
     // 连接活着：面板头里的连接徽标显示「实时 HH:MM:SS」，会话计数不再是加载态的「—」
     const panelHeader = page.locator("header").filter({ hasText: "进行中的会话" });
@@ -583,9 +622,7 @@ test.describe("监控台 · Trace", () => {
     await expect(spans.first()).toContainText(formatCost(trace.run.cost));
 
     // 每行右侧的耗时列：至少有一行是「N 秒 / N 分 N 秒 / N 毫秒」
-    await expect(
-      spans.filter({ hasText: /\d+(\.\d+)?\s*(毫秒|秒|分)/ }).first(),
-    ).toBeVisible();
+    await expect(spans.filter({ hasText: /\d+(\.\d+)?\s*(毫秒|秒|分)/ }).first()).toBeVisible();
 
     // 行可展开看详情
     const first = spans.first();
@@ -685,9 +722,7 @@ test.describe("监控台 · 日志检索", () => {
     }
   });
 
-  test("LIKE 通配符按字面匹配：把下划线换成 % 的探针不应命中夹具关键词", async ({
-    page,
-  }) => {
+  test("LIKE 通配符按字面匹配：把下划线换成 % 的探针不应命中夹具关键词", async ({ page }) => {
     const current = fixture!;
     await page.goto("/monitor/logs");
     const rows = page.getByTestId("log-row");
@@ -739,12 +774,8 @@ test.describe("监控台 · 成本分析", () => {
 
     expect(await expectMetricHasValue(page, "总费用")).toBe(formatCost(totals.cost));
     expect(await expectMetricHasValue(page, "总 token")).toBe(formatTokens(totals.tokens));
-    expect(await expectMetricHasValue(page, "assistant 消息")).toBe(
-      formatTokens(totals.messages),
-    );
-    expect(await expectMetricHasValue(page, "日均费用")).toBe(
-      formatCost(totals.cost / cost.days),
-    );
+    expect(await expectMetricHasValue(page, "assistant 消息")).toBe(formatTokens(totals.messages));
+    expect(await expectMetricHasValue(page, "日均费用")).toBe(formatCost(totals.cost / cost.days));
 
     // 两张图
     await expect(page.getByText("每日费用")).toBeVisible();
@@ -761,9 +792,7 @@ test.describe("监控台 · 成本分析", () => {
     const rows = panel.locator("tbody tr");
     await expect(rows).toHaveCount(cost.byModel.length, { timeout: 15_000 });
 
-    const mine = cost.byModel.find(
-      (m) => m.providerId === PROVIDER_ID && m.modelId === MODEL_ID,
-    );
+    const mine = cost.byModel.find((m) => m.providerId === PROVIDER_ID && m.modelId === MODEL_ID);
     expect(mine, "夹具的 node_usage 走 deepseek-official/deepseek-v4-flash").toBeTruthy();
     // 名称单元格的 title 就是 modelId；同一模型经不同 provider 会是两行，再按 provider 收窄
     const row = rows
@@ -827,9 +856,7 @@ test.describe("监控台 · 系统健康", () => {
     await expect(panel).toContainText("data/documents 归档");
   });
 
-  test("清理面板三项「预览影响」都返回成功并显示影响面（不点执行清理）", async ({
-    page,
-  }) => {
+  test("清理面板三项「预览影响」都返回成功并显示影响面（不点执行清理）", async ({ page }) => {
     await page.goto("/monitor/health");
 
     const items = page.getByTestId("cleanup-item");

@@ -5,10 +5,7 @@ import { startRun } from "@/server/engine/runner";
 export const dynamic = "force-dynamic";
 
 /** POST /api/workflows/[id]/run — body { inputs: { [inputNodeId]: PortValue } } */
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
     const { id } = await params;
     const body = (await request.json()) as { inputs?: unknown };
@@ -19,10 +16,7 @@ export async function POST(
     const result = await startRun(id, inputs as Record<string, unknown>);
     if (!result.ok) {
       if (result.status === 422) {
-        return NextResponse.json(
-          { error: result.error, issues: result.issues },
-          { status: 422 },
-        );
+        return NextResponse.json({ error: result.error, issues: result.issues }, { status: 422 });
       }
       return jsonError(result.status, result.error);
     }

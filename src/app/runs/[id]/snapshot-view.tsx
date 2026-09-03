@@ -1,11 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import {
-  asRunSnapshot,
-  type RunSnapshotPortView,
-  type RunSnapshotSkillView,
-} from "../lib";
+import { asRunSnapshot, type RunSnapshotPortView, type RunSnapshotSkillView } from "../lib";
 
 const PRE_CLS =
   "max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border border-zinc-200 bg-zinc-50 p-2.5 font-mono text-xs leading-5 text-zinc-700";
@@ -29,9 +25,7 @@ function SkillItem({ skill }: { skill: RunSnapshotSkillView }) {
     <details className="rounded-md border border-zinc-200 bg-white">
       <summary className="flex cursor-pointer list-none flex-wrap items-baseline gap-x-2 px-3 py-2 text-xs text-zinc-600 transition-colors hover:bg-zinc-50">
         <span className="font-medium text-zinc-800">{skill.name || "（未命名）"}</span>
-        {skill.slug && (
-          <span className="font-mono text-[11px] text-zinc-400">/{skill.slug}</span>
-        )}
+        {skill.slug && <span className="font-mono text-[11px] text-zinc-400">/{skill.slug}</span>}
         {skill.preloaded && (
           <span
             title="会话开始时以 /技能 注入，等同于在命令行敲斜杠命令"
@@ -103,9 +97,7 @@ export function SnapshotView({ snapshot }: { snapshot: unknown }) {
             </div>
             <div>
               <dt className="text-xs text-zinc-400">模型</dt>
-              <dd className="mt-0.5 font-mono text-xs text-zinc-700">
-                {snap.model || "—"}
-              </dd>
+              <dd className="mt-0.5 font-mono text-xs text-zinc-700">{snap.model || "—"}</dd>
             </div>
             <div>
               <dt className="text-xs text-zinc-400">思考强度</dt>
@@ -162,7 +154,11 @@ export function SnapshotView({ snapshot }: { snapshot: unknown }) {
                 {snap.tools.map((tool, i) => (
                   <span
                     key={`${tool.name}-${i}`}
-                    title={tool.visible ? "本 Action 会话看得见这个工具" : "在工作流 Tool 集里，但本 Action 未勾选，会话看不见"}
+                    title={
+                      tool.visible
+                        ? "本 Action 会话看得见这个工具"
+                        : "在工作流 Tool 集里，但本 Action 未勾选，会话看不见"
+                    }
                     className={`inline-flex items-baseline gap-1 rounded border px-1.5 py-0.5 font-mono text-xs ${
                       tool.visible
                         ? "border-zinc-200 bg-white text-zinc-700"

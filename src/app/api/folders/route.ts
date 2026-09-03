@@ -1,11 +1,6 @@
 import { NextResponse } from "next/server";
 import { handle, jsonError } from "@/lib/http";
-import {
-  createFolder,
-  isFolderEntityKind,
-  listEntityLeaves,
-  listFolders,
-} from "@/server/folders";
+import { createFolder, isFolderEntityKind, listEntityLeaves, listFolders } from "@/server/folders";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +13,7 @@ export async function GET(request: Request) {
   return handle(() => {
     const kindRaw = new URL(request.url).searchParams.get("kind");
     if (kindRaw === null) return NextResponse.json({ folders: listFolders() });
-    if (!isFolderEntityKind(kindRaw))
-      return jsonError(400, `不支持文件夹的实体类型：${kindRaw}`);
+    if (!isFolderEntityKind(kindRaw)) return jsonError(400, `不支持文件夹的实体类型：${kindRaw}`);
     return NextResponse.json({
       folders: listFolders(),
       entities: listEntityLeaves(kindRaw),

@@ -72,10 +72,7 @@ const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: "revisions", label: "修订历史" },
 ];
 
-function toDrafts(
-  action: ActionDto | null,
-  direction: "input" | "output",
-): PortDraft[] {
+function toDrafts(action: ActionDto | null, direction: "input" | "output"): PortDraft[] {
   if (!action) return [];
   return action.ports
     .filter((p) => p.direction === direction)
@@ -101,14 +98,12 @@ function portSignature(ports: NextPort[]): string {
 async function uniqueCopyName(base: string): Promise<string> {
   const taken = new Set<string>();
   try {
-    const res = await fetch(
-      `/api/actions?q=${encodeURIComponent(base)}&pageSize=100`,
-      { cache: "no-store" },
-    );
+    const res = await fetch(`/api/actions?q=${encodeURIComponent(base)}&pageSize=100`, {
+      cache: "no-store",
+    });
     if (res.ok) {
       const body = (await res.json()) as { items?: Array<{ name?: string }> };
-      for (const item of body.items ?? [])
-        if (typeof item.name === "string") taken.add(item.name);
+      for (const item of body.items ?? []) if (typeof item.name === "string") taken.add(item.name);
     }
   } catch {
     // 查不到就先按「副本」提交，撞名由服务端 409 兜底
@@ -166,28 +161,14 @@ export function ActionEditor({
   const [description, setDescription] = useState(initial?.description ?? "");
   const [prompt, setPrompt] = useState(initial?.prompt ?? "");
   const [rule, setRule] = useState(initial?.rule ?? "");
-  const [modelId, setModelId] = useState(
-    initial?.modelId ?? models[0]?.id ?? "",
-  );
-  const [effort, setEffort] = useState<ReasoningEffort>(
-    initial?.reasoningEffort ?? "high",
-  );
+  const [modelId, setModelId] = useState(initial?.modelId ?? models[0]?.id ?? "");
+  const [effort, setEffort] = useState<ReasoningEffort>(initial?.reasoningEffort ?? "high");
   // 重入上限只在这个 Action 是回边目标时才起作用（ADR-0009）；0 表示不参与循环。
-  const [maxReentries, setMaxReentries] = useState<number>(
-    initial?.maxReentries ?? 0,
-  );
-  const [onExhausted, setOnExhausted] = useState<"fail" | "accept">(
-    initial?.onExhausted ?? "fail",
-  );
-  const [inputPorts, setInputPorts] = useState<PortDraft[]>(() =>
-    toDrafts(initial, "input"),
-  );
-  const [outputPorts, setOutputPorts] = useState<PortDraft[]>(() =>
-    toDrafts(initial, "output"),
-  );
-  const [preloadSkillIds, setPreloadSkillIds] = useState<string[]>(
-    initial?.preloadSkillIds ?? [],
-  );
+  const [maxReentries, setMaxReentries] = useState<number>(initial?.maxReentries ?? 0);
+  const [onExhausted, setOnExhausted] = useState<"fail" | "accept">(initial?.onExhausted ?? "fail");
+  const [inputPorts, setInputPorts] = useState<PortDraft[]>(() => toDrafts(initial, "input"));
+  const [outputPorts, setOutputPorts] = useState<PortDraft[]>(() => toDrafts(initial, "output"));
+  const [preloadSkillIds, setPreloadSkillIds] = useState<string[]>(initial?.preloadSkillIds ?? []);
   const [toolIds, setToolIds] = useState<string[]>(initial?.toolIds ?? []);
   const [folder, setFolder] = useState<FolderRef | null>(initialFolder);
   /** 保存前的端口基线：回滚后会随之更新，保证影响预览比对的是当前库里的定义 */
@@ -357,14 +338,11 @@ export function ActionEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(
-        initial ? `/api/actions/${initial.id}` : "/api/actions",
-        {
-          method: initial ? "PUT" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(buildPayload()),
-        },
-      );
+      const res = await fetch(initial ? `/api/actions/${initial.id}` : "/api/actions", {
+        method: initial ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildPayload()),
+      });
       if (!res.ok) {
         setError(await readError(res));
         // 关掉影响确认框，让抽屉底部的错误信息可见
@@ -402,9 +380,7 @@ export function ActionEditor({
     }));
 
     // 端口无增删改则不必预览；新建的 Action 也不可能有既存连线
-    const changed =
-      initial !== null &&
-      portSignature(nextPorts) !== portSignature(baseline);
+    const changed = initial !== null && portSignature(nextPorts) !== portSignature(baseline);
     if (!changed) {
       await submit();
       return;
@@ -456,10 +432,7 @@ export function ActionEditor({
   );
 
   return (
-    <div
-      className="ff-fade-in fixed inset-0 z-50 flex justify-end bg-black/30"
-      onClick={onClose}
-    >
+    <div className="ff-fade-in fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
       <div
         className="ff-slide-in-right flex h-full w-full max-w-3xl flex-col bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
@@ -481,10 +454,7 @@ export function ActionEditor({
               </button>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="text-sm text-zinc-400 hover:text-zinc-600"
-          >
+          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-600">
             关闭
           </button>
         </div>
@@ -513,9 +483,7 @@ export function ActionEditor({
             <>
               <div className="grid grid-cols-2 gap-4">
                 <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-zinc-700">
-                    名称
-                  </span>
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">名称</span>
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -524,9 +492,7 @@ export function ActionEditor({
                   />
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-zinc-700">
-                    描述
-                  </span>
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">描述</span>
                   <input
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
@@ -537,9 +503,7 @@ export function ActionEditor({
               </div>
 
               <div>
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  文件夹
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">文件夹</span>
                 <FolderPicker
                   kind="action"
                   entityId={initial?.id ?? ""}
@@ -582,9 +546,7 @@ export function ActionEditor({
 
               <div className="grid grid-cols-2 gap-4">
                 <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-zinc-700">
-                    模型
-                  </span>
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">模型</span>
                   <select
                     value={modelId}
                     onChange={(e) => setModelId(e.target.value)}
@@ -599,14 +561,10 @@ export function ActionEditor({
                   </select>
                 </label>
                 <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-zinc-700">
-                    思考强度
-                  </span>
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">思考强度</span>
                   <select
                     value={effort}
-                    onChange={(e) =>
-                      setEffort(e.target.value as ReasoningEffort)
-                    }
+                    onChange={(e) => setEffort(e.target.value as ReasoningEffort)}
                     className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                   >
                     <option value="off">off（关闭）</option>
@@ -632,9 +590,7 @@ export function ActionEditor({
               />
 
               <div>
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  循环重入
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">循环重入</span>
                 <div className="flex items-center gap-2">
                   <input
                     type="number"
@@ -645,9 +601,7 @@ export function ActionEditor({
                   />
                   <select
                     value={onExhausted}
-                    onChange={(e) =>
-                      setOnExhausted(e.target.value as "fail" | "accept")
-                    }
+                    onChange={(e) => setOnExhausted(e.target.value as "fail" | "accept")}
                     className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm focus:border-zinc-500 focus:outline-none"
                   >
                     <option value="fail">次数耗尽则判失败</option>
@@ -660,26 +614,22 @@ export function ActionEditor({
               </div>
               {initial && refCount > 0 && (
                 <p className="text-xs text-zinc-400">
-                  端口改名、删除或换类型会让引用本 Action
-                  的工作流连线失效，保存前会先给出影响预览。
+                  端口改名、删除或换类型会让引用本 Action 的工作流连线失效，保存前会先给出影响预览。
                 </p>
               )}
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <span className="mb-1 block text-sm font-medium text-zinc-700">
-                    预载技能
-                  </span>
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">预载技能</span>
                   <p className="mb-1.5 text-xs leading-5 text-zinc-500">
-                    会话开始时以 <code className="font-mono">/技能</code> 注入，等同于在命令行敲斜杠命令；
+                    会话开始时以 <code className="font-mono">/技能</code>{" "}
+                    注入，等同于在命令行敲斜杠命令；
                     正文整段进入每个会话的首条消息，是真实成本。只能预载所在工作流技能集里的技能，
                     技能集里其余的由模型看描述自行加载。
                   </p>
                   <div className="max-h-52 space-y-0.5 overflow-y-auto rounded-md border border-zinc-300 p-2">
                     {skills.length === 0 && strayPreloadIds.length === 0 ? (
-                      <p className="px-1.5 py-1 text-xs text-zinc-400">
-                        没有可预载的技能
-                      </p>
+                      <p className="px-1.5 py-1 text-xs text-zinc-400">没有可预载的技能</p>
                     ) : (
                       <>
                         {skills.map((s) => (
@@ -690,17 +640,13 @@ export function ActionEditor({
                             <input
                               type="checkbox"
                               checked={preloadSkillIds.includes(s.id)}
-                              onChange={() =>
-                                toggle(preloadSkillIds, setPreloadSkillIds, s.id)
-                              }
+                              onChange={() => toggle(preloadSkillIds, setPreloadSkillIds, s.id)}
                               className="mt-1"
                             />
                             <span className="min-w-0 flex-1">
                               <span className="text-zinc-800">{s.name}</span>
                               {s.description && (
-                                <span className="ml-2 text-xs text-zinc-400">
-                                  {s.description}
-                                </span>
+                                <span className="ml-2 text-xs text-zinc-400">{s.description}</span>
                               )}
                             </span>
                             <span className="shrink-0 pt-0.5 text-xs text-zinc-400">
@@ -717,9 +663,7 @@ export function ActionEditor({
                             <input
                               type="checkbox"
                               checked
-                              onChange={() =>
-                                toggle(preloadSkillIds, setPreloadSkillIds, id)
-                              }
+                              onChange={() => toggle(preloadSkillIds, setPreloadSkillIds, id)}
                               className="mt-1"
                             />
                             <span className="min-w-0">
@@ -736,18 +680,14 @@ export function ActionEditor({
                   </p>
                 </div>
                 <div>
-                  <span className="mb-1 block text-sm font-medium text-zinc-700">
-                    可见 Tool
-                  </span>
+                  <span className="mb-1 block text-sm font-medium text-zinc-700">可见 Tool</span>
                   <p className="mb-1.5 text-xs leading-5 text-zinc-500">
-                    只有勾选的 Tool 在本 Action 的会话里可见、可调用；所在工作流 Tool 集里其余的对它隐藏。
-                    只能勾选 Tool 集里的 Tool。
+                    只有勾选的 Tool 在本 Action 的会话里可见、可调用；所在工作流 Tool
+                    集里其余的对它隐藏。 只能勾选 Tool 集里的 Tool。
                   </p>
                   <div className="max-h-52 space-y-0.5 overflow-y-auto rounded-md border border-zinc-300 p-2">
                     {tools.length === 0 && strayToolIds.length === 0 ? (
-                      <p className="px-1.5 py-1 text-xs text-zinc-400">
-                        没有可见的 Tool 候选
-                      </p>
+                      <p className="px-1.5 py-1 text-xs text-zinc-400">没有可见的 Tool 候选</p>
                     ) : (
                       <>
                         {tools.map((t) => (
@@ -767,9 +707,7 @@ export function ActionEditor({
                                 {t.publicName}
                               </span>
                               {t.description && (
-                                <span className="ml-2 text-xs text-zinc-400">
-                                  {t.description}
-                                </span>
+                                <span className="ml-2 text-xs text-zinc-400">{t.description}</span>
                               )}
                             </span>
                           </label>
@@ -800,9 +738,7 @@ export function ActionEditor({
             </>
           )}
 
-          {tab === "refs" && initial && (
-            <ReferencesPanel kind="action" id={initial.id} />
-          )}
+          {tab === "refs" && initial && <ReferencesPanel kind="action" id={initial.id} />}
 
           {tab === "revisions" && initial && (
             <RevisionPanel
@@ -822,11 +758,7 @@ export function ActionEditor({
           ) : (
             forkHint &&
             onFork &&
-            tab === "basic" && (
-              <p className="mr-auto max-w-md text-xs text-zinc-400">
-                {forkHint}
-              </p>
-            )
+            tab === "basic" && <p className="mr-auto max-w-md text-xs text-zinc-400">{forkHint}</p>
           )}
           {onFork && tab === "basic" && (
             <button
@@ -894,9 +826,7 @@ function ImpactDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="border-b border-zinc-200 px-5 py-4">
-          <h3 className="text-base font-semibold text-zinc-900">
-            端口改动会破坏既有连线
-          </h3>
+          <h3 className="text-base font-semibold text-zinc-900">端口改动会破坏既有连线</h3>
           <p className="mt-1 text-sm text-red-600">
             将影响 {workflowCount} 个工作流的 {broken.length} 条连线。
           </p>
@@ -989,61 +919,59 @@ function PortListEditor({
             const kind: Kind | null = selected ? selected.kind : null;
             return (
               <div key={p.key} className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <input
-                  value={p.name}
-                  onChange={(e) => update(p.key, { name: e.target.value })}
-                  placeholder="端口名"
-                  className="w-44 rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-zinc-500 focus:outline-none"
-                />
-                <select
-                  value={p.objectTypeId}
-                  onChange={(e) =>
-                    update(p.key, { objectTypeId: e.target.value })
-                  }
-                  className="flex-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm focus:border-zinc-500 focus:outline-none"
-                >
-                  <option value="">选择对象类型…</option>
-                  {objectTypes.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-                {kind ? (
-                  <KindBadge kind={kind} />
-                ) : (
-                  <span className="inline-flex shrink-0 items-center rounded border border-zinc-200 px-1.5 py-0.5 font-mono text-xs text-zinc-300">
-                    —
-                  </span>
-                )}
-                <button
-                  onClick={() => setPorts(ports.filter((x) => x.key !== p.key))}
-                  className="shrink-0 rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
-                  title="删除此端口"
-                >
-                  删除
-                </button>
-              </div>
-              {isOutput && (
-                <div className="flex items-center gap-2 pl-1">
+                <div className="flex items-center gap-2">
                   <input
-                    value={p.artifactPath}
-                    onChange={(e) => update(p.key, { artifactPath: e.target.value })}
-                    placeholder="产物路径，如 draft.md"
-                    className="w-56 rounded-md border border-zinc-300 px-3 py-1 font-mono text-xs focus:border-zinc-500 focus:outline-none"
+                    value={p.name}
+                    onChange={(e) => update(p.key, { name: e.target.value })}
+                    placeholder="端口名"
+                    className="w-44 rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-zinc-500 focus:outline-none"
                   />
-                  <input
-                    value={p.exitName}
-                    onChange={(e) => update(p.key, { exitName: e.target.value })}
-                    placeholder="出口名（留空＝无分支）"
-                    className="w-52 rounded-md border border-zinc-300 px-3 py-1 text-xs focus:border-zinc-500 focus:outline-none"
-                  />
-                  <span className="text-[11px] leading-4 text-zinc-400">
-                    实质内容写进产物文件；同名出口的端口一起生效
-                  </span>
+                  <select
+                    value={p.objectTypeId}
+                    onChange={(e) => update(p.key, { objectTypeId: e.target.value })}
+                    className="flex-1 rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm focus:border-zinc-500 focus:outline-none"
+                  >
+                    <option value="">选择对象类型…</option>
+                    {objectTypes.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                  {kind ? (
+                    <KindBadge kind={kind} />
+                  ) : (
+                    <span className="inline-flex shrink-0 items-center rounded border border-zinc-200 px-1.5 py-0.5 font-mono text-xs text-zinc-300">
+                      —
+                    </span>
+                  )}
+                  <button
+                    onClick={() => setPorts(ports.filter((x) => x.key !== p.key))}
+                    className="shrink-0 rounded-md border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                    title="删除此端口"
+                  >
+                    删除
+                  </button>
                 </div>
-              )}
+                {isOutput && (
+                  <div className="flex items-center gap-2 pl-1">
+                    <input
+                      value={p.artifactPath}
+                      onChange={(e) => update(p.key, { artifactPath: e.target.value })}
+                      placeholder="产物路径，如 draft.md"
+                      className="w-56 rounded-md border border-zinc-300 px-3 py-1 font-mono text-xs focus:border-zinc-500 focus:outline-none"
+                    />
+                    <input
+                      value={p.exitName}
+                      onChange={(e) => update(p.key, { exitName: e.target.value })}
+                      placeholder="出口名（留空＝无分支）"
+                      className="w-52 rounded-md border border-zinc-300 px-3 py-1 text-xs focus:border-zinc-500 focus:outline-none"
+                    />
+                    <span className="text-[11px] leading-4 text-zinc-400">
+                      实质内容写进产物文件；同名出口的端口一起生效
+                    </span>
+                  </div>
+                )}
               </div>
             );
           })}

@@ -24,16 +24,12 @@ test.describe("对象类型", () => {
     }
   });
 
-  test("非法 JSON Schema 被阻止；合法 schema 创建成功后可删除", async ({
-    page,
-  }) => {
+  test("非法 JSON Schema 被阻止；合法 schema 创建成功后可删除", async ({ page }) => {
     const name = `${PREFIX}${Date.now()}`;
     await page.goto("/object-types");
 
     await page.getByRole("button", { name: "新建类型" }).click();
-    await expect(
-      page.getByRole("heading", { name: "新建对象类型" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "新建对象类型" })).toBeVisible();
     await page.getByPlaceholder("如：需求文件、集采计划").fill(name);
     // v2 顶部工具条也有一个 select（排序），按标签定位到抽屉里的「基础形态」
     await page.getByLabel("基础形态").selectOption("json");
@@ -42,18 +38,14 @@ test.describe("对象类型", () => {
     await page.getByPlaceholder(SCHEMA_PLACEHOLDER).fill("{这不是合法的 JSON");
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(page.getByText("JSON Schema 不是合法 JSON")).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: "新建对象类型" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "新建对象类型" })).toBeVisible();
 
     // 合法 schema：创建成功
     await page
       .getByPlaceholder(SCHEMA_PLACEHOLDER)
       .fill('{"type":"object","properties":{"name":{"type":"string"}}}');
     await page.getByRole("button", { name: "保存", exact: true }).click();
-    await expect(
-      page.getByRole("heading", { name: "新建对象类型" }),
-    ).toBeHidden();
+    await expect(page.getByRole("heading", { name: "新建对象类型" })).toBeHidden();
 
     const row = page
       .locator("li")
@@ -86,9 +78,7 @@ test.describe("对象类型", () => {
     await page.getByRole("button", { name: "取消", exact: true }).click();
   });
 
-  test("删除被引用的「集采计划」类型：显示 409 引用信息且实体保留", async ({
-    page,
-  }) => {
+  test("删除被引用的「集采计划」类型：显示 409 引用信息且实体保留", async ({ page }) => {
     await page.goto("/object-types");
     const row = page
       .locator("li")
@@ -99,9 +89,7 @@ test.describe("对象类型", () => {
     await row.getByRole("button", { name: "删除" }).click();
 
     // 409：错误提示带 usedBy 引用方
-    await expect(
-      row.getByText("该对象类型正被引用，无法删除"),
-    ).toBeVisible();
+    await expect(row.getByText("该对象类型正被引用，无法删除")).toBeVisible();
     await expect(row.getByText(/引用方：.*集采计划审核/)).toBeVisible();
 
     // 实体仍在列表（刷新后依旧存在）

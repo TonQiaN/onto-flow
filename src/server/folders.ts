@@ -9,13 +9,7 @@
  *   assignEntityFolder / normalizeFolderName / isFolderEntityKind
  */
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
-import {
-  FOLDER_ENTITY_KINDS,
-  db,
-  entityFolders,
-  folders,
-  type FolderEntityKind,
-} from "@/db";
+import { FOLDER_ENTITY_KINDS, db, entityFolders, folders, type FolderEntityKind } from "@/db";
 import { entityExists, listEntities } from "@/server/references";
 
 export interface FolderDto {
@@ -31,9 +25,7 @@ export interface FolderRef {
   path: string;
 }
 
-export type Result<T> =
-  | { ok: true; data: T }
-  | { ok: false; status: number; error: string };
+export type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
 
 const ok = <T>(data: T): Result<T> => ({ ok: true, data });
 const fail = (status: number, error: string): Result<never> => ({
@@ -52,12 +44,7 @@ function toDto(row: typeof folders.$inferSelect): FolderDto {
 
 /** 全部文件夹，按 name 升序（树形由前端组装） */
 export function listFolders(): FolderDto[] {
-  return db
-    .select()
-    .from(folders)
-    .orderBy(asc(folders.name))
-    .all()
-    .map(toDto);
+  return db.select().from(folders).orderBy(asc(folders.name)).all().map(toDto);
 }
 
 /**
@@ -91,16 +78,14 @@ export function normalizeFolderName(raw: unknown): Result<string> {
   if (typeof raw !== "string") return fail(400, "文件夹名必须是字符串");
   const collapsed = raw.replace(/\s+/g, " ").trim();
   if (collapsed === "") return fail(400, "文件夹名不能为空");
-  if (collapsed.includes("/"))
-    return fail(400, "文件夹名不能包含 /（层级请用子文件夹表达）");
+  if (collapsed.includes("/")) return fail(400, "文件夹名不能包含 /（层级请用子文件夹表达）");
   return ok(collapsed);
 }
 
 /** parentId 入参解析：undefined/null = 根层级，其余必须是字符串 */
 function parseParentId(raw: unknown): Result<string | null> {
   if (raw === undefined || raw === null) return ok(null);
-  if (typeof raw !== "string" || raw === "")
-    return fail(400, "parentId 必须是字符串或 null");
+  if (typeof raw !== "string" || raw === "") return fail(400, "parentId 必须是字符串或 null");
   return ok(raw);
 }
 
@@ -109,11 +94,7 @@ function folderById(id: string): typeof folders.$inferSelect | undefined {
 }
 
 /** 同级（同 parentId）是否已有同名文件夹；excludeId 用于排除自身 */
-function siblingNameTaken(
-  name: string,
-  parentId: string | null,
-  excludeId?: string,
-): boolean {
+function siblingNameTaken(name: string, parentId: string | null, excludeId?: string): boolean {
   // 用 .all().some() 而非 .get()：万一历史数据里已存在重名，.get() 只取第一条
   // 命中会让结果依插入顺序而异，这里逐条排除 excludeId 后再判断
   return db
@@ -122,9 +103,7 @@ function siblingNameTaken(
     .where(
       and(
         eq(folders.name, name),
-        parentId === null
-          ? isNull(folders.parentId)
-          : eq(folders.parentId, parentId),
+        parentId === null ? isNull(folders.parentId) : eq(folders.parentId, parentId),
       ),
     )
     .all()
@@ -132,16 +111,12 @@ function siblingNameTaken(
 }
 
 /** 创建：校验 parent 存在（parentId 可 null）、同级同名 409 */
-export function createFolder(
-  rawName: unknown,
-  rawParentId: unknown,
-): Result<FolderDto> {
+export function createFolder(rawName: unknown, rawParentId: unknown): Result<FolderDto> {
   const name = normalizeFolderName(rawName);
   if (!name.ok) return name;
   const parentId = parseParentId(rawParentId);
   if (!parentId.ok) return parentId;
-  if (parentId.data !== null && !folderById(parentId.data))
-    return fail(404, "父文件夹不存在");
+  if (parentId.data !== null && !folderById(parentId.data)) return fail(404, "父文件夹不存在");
   if (siblingNameTaken(name.data, parentId.data))
     return fail(409, `同级已有文件夹「${name.data}」`);
   const row = db
@@ -212,16 +187,10 @@ export function deleteFolder(id: string): Result<{ ok: true }> {
     .all();
   for (const child of children) {
     if (siblingNameTaken(child.name, existing.parentId, id))
-      return fail(
-        409,
-        `删除后子文件夹「${child.name}」将与目标层级现有文件夹重名，请先重命名`,
-      );
+      return fail(409, `删除后子文件夹「${child.name}」将与目标层级现有文件夹重名，请先重命名`);
   }
   db.transaction((tx) => {
-    tx.update(folders)
-      .set({ parentId: existing.parentId })
-      .where(eq(folders.parentId, id))
-      .run();
+    tx.update(folders).set({ parentId: existing.parentId }).where(eq(folders.parentId, id)).run();
     if (existing.parentId === null) {
       tx.delete(entityFolders).where(eq(entityFolders.folderId, id)).run();
     } else {
@@ -242,21 +211,13 @@ export function assignEntityFolder(
   folderId: string | null,
 ): Result<{ ok: true }> {
   if (!entityExists(kind, entityId)) return fail(404, "实体不存在");
-  if (folderId !== null && !folderById(folderId))
-    return fail(404, "文件夹不存在");
+  if (folderId !== null && !folderById(folderId)) return fail(404, "文件夹不存在");
   db.transaction((tx) => {
     tx.delete(entityFolders)
-      .where(
-        and(
-          eq(entityFolders.entityKind, kind),
-          eq(entityFolders.entityId, entityId),
-        ),
-      )
+      .where(and(eq(entityFolders.entityKind, kind), eq(entityFolders.entityId, entityId)))
       .run();
     if (folderId !== null)
-      tx.insert(entityFolders)
-        .values({ entityKind: kind, entityId, folderId })
-        .run();
+      tx.insert(entityFolders).values({ entityKind: kind, entityId, folderId }).run();
   });
   return ok({ ok: true });
 }
@@ -296,10 +257,7 @@ function folderPath(
  * 【对外接口】批量取归属，供四个库的列表 API 一次查完本页实体。
  * 返回 Map：entityId → FolderRef；未归类实体不出现在 Map 里。
  */
-export function foldersForEntities(
-  kind: FolderEntityKind,
-  ids: string[],
-): Map<string, FolderRef> {
+export function foldersForEntities(kind: FolderEntityKind, ids: string[]): Map<string, FolderRef> {
   const result = new Map<string, FolderRef>();
   if (ids.length === 0) return result;
   const rows = db
@@ -308,12 +266,7 @@ export function foldersForEntities(
       folderId: entityFolders.folderId,
     })
     .from(entityFolders)
-    .where(
-      and(
-        eq(entityFolders.entityKind, kind),
-        inArray(entityFolders.entityId, ids),
-      ),
-    )
+    .where(and(eq(entityFolders.entityKind, kind), inArray(entityFolders.entityId, ids)))
     .all();
   if (rows.length === 0) return result;
   const byId = folderMap();

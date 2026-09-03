@@ -14,21 +14,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { and, eq, sql } from "drizzle-orm";
-import {
-  db,
-  nodeUsage,
-  runEvents,
-  runNodes,
-} from "@/db";
+import { db, nodeUsage, runEvents, runNodes } from "@/db";
 import { exitsOf, hasNamedExits, type ResolvedNode, type ResolvedPort } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
 import { DATA_DIR } from "@/server/fs-safety";
 import type { NodeToolFilter } from "@/server/harness/rpc/types";
 import type { RunProcess } from "@/server/harness/runtime";
-import {
-  WORKSPACE_SKILLS_SUBDIR,
-  type RunWorkspace,
-} from "@/server/harness/workspace";
+import { WORKSPACE_SKILLS_SUBDIR, type RunWorkspace } from "@/server/harness/workspace";
 import type {
   ResolvedActionDefinition,
   ResolvedActionPort,
@@ -141,13 +133,10 @@ const actionUsageStore = globalThis as typeof globalThis & {
   ontoflowUnsettledUsageRollups?: Map<string, UnsettledUsageRollup>;
 };
 const unsettledUsageRollups =
-  actionUsageStore.ontoflowUnsettledUsageRollups ??
-  new Map<string, UnsettledUsageRollup>();
+  actionUsageStore.ontoflowUnsettledUsageRollups ?? new Map<string, UnsettledUsageRollup>();
 actionUsageStore.ontoflowUnsettledUsageRollups = unsettledUsageRollups;
 
-export async function runActionNode(
-  ctx: ActionNodeContext,
-): Promise<ActionNodeResult> {
+export async function runActionNode(ctx: ActionNodeContext): Promise<ActionNodeResult> {
   assertNotCancelled(ctx.runId);
 
   const { action, model, ports, preloads } = ctx.definition;
@@ -226,20 +215,16 @@ export async function runActionNode(
   let usageMayContinue = false;
 
   try {
-    await ctx.proc.runTurn(
-      sessionId,
-      [{ type: "text", text: renderedPrompt }],
-      {
-        agentOptions: { provider: model.providerId, model: model.modelId },
-        nodeOptions: {
-          outputSchema: buildOutputSchema(exits, branching),
-          reasoningEffort: action.reasoningEffort,
-          maxSteps: NODE_MAX_STEPS,
-          ...(ctx.toolFilter === undefined ? {} : { toolFilter: ctx.toolFilter }),
-        },
-        timeoutMs: NODE_TURN_TIMEOUT_MS,
+    await ctx.proc.runTurn(sessionId, [{ type: "text", text: renderedPrompt }], {
+      agentOptions: { provider: model.providerId, model: model.modelId },
+      nodeOptions: {
+        outputSchema: buildOutputSchema(exits, branching),
+        reasoningEffort: action.reasoningEffort,
+        maxSteps: NODE_MAX_STEPS,
+        ...(ctx.toolFilter === undefined ? {} : { toolFilter: ctx.toolFilter }),
       },
-    );
+      timeoutMs: NODE_TURN_TIMEOUT_MS,
+    });
   } catch (turnError) {
     // runTurn 的墙钟超时只会停止 Next 侧等待，不会自动停止 agent。先关闭并等待
     // 该会话真正静止，之后 finally 才能做最终用量汇总；否则并行兄弟节点仍在跑时，
@@ -305,12 +290,7 @@ function readProjectedSkills(
 ): RunSnapshot["skills"] {
   const preloaded = new Set(preloads.map((skill) => skill.id));
   return skillRefs.map((skill) => {
-    const file = path.join(
-      workspace.workspaceDir,
-      WORKSPACE_SKILLS_SUBDIR,
-      skill.slug,
-      "SKILL.md",
-    );
+    const file = path.join(workspace.workspaceDir, WORKSPACE_SKILLS_SUBDIR, skill.slug, "SKILL.md");
     try {
       return {
         id: skill.id,
@@ -550,9 +530,7 @@ function collectArtifacts(
     const artifactPath = port.artifactPath!;
     const abs = path.join(workspace.workspaceDir, artifactPath);
     if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
-      throw new Error(
-        `Action「${actionName}」声明的产物没有写出来：${artifactPath}`,
-      );
+      throw new Error(`Action「${actionName}」声明的产物没有写出来：${artifactPath}`);
     }
     outputs[port.name] = {
       kind: "file",
@@ -606,11 +584,10 @@ function readNodeUsage(runId: string, nodeId: string): UsageAmounts {
   );
 }
 
-function readSessionUsage(key: {
-  runId: string;
-  nodeId: string;
-  sessionId: string;
-}): { total: UsageAmounts & { chunks: number }; fallbackChunks: number } {
+function readSessionUsage(key: { runId: string; nodeId: string; sessionId: string }): {
+  total: UsageAmounts & { chunks: number };
+  fallbackChunks: number;
+} {
   const persisted = db
     .select({
       inputTokens: sql<number>`coalesce(sum(${nodeUsage.inputTokens}), 0)`,
@@ -720,10 +697,7 @@ function refreshUnsettledUsageRollup(state: UnsettledUsageRollup): void {
         .get();
       state.eventId = inserted.id;
     } else {
-      db.update(runEvents)
-        .set({ payload })
-        .where(eq(runEvents.id, state.eventId))
-        .run();
+      db.update(runEvents).set({ payload }).where(eq(runEvents.id, state.eventId)).run();
     }
     state.eventDirty = false;
   } catch (err) {
@@ -806,11 +780,7 @@ export function finalizeUnsettledActionUsage(runId: string): void {
  * 再补入明细写入失败时 events.ts 留下的紧凑兜底；兜底只留失败的 usage chunk，
  * 不驻留原始流式事件，也不会在并行运行下把 Next 堆推到 GB 级。
  */
-function recordUsage(
-  ctx: ActionNodeContext,
-  sessionId: string,
-  model: { modelId: string },
-): void {
+function recordUsage(ctx: ActionNodeContext, sessionId: string, model: { modelId: string }): void {
   // 正常会话也先登记可重试状态。若 usage 事件瞬时写失败，本次 Action 响亮失败，
   // runner 在子进程退出后沿同一最终结算链持续重试，不能只留下 run_nodes 数字。
   const { key, state } = usageRollupState(ctx, sessionId, model, false);

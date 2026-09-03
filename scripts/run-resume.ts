@@ -22,10 +22,7 @@ import { totalUsageTokens } from "./token-total";
 import { isTextPreviewMime } from "./resume-artifact-inspection";
 import { inspectPdfPages, readPdfPageCount } from "./resume-pdf-inspection";
 
-const BASE_URL = (process.env.ONTOFLOW_BASE_URL ?? "http://127.0.0.1:3592").replace(
-  /\/$/,
-  "",
-);
+const BASE_URL = (process.env.ONTOFLOW_BASE_URL ?? "http://127.0.0.1:3592").replace(/\/$/, "");
 const POLL_INTERVAL_MS = 3_000;
 const TIMEOUT_MS = 30 * 60 * 1_000;
 
@@ -124,7 +121,8 @@ async function requestJson<T>(route: string, init?: RequestInit): Promise<T> {
   } catch {
     throw new Error(`${route} 返回了非 JSON 响应（HTTP ${response.status}）`);
   }
-  if (!response.ok) throw new Error(`${route} 调用失败（HTTP ${response.status}）：${asError(body)}`);
+  if (!response.ok)
+    throw new Error(`${route} 调用失败（HTTP ${response.status}）：${asError(body)}`);
   return body as T;
 }
 
@@ -151,7 +149,8 @@ async function upload(dataRelativePath: string): Promise<FilePortValue> {
     method: "POST",
     body: form,
   });
-  if (value.kind !== "file" || !value.file?.path) throw new Error("上传接口没有返回 file PortValue");
+  if (value.kind !== "file" || !value.file?.path)
+    throw new Error("上传接口没有返回 file PortValue");
   return value;
 }
 
@@ -160,7 +159,9 @@ function filePortValue(value: unknown): FilePortValue | null {
   const port = value as Record<string, unknown>;
   if (port.kind !== "file" || typeof port.file !== "object" || port.file === null) return null;
   const file = port.file as Record<string, unknown>;
-  return typeof file.path === "string" && typeof file.name === "string" && typeof file.mime === "string"
+  return typeof file.path === "string" &&
+    typeof file.name === "string" &&
+    typeof file.mime === "string"
     ? { kind: "file", file: { path: file.path, name: file.name, mime: file.mime } }
     : null;
 }
@@ -241,7 +242,9 @@ async function inspectTrajectories(runId: string, nodes: RunNode[]) {
       `/api/runs/${runId}/nodes/${node.nodeId}/trajectory`,
     );
     if (!trajectory.available || trajectory.sessions.length === 0) {
-      throw new Error(`Action「${node.label}」没有可检查的 Agent 轨迹：${trajectory.reason ?? "unknown"}`);
+      throw new Error(
+        `Action「${node.label}」没有可检查的 Agent 轨迹：${trajectory.reason ?? "unknown"}`,
+      );
     }
     for (const session of trajectory.sessions) {
       sessions++;
@@ -328,7 +331,9 @@ async function main(): Promise<void> {
 
   const artifacts = await inspectArtifacts(started.runId, detail.nodes);
   if (artifacts.length !== 11) {
-    throw new Error(`工作区文件应为两份物化输入加九份 Action 产物，共 11 份；实际 ${artifacts.length}`);
+    throw new Error(
+      `工作区文件应为两份物化输入加九份 Action 产物，共 11 份；实际 ${artifacts.length}`,
+    );
   }
   if (!artifacts.some((artifact) => artifact.path.endsWith(`/${RESUME_MATCH_RESULT_ARTIFACT}`))) {
     throw new Error(`工作区缺少 ${RESUME_MATCH_RESULT_ARTIFACT}`);
@@ -344,10 +349,7 @@ async function main(): Promise<void> {
   }
   const trajectory = await inspectTrajectories(started.runId, detail.nodes);
 
-  const totalTokens = detail.nodes.reduce(
-    (sum, node) => sum + totalUsageTokens(node),
-    0,
-  );
+  const totalTokens = detail.nodes.reduce((sum, node) => sum + totalUsageTokens(node), 0);
   const totalCost = detail.nodes.reduce((sum, node) => sum + node.cost, 0);
   console.log(
     JSON.stringify(

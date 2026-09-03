@@ -81,11 +81,7 @@ export function CleanupPanel({
       <Panel
         title="手动清理"
         subtitle="本版没有任何自动/定时清理，三项都要人工触发"
-        right={
-          <span className="font-mono text-[11px] text-red-400/80">
-            删除不可撤销
-          </span>
-        }
+        right={<span className="font-mono text-[11px] text-red-400/80">删除不可撤销</span>}
         bodyClassName="divide-y divide-zinc-800"
       >
         {SPECS.map((spec) => (
@@ -168,9 +164,7 @@ function CleanupItem({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="text-sm font-medium text-zinc-100">{spec.title}</h3>
-          <p className="mt-1 max-w-2xl text-xs leading-5 text-zinc-500">
-            {spec.what}
-          </p>
+          <p className="mt-1 max-w-2xl text-xs leading-5 text-zinc-500">{spec.what}</p>
         </div>
         <div
           className={`shrink-0 rounded border px-2.5 py-1 font-mono text-[11px] ${
@@ -229,9 +223,7 @@ function CleanupItem({
           预览：将删除 {formatCount(preview.items)} 项
           {preview.bytes > 0 && ` · 释放约 ${formatBytes(preview.bytes)}`}
           {preview.items === 0 && "（没有符合条件的数据，无需清理）"}
-          {preview.note && (
-            <span className="text-zinc-500"> · {preview.note}</span>
-          )}
+          {preview.note && <span className="text-zinc-500"> · {preview.note}</span>}
         </p>
       )}
 
@@ -239,9 +231,7 @@ function CleanupItem({
         <p className="mt-2 font-mono text-xs text-emerald-400">
           已清理 {formatCount(result.items)} 项
           {result.bytes > 0 && ` · 释放 ${formatBytes(result.bytes)}`}
-          {result.note && (
-            <span className="text-zinc-500"> · {result.note}</span>
-          )}
+          {result.note && <span className="text-zinc-500"> · {result.note}</span>}
         </p>
       )}
 
@@ -298,9 +288,7 @@ function ConfirmDialog({
         className="w-full max-w-lg rounded-lg border border-red-900/70 bg-zinc-900 shadow-xl"
       >
         <header className="border-b border-zinc-800 px-5 py-3">
-          <h3 className="text-sm font-medium text-red-300">
-            确认清理：{spec.title}
-          </h3>
+          <h3 className="text-sm font-medium text-red-300">确认清理：{spec.title}</h3>
         </header>
 
         <div className="space-y-3 px-5 py-4 text-xs leading-5 text-zinc-300">
@@ -321,9 +309,7 @@ function ConfirmDialog({
                 <>
                   {formatCount(preview.items)} 项
                   {preview.bytes > 0 && ` · ${formatBytes(preview.bytes)}`}
-                  {preview.note && (
-                    <span className="text-zinc-500"> · {preview.note}</span>
-                  )}
+                  {preview.note && <span className="text-zinc-500"> · {preview.note}</span>}
                 </>
               ) : (
                 <span className="text-amber-400">预览失败，影响面未知</span>
@@ -340,15 +326,12 @@ function ConfirmDialog({
           </p>
 
           {preview?.items === 0 && (
-            <p className="text-zinc-500">
-              当前预览为 0 项，执行不会有任何变化。
-            </p>
+            <p className="text-zinc-500">当前预览为 0 项，执行不会有任何变化。</p>
           )}
 
           <label className="block">
             <span className="text-zinc-400">
-              请输入 <code className="text-zinc-100">{CONFIRM_WORD}</code>{" "}
-              以确认你已理解上述影响：
+              请输入 <code className="text-zinc-100">{CONFIRM_WORD}</code> 以确认你已理解上述影响：
             </span>
             <input
               autoFocus

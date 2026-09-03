@@ -64,7 +64,13 @@ function upsertAction(input: {
   input.inputs.forEach((p, i) =>
     db
       .insert(actionPorts)
-      .values({ actionId: id, direction: "input", name: p.name, objectTypeId: p.objectTypeId, position: i })
+      .values({
+        actionId: id,
+        direction: "input",
+        name: p.name,
+        objectTypeId: p.objectTypeId,
+        position: i,
+      })
       .run(),
   );
   input.outputs.forEach((p, i) =>
@@ -91,7 +97,8 @@ async function main(): Promise<void> {
     .from(models)
     .where(and(eq(models.providerId, "deepseek-official"), eq(models.modelId, "deepseek-v4-flash")))
     .get();
-  if (!model) throw new Error("找不到 deepseek-official/deepseek-v4-flash 模型行，先跑 npm run db:seed");
+  if (!model)
+    throw new Error("找不到 deepseek-official/deepseek-v4-flash 模型行，先跑 npm run db:seed");
 
   const tNeed = upsertObjectType(`${PREFIX}需求`, "text");
   const tDraft = upsertObjectType(`${PREFIX}草稿`, "file");
@@ -135,20 +142,49 @@ async function main(): Promise<void> {
       { id: nIn, workflowId: wf.id, kind: "input", objectTypeId: tNeed, label: "需求", x: 0, y: 0 },
       { id: nA1, workflowId: wf.id, kind: "action", actionId: a1, label: "起草", x: 240, y: 0 },
       { id: nA2, workflowId: wf.id, kind: "action", actionId: a2, label: "摘要", x: 480, y: 0 },
-      { id: nOut, workflowId: wf.id, kind: "output", objectTypeId: tSummary, label: "产出", x: 720, y: 0 },
+      {
+        id: nOut,
+        workflowId: wf.id,
+        kind: "output",
+        objectTypeId: tSummary,
+        label: "产出",
+        x: 720,
+        y: 0,
+      },
     ])
     .run();
   db.insert(workflowEdges)
     .values([
-      { workflowId: wf.id, sourceNodeId: nIn, sourcePort: "value", targetNodeId: nA1, targetPort: "需求" },
-      { workflowId: wf.id, sourceNodeId: nA1, sourcePort: "草稿", targetNodeId: nA2, targetPort: "草稿" },
-      { workflowId: wf.id, sourceNodeId: nA2, sourcePort: "摘要", targetNodeId: nOut, targetPort: "value" },
+      {
+        workflowId: wf.id,
+        sourceNodeId: nIn,
+        sourcePort: "value",
+        targetNodeId: nA1,
+        targetPort: "需求",
+      },
+      {
+        workflowId: wf.id,
+        sourceNodeId: nA1,
+        sourcePort: "草稿",
+        targetNodeId: nA2,
+        targetPort: "草稿",
+      },
+      {
+        workflowId: wf.id,
+        sourceNodeId: nA2,
+        sourcePort: "摘要",
+        targetNodeId: nOut,
+        targetPort: "value",
+      },
     ])
     .run();
   console.log(`工作流已就绪：${wfName}（${wf.id}）`);
 
   const started = await startRun(wf.id, {
-    [nIn]: { kind: "text", text: "为一个本地 Agent 工作流编排工具写一段产品简介，面向工程师读者。" },
+    [nIn]: {
+      kind: "text",
+      text: "为一个本地 Agent 工作流编排工具写一段产品简介，面向工程师读者。",
+    },
   });
   if (!started.ok) throw new Error(`启动失败：${JSON.stringify(started)}`);
   const runId = started.runId;

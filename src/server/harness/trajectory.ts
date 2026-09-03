@@ -249,9 +249,7 @@ const IGNORED_EVENT_TYPES = new Set<string>([
 ]);
 
 /** 读取一个运行里属于某 Action 的全部轮次，并按轮次返回精简展示投影。 */
-export function readAgentTrajectory(
-  options: ReadAgentTrajectoryOptions,
-): AgentTrajectoryResponse {
+export function readAgentTrajectory(options: ReadAgentTrajectoryOptions): AgentTrajectoryResponse {
   if (options.runDir === null) {
     return { available: false, reason: "not-recorded", sessions: [] };
   }
@@ -261,10 +259,7 @@ export function readAgentTrajectory(
   const runsRoot = path.resolve(
     /* turbopackIgnore: true */ options.runsRoot ?? path.join(DATA_DIR, "runs"),
   );
-  const storedCandidate = path.resolve(
-    /* turbopackIgnore: true */ process.cwd(),
-    options.runDir,
-  );
+  const storedCandidate = path.resolve(/* turbopackIgnore: true */ process.cwd(), options.runDir);
   const candidate =
     options.runsRoot === undefined
       ? resolveWithinData(path.relative(DATA_DIR, storedCandidate))
@@ -290,10 +285,7 @@ export function readAgentTrajectory(
   let visited = 0;
   const encodedNodeId = encodeSessionSegment(options.nodeId);
   for (const cwdEntry of readDirectories(sessionsReal)) {
-    const cwdBucket = path.join(
-      /* turbopackIgnore: true */ sessionsReal,
-      cwdEntry.name,
-    );
+    const cwdBucket = path.join(/* turbopackIgnore: true */ sessionsReal, cwdEntry.name);
     for (const sessionEntry of readDirectories(cwdBucket)) {
       // rc.2 的 session 目录名是 encodeSegment(id)。先用这个可逆编码筛候选，
       // 避免打开一个节点时全文读取同一运行内其它 Agent 的大日志；header 仍是
@@ -425,9 +417,7 @@ export function parseSessionJsonl(content: string): ParsedSessionLog {
   const header = parseHeader(content);
   if (header === undefined) throw new Error("会话日志缺少合法 header");
   if (header.version !== SESSION_FORMAT_VERSION) {
-    throw new Error(
-      `会话日志版本不受支持：需要 ${SESSION_FORMAT_VERSION}，实际 ${header.version}`,
-    );
+    throw new Error(`会话日志版本不受支持：需要 ${SESSION_FORMAT_VERSION}，实际 ${header.version}`);
   }
 
   const hasTrailingNewline = content.endsWith("\n");
@@ -465,9 +455,7 @@ export function parseSessionJsonl(content: string): ParsedSessionLog {
   let expectedSeq = 0;
   for (const event of events) {
     if (event.seq !== expectedSeq) {
-      throw new Error(
-        `会话日志损坏：事件 seq 不连续，需要 ${expectedSeq}，实际 ${event.seq}`,
-      );
+      throw new Error(`会话日志损坏：事件 seq 不连续，需要 ${expectedSeq}，实际 ${event.seq}`);
     }
     expectedSeq++;
   }
@@ -492,10 +480,7 @@ export function projectSession(
   const turnNumbers = new Set<number>();
   const stepNumbers = new Set<string>();
   const assistantSteps = new Map<string, AssistantStepFact>();
-  const turnEnds = new Map<
-    number,
-    Extract<SessionEvent, { type: "turn/end" }>
-  >();
+  const turnEnds = new Map<number, Extract<SessionEvent, { type: "turn/end" }>>();
   const compactions = new Map<string, CompactionFact>();
   const prunes: PruneFact[] = [];
 
@@ -543,9 +528,7 @@ export function projectSession(
         const tools = event.data.header.tools ?? [];
         const details: TrajectoryDetail[] = [];
         if (typeof event.data.header.system === "string") {
-          details.push(
-            detail("系统提示", event.data.header.system, "text", scrubRoots),
-          );
+          details.push(detail("系统提示", event.data.header.system, "text", scrubRoots));
         }
         if (tools.length > 0) {
           details.push(detail("工具清单", tools, "json", scrubRoots));
@@ -629,10 +612,7 @@ export function projectSession(
           kind: direct ? "user" : "context",
           lane: "input",
           label: direct ? "用户" : contextLabel(sourceKind, source, skillNames),
-          summary: summary(
-            content || (direct ? "用户输入" : "上下文注入"),
-            scrubRoots,
-          ),
+          summary: summary(content || (direct ? "用户输入" : "上下文注入"), scrubRoots),
           turn: currentTurn,
           step: currentStep,
           startedAt: event.time,
@@ -790,15 +770,7 @@ export function projectSession(
     const call = toolCalls.get(callId);
     const result = toolResults.get(callId);
     records.push(
-      toolRecord(
-        callId,
-        call,
-        result,
-        scrubRoots,
-        header.id,
-        active,
-        finishedAt ?? lastEventTime,
-      ),
+      toolRecord(callId, call, result, scrubRoots, header.id, active, finishedAt ?? lastEventTime),
     );
   }
 
@@ -843,9 +815,7 @@ export function projectSession(
   };
 }
 
-function newAssistantStep(
-  event: Extract<SessionEvent, { type: "step/start" }>,
-): AssistantStepFact {
+function newAssistantStep(event: Extract<SessionEvent, { type: "step/start" }>): AssistantStepFact {
   return {
     turn: event.data.turn,
     step: event.data.step,
@@ -920,8 +890,7 @@ function applyAssistantChunk(
         id: previous?.type === "tool-call" && previous.id ? previous.id : String(chunk.id),
         name: chunk.name ?? (previous?.type === "tool-call" ? previous.name : ""),
         arguments:
-          (previous?.type === "tool-call" ? previous.arguments : "") +
-          chunk.argumentsDelta,
+          (previous?.type === "tool-call" ? previous.arguments : "") + chunk.argumentsDelta,
       };
       break;
     }
@@ -937,17 +906,13 @@ function applyAssistantChunk(
     ...state,
     lastSeq: event.seq,
     blocks,
-    firstTokenTime:
-      state.firstTokenTime ?? (isVisibleChunk(chunk) ? event.time : null),
+    firstTokenTime: state.firstTokenTime ?? (isVisibleChunk(chunk) ? event.time : null),
   };
 }
 
 function projectAssistantBlock(value: unknown): AssistantProjectionBlock | null {
   if (!isContentBlock(value)) return null;
-  if (
-    (value.type === "text" || value.type === "reasoning") &&
-    typeof value.text === "string"
-  ) {
+  if ((value.type === "text" || value.type === "reasoning") && typeof value.text === "string") {
     return { type: value.type, text: value.text };
   }
   if (value.type === "tool-call") {
@@ -973,8 +938,7 @@ function assistantRecord(
   const final = state.final;
   const boundary = state.stepEnd ?? turnEnd;
 
-  const blocks: readonly unknown[] =
-    final?.data.message.content ?? state.blocks.filter(isDefined);
+  const blocks: readonly unknown[] = final?.data.message.content ?? state.blocks.filter(isDefined);
   const reasoning = blocksText(blocks, "reasoning");
   const text = blocksText(blocks, "text");
   const toolCount = blocks.filter(
@@ -982,8 +946,8 @@ function assistantRecord(
   ).length;
   // 每个 attempt 的 usage chunk 都是独立结算值：跨 retry 求和；最终
   // assistant/message 携带的是同一结算的副本，只在完全没有 chunk usage 时兜底。
-  const usage = state.usage ??
-    (final?.data.usage === undefined ? undefined : normalizeUsage(final.data.usage));
+  const usage =
+    state.usage ?? (final?.data.usage === undefined ? undefined : normalizeUsage(final.data.usage));
   const interrupted =
     final?.data.interrupted === true ||
     (final === undefined && (boundary !== undefined || !sessionActive));
@@ -1007,8 +971,7 @@ function assistantRecord(
           state.firstTokenTime === null
             ? null
             : Math.max(0, state.firstTokenTime - state.startTime),
-        durationMs:
-          completedAt === null ? null : Math.max(0, completedAt - state.startTime),
+        durationMs: completedAt === null ? null : Math.max(0, completedAt - state.startTime),
       },
       "json",
       scrubRoots,
@@ -1074,10 +1037,7 @@ function retryDetail(event: Extract<SessionEvent, { type: "llm/retry" }>) {
   };
 }
 
-function addUsage(
-  current: TrajectoryUsage | undefined,
-  next: TrajectoryUsage,
-): TrajectoryUsage {
+function addUsage(current: TrajectoryUsage | undefined, next: TrajectoryUsage): TrajectoryUsage {
   return {
     inputTokens: (current?.inputTokens ?? 0) + next.inputTokens,
     outputTokens: (current?.outputTokens ?? 0) + next.outputTokens,
@@ -1104,19 +1064,11 @@ function toolRecord(
   const isError = result?.isError === true;
   const interrupted = result === undefined && !sessionActive;
   const state: TrajectoryRecord["state"] =
-    result === undefined
-      ? interrupted
-        ? "error"
-        : "running"
-      : isError
-        ? "error"
-        : "complete";
+    result === undefined ? (interrupted ? "error" : "running") : isError ? "error" : "complete";
   const details: TrajectoryDetail[] = [];
   if (call !== undefined) {
     const parsed = parseJson(call.arguments);
-    details.push(
-      detail("参数", parsed.value, parsed.format, scrubRoots),
-    );
+    details.push(detail("参数", parsed.value, parsed.format, scrubRoots));
   }
   if (result !== undefined) {
     details.push(detail("结果", result.content, "text", scrubRoots));
@@ -1130,18 +1082,17 @@ function toolRecord(
       details.push(detail("展示元数据", result.meta, "json", scrubRoots));
     }
   } else if (interrupted) {
-    details.push(
-      detail("状态", "会话已结束，但没有记录到对应的工具结果。", "text", scrubRoots),
-    );
+    details.push(detail("状态", "会话已结束，但没有记录到对应的工具结果。", "text", scrubRoots));
   }
   const anchor = call ?? result;
   if (anchor === undefined) throw new Error("工具轨迹缺少调用与结果");
   const startedAt = call?.time ?? result?.time ?? anchor.time;
-  const finishedAt = result === undefined
-    ? interrupted
-      ? Math.max(startedAt, lastEventTime)
-      : null
-    : Math.max(startedAt, result.time);
+  const finishedAt =
+    result === undefined
+      ? interrupted
+        ? Math.max(startedAt, lastEventTime)
+        : null
+      : Math.max(startedAt, result.time);
   return {
     id: `${sessionId}:tool:${callId}`,
     seq: call?.seq ?? result?.seq ?? anchor.seq,
@@ -1361,8 +1312,7 @@ function toolResultFact(
         : "";
   if (!callId) return null;
   const content = block?.type === "tool-result" ? blocksText(block.content) : "";
-  const attachments =
-    block?.type === "tool-result" ? safeImageAttachments(block.content) : [];
+  const attachments = block?.type === "tool-result" ? safeImageAttachments(block.content) : [];
   return {
     seq: event.seq,
     time: event.time,
@@ -1418,7 +1368,7 @@ function turnErrorRecord(
     interrupted: "回合意外中断",
   };
   const message =
-    reason.kind === "error" ? reason.error.message : labels[reason.kind] ?? reason.kind;
+    reason.kind === "error" ? reason.error.message : (labels[reason.kind] ?? reason.kind);
   return {
     id: `${sessionId}:error:${event.seq}`,
     seq: event.seq,
@@ -1466,7 +1416,7 @@ function normalizeUsage(usage: {
 }
 
 function isVisibleChunk(
-  chunk: Extract<SessionEvent, { type: "assistant/chunk" }>['data']['chunk'],
+  chunk: Extract<SessionEvent, { type: "assistant/chunk" }>["data"]["chunk"],
 ): boolean {
   switch (chunk.type) {
     case "text-delta":
@@ -1480,10 +1430,7 @@ function isVisibleChunk(
   }
 }
 
-function blocksText(
-  blocks: readonly unknown[],
-  only?: "text" | "reasoning",
-): string {
+function blocksText(blocks: readonly unknown[], only?: "text" | "reasoning"): string {
   const parts: string[] = [];
   for (const candidate of blocks) {
     if (!isContentBlock(candidate)) continue;
@@ -1570,10 +1517,8 @@ function parseJson(raw: string): { value: unknown; format: "text" | "json" } {
 }
 
 function summary(value: string, scrubRoots: string[]): string {
-  return bound(
-    scrubPhysicalPaths(value, scrubRoots).replace(/\s+/g, " ").trim(),
-    MAX_SUMMARY_CHARS,
-  ).content;
+  return bound(scrubPhysicalPaths(value, scrubRoots).replace(/\s+/g, " ").trim(), MAX_SUMMARY_CHARS)
+    .content;
 }
 
 function bound(value: string, max: number): { content: string; truncated: boolean } {
@@ -1670,10 +1615,7 @@ function isFiniteNumber(value: unknown): value is number {
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0 &&
-    !Object.is(value, -0)
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && !Object.is(value, -0)
   );
 }
 
@@ -1690,7 +1632,5 @@ function isEventEnvelope(value: unknown): value is SessionEvent {
 function assertKnownProjectionEvent(event: SessionEvent, line: number): void {
   if (PROJECTED_EVENT_TYPES.has(event.type) || IGNORED_EVENT_TYPES.has(event.type)) return;
   if (event.ignorable === true) return;
-  throw new Error(
-    `会话日志包含未知 required event：第 ${line} 行 ${JSON.stringify(event.type)}`,
-  );
+  throw new Error(`会话日志包含未知 required event：第 ${line} 行 ${JSON.stringify(event.type)}`);
 }

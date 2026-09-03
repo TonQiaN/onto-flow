@@ -52,6 +52,6 @@ describe("简历评分闭环裁决契约", () => {
     expect(source).toContain("只有每一条硬性条件都有明确证据满足才记 100");
     expect(source).toContain("未证实项不得写成候选人不具备");
     expect(source).toContain("材料未说明原因绝不影响分数");
-    expect(source).toContain('未证实时写「无」');
+    expect(source).toContain("未证实时写「无」");
   });
 });

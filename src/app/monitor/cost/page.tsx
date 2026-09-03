@@ -139,9 +139,7 @@ function CostConsole() {
               <button
                 key={r.days}
                 type="button"
-                onClick={() =>
-                  router.replace(`/monitor/cost?range=${r.days}`, { scroll: false })
-                }
+                onClick={() => router.replace(`/monitor/cost?range=${r.days}`, { scroll: false })}
                 aria-pressed={on}
                 className={`rounded px-3 py-1 text-xs transition-colors ${
                   on ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-200"
@@ -243,9 +241,7 @@ function CostConsole() {
                   data={daily.map((d) => ({
                     label: d.dayISO.slice(5),
                     values: [d.cost],
-                    title: `${d.dayISO} · ${formatCost(d.cost)} · ${formatTokens(
-                      d.tokens,
-                    )} token`,
+                    title: `${d.dayISO} · ${formatCost(d.cost)} · ${formatTokens(d.tokens)} token`,
                   }))}
                   colors={[CHART_COLORS.success]}
                   formatValue={formatCost}
@@ -369,9 +365,7 @@ function RankTable({
       {loading ? (
         <div className="px-4 py-10 text-center text-[11px] text-zinc-500">加载中…</div>
       ) : sorted.length === 0 ? (
-        <div className="px-4 py-10 text-center text-[11px] text-zinc-500">
-          该时间范围内无数据
-        </div>
+        <div className="px-4 py-10 text-center text-[11px] text-zinc-500">该时间范围内无数据</div>
       ) : (
         <table className="w-full text-[11px]">
           <thead>
@@ -393,9 +387,7 @@ function RankTable({
                       {row.label}
                     </div>
                     {row.sub && (
-                      <div className="truncate font-mono text-[10px] text-zinc-600">
-                        {row.sub}
-                      </div>
+                      <div className="truncate font-mono text-[10px] text-zinc-600">{row.sub}</div>
                     )}
                   </td>
                   <td className="px-2 py-1.5 text-right">
@@ -415,15 +407,11 @@ function RankTable({
                           style={{
                             width: `${Math.max(share, 1)}%`,
                             backgroundColor:
-                              metric === "cost"
-                                ? CHART_COLORS.success
-                                : CHART_COLORS.tokens,
+                              metric === "cost" ? CHART_COLORS.success : CHART_COLORS.tokens,
                           }}
                         />
                       </div>
-                      <Num className="w-9 text-right text-zinc-500">
-                        {share.toFixed(0)}%
-                      </Num>
+                      <Num className="w-9 text-right text-zinc-500">{share.toFixed(0)}%</Num>
                     </div>
                   </td>
                 </tr>

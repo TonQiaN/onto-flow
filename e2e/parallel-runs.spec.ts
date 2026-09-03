@@ -117,10 +117,7 @@ test.describe("并行运行", () => {
     let maxConcurrentHarnesses = 0;
     const observer = (async () => {
       while (!stopObserving) {
-        maxConcurrentHarnesses = Math.max(
-          maxConcurrentHarnesses,
-          harnessProcessesFor(workflowId),
-        );
+        maxConcurrentHarnesses = Math.max(maxConcurrentHarnesses, harnessProcessesFor(workflowId));
         await new Promise((resolve) => setTimeout(resolve, 20));
       }
     })();
@@ -192,8 +189,7 @@ test.describe("并行运行", () => {
     const secondRunId = runIds[1];
     const firstDetail = details.get(firstRunId)!;
     const secondDetail = details.get(secondRunId)!;
-    const secondValue = secondDetail.nodes.find((n) => n.nodeId === outputNodeId)!
-      .outputs!.value;
+    const secondValue = secondDetail.nodes.find((n) => n.nodeId === outputNodeId)!.outputs!.value;
     const crossRun = await request.get(
       `/api/runs/${firstRunId}/files?path=${encodeURIComponent(secondValue.file!.path)}`,
     );

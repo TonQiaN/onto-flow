@@ -34,7 +34,11 @@ describe("Tool 契约摘要", () => {
     });
     expect(toolContractSha256(reordered)).toBe(toolContractSha256(contract()));
     expect(
-      toolContractSha256({ ...contract(), output: undefined as unknown as null, timeoutMs: undefined as unknown as null }),
+      toolContractSha256({
+        ...contract(),
+        output: undefined as unknown as null,
+        timeoutMs: undefined as unknown as null,
+      }),
     ).toBe(toolContractSha256(contract()));
   });
 

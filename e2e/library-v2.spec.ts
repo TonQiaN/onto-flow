@@ -24,9 +24,7 @@ async function cleanupFoldersByPrefix(
  * 筛选与面板用例只读种子数据；管理用例自建 e2e 前缀文件夹并在用例内删除。
  */
 test.describe("库 v2 新能力", () => {
-  test("文件夹树点「采购/集采」：Action 列表收窄且 URL 出现 ?folder=", async ({
-    page,
-  }) => {
+  test("文件夹树点「采购/集采」：Action 列表收窄且 URL 出现 ?folder=", async ({ page }) => {
     await page.goto("/actions");
 
     // 未筛选的总数随真实使用增长，写死会红——从 API 取当前值再比对 DOM
@@ -34,9 +32,7 @@ test.describe("库 v2 新能力", () => {
     const total = (
       (await (await page.request.get("/api/actions?page=1")).json()) as { total: number }
     ).total;
-    await expect(
-      page.getByRole("heading", { name: "集采计划生成", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "集采计划生成", exact: true })).toBeVisible();
     await expect(page.getByText(`共 ${total} 条`)).toBeVisible();
 
     // 树上文件夹行的 title 是完整路径；卡片上的文件夹徽章 title 是
@@ -49,13 +45,9 @@ test.describe("库 v2 新能力", () => {
     // 列表收窄到「采购/集采」下的 3 个 Action，「采购/需求」下的需求整理消失
     await expect(page.getByText("共 3 条")).toBeVisible();
     expect(total, "筛选后应比未筛选少").toBeGreaterThanOrEqual(3);
-    await expect(
-      page.getByRole("heading", { name: "需求整理", exact: true }),
-    ).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "需求整理", exact: true })).toHaveCount(0);
     for (const kept of ["集采计划生成", "集采计划审核", "集采计划归档"]) {
-      await expect(
-        page.getByRole("heading", { name: kept, exact: true }),
-      ).toBeVisible();
+      await expect(page.getByRole("heading", { name: kept, exact: true })).toBeVisible();
     }
 
     // 点树顶部的「全部」清空筛选（筛选中该按钮带「清空筛选」副标，
@@ -65,10 +57,7 @@ test.describe("库 v2 新能力", () => {
     await expect(page.getByText(`共 ${total} 条`)).toBeVisible();
   });
 
-  test("树上管理文件夹：「＋」新建根文件夹 → 右键重命名 → 右键删除", async ({
-    page,
-    request,
-  }) => {
+  test("树上管理文件夹：「＋」新建根文件夹 → 右键重命名 → 右键删除", async ({ page, request }) => {
     const name = `${FOLDER_PREFIX}${Date.now()}`;
     const renamed = `${name}-改`;
     try {
@@ -90,9 +79,7 @@ test.describe("库 v2 新能力", () => {
       await expect(page.getByTitle(name, { exact: true })).toHaveCount(0);
 
       // 右键 → 删除文件夹：window.confirm 说明内容去向，接受后行消失
-      await page
-        .getByTitle(renamed, { exact: true })
-        .click({ button: "right" });
+      await page.getByTitle(renamed, { exact: true }).click({ button: "right" });
       page.once("dialog", (dialog) => void dialog.accept());
       await page.getByRole("button", { name: "删除文件夹" }).click();
       await expect(page.getByTitle(renamed, { exact: true })).toHaveCount(0);
@@ -110,9 +97,7 @@ test.describe("库 v2 新能力", () => {
     });
     await expect(card).toHaveCount(1);
     await card.getByRole("button", { name: "编辑" }).click();
-    await expect(
-      page.getByRole("heading", { name: "编辑 Skill" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "编辑 Skill" })).toBeVisible();
 
     await page.getByRole("button", { name: "修订历史", exact: true }).click();
 
@@ -146,7 +131,10 @@ test.describe("库 v2 新能力", () => {
       refs: Array<{ kind: string; id: string; name: string; detail: string; href: string }>;
     };
     expect(refs.length).toBeGreaterThan(0);
-    expect(refs.every((r) => r.kind === "workflow"), "Skill 只会被工作流引用").toBe(true);
+    expect(
+      refs.every((r) => r.kind === "workflow"),
+      "Skill 只会被工作流引用",
+    ).toBe(true);
     const seedRef = refs.find((r) => r.name === "采购集采计划生成");
     expect(seedRef, "种子工作流的技能集含《集采计划审核要点》").toBeTruthy();
     expect(seedRef!.detail).toBe("技能集");
@@ -159,9 +147,7 @@ test.describe("库 v2 新能力", () => {
     });
     await expect(card.getByText(`${refs.length} 处引用`)).toBeVisible();
     await card.getByRole("button", { name: "编辑" }).click();
-    await expect(
-      page.getByRole("heading", { name: "编辑 Skill" }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "编辑 Skill" })).toBeVisible();
 
     await page.getByRole("button", { name: "被引用", exact: true }).click();
 

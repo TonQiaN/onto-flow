@@ -66,7 +66,12 @@ function summarize(row: LogItem, limit = 200): string {
       out = text(p.text);
       break;
     case "tool":
-      out = [text(p.tool), text(p.status), text(p.title), text(p.error) || text(p.output) || text(p.input)]
+      out = [
+        text(p.tool),
+        text(p.status),
+        text(p.title),
+        text(p.error) || text(p.output) || text(p.input),
+      ]
         .filter(Boolean)
         .join(" · ");
       break;
@@ -175,9 +180,7 @@ function LogsConsole() {
         if (!res.ok) throw new Error(await readError(res));
         const payload = (await res.json()) as LogsPayload;
         if (token !== reqId.current) return; // 筛选已切换，丢弃过期响应
-        setRows((prev) =>
-          mergeRows(append ? (prev ?? []) : [], payload.items),
-        );
+        setRows((prev) => mergeRows(append ? (prev ?? []) : [], payload.items));
         setCursor(payload.nextCursor);
         setError(null);
       } catch (err) {
@@ -266,9 +269,7 @@ function LogsConsole() {
   const filtered = Boolean(runId || nodeId || q || onlyErrors || typesKey);
 
   const toggleType = (value: string) => {
-    const next = types.includes(value)
-      ? types.filter((t) => t !== value)
-      : [...types, value];
+    const next = types.includes(value) ? types.filter((t) => t !== value) : [...types, value];
     setParams({ types: next.join(",") || null });
   };
 
@@ -392,9 +393,7 @@ function LogsConsole() {
                 }`}
               >
                 {t.label}
-                <span className="ml-1.5 font-mono text-[10px] text-zinc-600">
-                  {t.value}
-                </span>
+                <span className="ml-1.5 font-mono text-[10px] text-zinc-600">{t.value}</span>
               </button>
             );
           })}
@@ -432,9 +431,7 @@ function LogsConsole() {
 
         <div className="min-h-0 flex-1 overflow-auto">
           {rows === null ? (
-            <div className="px-3 py-10 text-center text-[11px] text-zinc-500">
-              检索中…
-            </div>
+            <div className="px-3 py-10 text-center text-[11px] text-zinc-500">检索中…</div>
           ) : list.length === 0 ? (
             <div className="px-3 py-8">
               <MonitorEmpty

@@ -3,7 +3,13 @@ import { asRunSettingsSnapshot } from "./settings-snapshot-view";
 
 const full = {
   global: {
-    toggles: { webSearch: false, fsSearch: true, strReplaceEditor: true, todo: true, compaction: true },
+    toggles: {
+      webSearch: false,
+      fsSearch: true,
+      strReplaceEditor: true,
+      todo: true,
+      compaction: true,
+    },
     mcpServers: ["filesystem", "github"],
     disabledTools: ["bash"],
     defaultInstructionsSha256: "a".repeat(64),
@@ -15,7 +21,13 @@ const full = {
     tools: [{ id: "t1", name: "归档采购计划", publicName: "save_purchase_plan" }],
   },
   effective: {
-    toggles: { webSearch: true, fsSearch: true, strReplaceEditor: true, todo: true, compaction: true },
+    toggles: {
+      webSearch: true,
+      fsSearch: true,
+      strReplaceEditor: true,
+      todo: true,
+      compaction: true,
+    },
     mcpServers: ["filesystem"],
   },
 };

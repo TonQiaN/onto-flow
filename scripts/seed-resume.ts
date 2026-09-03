@@ -42,11 +42,7 @@ import {
   writeObjectType,
   type ObjectTypePayload,
 } from "../src/server/writers/object-type";
-import {
-  createTool,
-  writeTool,
-  type ToolPayload,
-} from "../src/server/writers/tool";
+import { createTool, writeTool, type ToolPayload } from "../src/server/writers/tool";
 import {
   createWorkflow,
   loadWorkflowSets,
@@ -158,7 +154,11 @@ function upsertTool(payload: ToolPayload): string {
   if (!existing) {
     // 公名不在库里、展示名却已被另一个 Tool 占用：不按展示名猜身份（会把别人的契约整份覆盖），
     // 也不让 UNIQUE(name) 以一句 constraint failed 收场；点名冲突让人自己处理。
-    const taken = db.select({ publicName: tools.publicName }).from(tools).where(eq(tools.name, payload.name)).get();
+    const taken = db
+      .select({ publicName: tools.publicName })
+      .from(tools)
+      .where(eq(tools.name, payload.name))
+      .get();
     if (taken) {
       throw new Error(
         `种子 Tool「${payload.name}」（公名 ${payload.publicName}）在库里找不到，但展示名已被公名为 ${taken.publicName} 的 Tool 占用：改掉或删掉那个 Tool 再重跑种子`,
@@ -442,16 +442,8 @@ if (!textModel || !visionModel) {
   throw new Error("找不到 DeepSeek 文本/视觉模型行，先跑 npm run db:seed");
 }
 
-const tJdFile = upsertObjectType(
-  "岗位JD文件",
-  "file",
-  "岗位描述原文件（PDF、Markdown 或纯文本）",
-);
-const tResumeFile = upsertObjectType(
-  "简历文件",
-  "file",
-  "简历原文件（PDF、Markdown 或纯文本）",
-);
+const tJdFile = upsertObjectType("岗位JD文件", "file", "岗位描述原文件（PDF、Markdown 或纯文本）");
+const tResumeFile = upsertObjectType("简历文件", "file", "简历原文件（PDF、Markdown 或纯文本）");
 const tJdMd = upsertObjectType("岗位要求Markdown", "file", "解析后的岗位要求，含逐条硬性条件");
 const tResumeMd = upsertObjectType("简历Markdown", "file", "解析后的简历全文，已脱敏");
 const tVerdict = upsertObjectType("评委结论", "file", "单个维度的评分结论与证据");
@@ -558,8 +550,7 @@ const CRITICS: Array<{ key: string; name: string; focus: string; scoring: string
   {
     key: "stability",
     name: RESUME_MATCH_CRITIC_ACTION_NAMES[4],
-    focus:
-      "逐段核对起止时间与在职时长，只判断简历明示的时间线是否完整、自洽和可计算。",
+    focus: "逐段核对起止时间与在职时长，只判断简历明示的时间线是否完整、自洽和可计算。",
     scoring:
       "只对缺少起止日期、日期前后矛盾等时间线质量问题计分。空窗、转行与短期任职本身不扣分，也不推测原因；" +
       "材料未说明原因绝不影响分数，只记为与岗位匹配无关的未知事实；" +
@@ -677,12 +668,13 @@ const WF_NAME = RESUME_MATCH_WORKFLOW_NAME;
 const WF_DESCRIPTION = RESUME_MATCH_WORKFLOW_DESCRIPTION;
 // 三层设置（ADR-0016）：指令原样成为 workspace/AGENTS.md；技能集为空；Tool 集只有校验 Tool，
 // 且只对汇总 Action 可见。工作流层的行为摘要连同八个 Action 一起钉住。
-const WF_SETTINGS: Pick<WorkflowDefinition, "instructions" | "settings" | "skillIds" | "toolIds"> = {
-  instructions: RESUME_MATCH_WORKFLOW_INSTRUCTIONS,
-  settings: EMPTY_WORKFLOW_SETTINGS,
-  skillIds: [],
-  toolIds: [validateResultTool],
-};
+const WF_SETTINGS: Pick<WorkflowDefinition, "instructions" | "settings" | "skillIds" | "toolIds"> =
+  {
+    instructions: RESUME_MATCH_WORKFLOW_INSTRUCTIONS,
+    settings: EMPTY_WORKFLOW_SETTINGS,
+    skillIds: [],
+    toolIds: [validateResultTool],
+  };
 const workflowBehaviorDigest = resumeMatchWorkflowBehaviorSha256({
   instructions: WF_SETTINGS.instructions,
   settings: WF_SETTINGS.settings,
@@ -743,14 +735,7 @@ const criticNodes = CRITICS.map((critic, index) =>
 );
 const reportNode = actionNode("汇总", report, 820, 280);
 const outNode = outputNode(RESUME_MATCH_OUTPUT_LABEL, tReport, 1080, 280);
-const desiredNodes = [
-  jdNode,
-  resumeNode,
-  parseNode,
-  ...criticNodes,
-  reportNode,
-  outNode,
-];
+const desiredNodes = [jdNode, resumeNode, parseNode, ...criticNodes, reportNode, outNode];
 
 const currentEdgeRows = db
   .select()
@@ -856,15 +841,13 @@ const currentDefinition: WorkflowDefinition = {
     })),
   ),
   edges: byId(
-    currentEdgeRows.map(
-      ({ id, sourceNodeId, sourcePort, targetNodeId, targetPort }) => ({
-        id,
-        sourceNodeId,
-        sourcePort,
-        targetNodeId,
-        targetPort,
-      }),
-    ),
+    currentEdgeRows.map(({ id, sourceNodeId, sourcePort, targetNodeId, targetPort }) => ({
+      id,
+      sourceNodeId,
+      sourcePort,
+      targetNodeId,
+      targetPort,
+    })),
   ),
 };
 const desiredDefinition: WorkflowDefinition = {

@@ -89,9 +89,7 @@ export interface ResumeMatchActionBehavior {
  * 专用付费入口的行为定义摘要。数组排序后纳入摘要，使关系表顺序不影响契约；
  * prompt、rule、模型、推理档位、重入策略、预载技能与可见 Tool 任一变化都会改摘要。
  */
-export function resumeMatchActionBehaviorSha256(
-  behavior: ResumeMatchActionBehavior,
-): string {
+export function resumeMatchActionBehaviorSha256(behavior: ResumeMatchActionBehavior): string {
   return sha256Hex(
     canonicalJson({
       name: behavior.name,
@@ -124,9 +122,7 @@ export interface ResumeMatchWorkflowBehavior {
  * 工作流层的行为摘要（ADR-0016）：共同指令、开关覆盖、MCP 子集、技能集与 Tool 集。
  * 集合排序后纳入，关系表顺序不影响契约；toggles 只带写了覆盖的键，缺省即继承全局。
  */
-export function resumeMatchWorkflowBehaviorSha256(
-  behavior: ResumeMatchWorkflowBehavior,
-): string {
+export function resumeMatchWorkflowBehaviorSha256(behavior: ResumeMatchWorkflowBehavior): string {
   return sha256Hex(
     canonicalJson({
       instructions: behavior.instructions,
@@ -396,11 +392,7 @@ export function validateResumeMatchResult(value: unknown): string[] {
     return input;
   }
 
-  function oneOf<T extends string>(
-    input: unknown,
-    at: string,
-    allowed: readonly T[],
-  ): T | null {
+  function oneOf<T extends string>(input: unknown, at: string, allowed: readonly T[]): T | null {
     if (typeof input !== "string" || !allowed.includes(input as T)) {
       errors.push(`${at} 必须是 ${allowed.join(" / ")} 之一`);
       return null;
@@ -457,17 +449,8 @@ export function validateResumeMatchResult(value: unknown): string[] {
   if (root.schemaVersion !== "1.0") errors.push("$.schemaVersion 必须等于 1.0");
   const decision = oneOf(root.decision, "$.decision", ["recommend", "not_recommend"]);
   const overallScore = integer(root.overallScore, "$.overallScore");
-  const matchLevel = oneOf(root.matchLevel, "$.matchLevel", [
-    "strong",
-    "good",
-    "partial",
-    "weak",
-  ]);
-  const aggregateConfidence = oneOf(
-    root.evidenceConfidence,
-    "$.evidenceConfidence",
-    confidences,
-  );
+  const matchLevel = oneOf(root.matchLevel, "$.matchLevel", ["strong", "good", "partial", "weak"]);
+  const aggregateConfidence = oneOf(root.evidenceConfidence, "$.evidenceConfidence", confidences);
   text(root.summary, "$.summary");
   stringArray(root.decisiveReasons, "$.decisiveReasons", 1);
 
@@ -485,10 +468,7 @@ export function validateResumeMatchResult(value: unknown): string[] {
     if (rawDimensions) {
       vetoDimensions = [];
       rawDimensions.forEach((item, index) => {
-        const parsed = oneOf(item, `$.veto.dimensions[${index}]`, [
-          "mustHave",
-          "authenticityRisk",
-        ]);
+        const parsed = oneOf(item, `$.veto.dimensions[${index}]`, ["mustHave", "authenticityRisk"]);
         if (parsed !== null) vetoDimensions!.push(parsed);
       });
       if (new Set(vetoDimensions).size !== vetoDimensions.length) {
@@ -504,12 +484,7 @@ export function validateResumeMatchResult(value: unknown): string[] {
     if (hardRequirements.length === 0) errors.push("$.hardRequirements 至少要有 1 项");
     hardRequirements.forEach((item, index) => {
       const at = `$.hardRequirements[${index}]`;
-      const requirement = exactObject(item, at, [
-        "requirement",
-        "status",
-        "evidence",
-        "impact",
-      ]);
+      const requirement = exactObject(item, at, ["requirement", "status", "evidence", "impact"]);
       if (!requirement) return;
       text(requirement.requirement, `${at}.requirement`);
       const status = oneOf(requirement.status, `${at}.status`, [
@@ -577,11 +552,7 @@ export function validateResumeMatchResult(value: unknown): string[] {
     const concern = exactObject(item, at, ["point", "evidenceStatus", "impact"]);
     if (!concern) return;
     text(concern.point, `${at}.point`);
-    oneOf(concern.evidenceStatus, `${at}.evidenceStatus`, [
-      "supported",
-      "unverified",
-      "conflict",
-    ]);
+    oneOf(concern.evidenceStatus, `${at}.evidenceStatus`, ["supported", "unverified", "conflict"]);
     text(concern.impact, `${at}.impact`);
   });
 
@@ -636,8 +607,7 @@ export function validateResumeMatchResult(value: unknown): string[] {
   );
   if (overallScore !== null && scoredValues.every((item) => item !== null)) {
     const expectedScore = Math.round(
-      (scoredValues as number[]).reduce((sum, item) => sum + item, 0) /
-        scoredValues.length,
+      (scoredValues as number[]).reduce((sum, item) => sum + item, 0) / scoredValues.length,
     );
     if (overallScore !== expectedScore) {
       errors.push(`$.overallScore 应为四个非否决维度最终分的四舍五入均值 ${expectedScore}`);
@@ -669,7 +639,10 @@ export function validateResumeMatchResult(value: unknown): string[] {
   ) {
     errors.push(`$.veto.dimensions 应为 [${expectedVetoDimensions.join(", ")}]`);
   }
-  if (vetoReasons && ((expectedVeto && vetoReasons.length === 0) || (!expectedVeto && vetoReasons.length > 0))) {
+  if (
+    vetoReasons &&
+    ((expectedVeto && vetoReasons.length === 0) || (!expectedVeto && vetoReasons.length > 0))
+  ) {
     errors.push(`$.veto.reasons 在否决时必须非空、无否决时必须为空`);
   }
   if (decision !== null && overallScore !== null) {

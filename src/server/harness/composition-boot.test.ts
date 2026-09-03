@@ -97,7 +97,9 @@ describe("每运行组合", () => {
     };
     const ids = runCompositionEntries(ws, { toggles: allOff }).map((e) => e.id);
     const toggledIds = PLUGIN_CATALOG.flatMap((row) =>
-      row.toggle !== undefined && row.entry !== undefined && "id" in row.entry ? [row.entry.id] : [],
+      row.toggle !== undefined && row.entry !== undefined && "id" in row.entry
+        ? [row.entry.id]
+        : [],
     );
     expect(toggledIds.length).toBeGreaterThan(0);
     for (const id of toggledIds) expect(ids, `开关全关时「${id}」不该在组合里`).not.toContain(id);

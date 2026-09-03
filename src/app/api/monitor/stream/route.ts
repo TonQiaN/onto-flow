@@ -55,9 +55,7 @@ export async function GET(request: Request) {
       const send = (event: string, data: unknown) => {
         if (closed) return;
         try {
-          controller.enqueue(
-            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-          );
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         } catch {
           cleanup();
         }

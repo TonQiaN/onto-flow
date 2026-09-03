@@ -91,8 +91,7 @@ test.describe("归档文档", () => {
     const current = fixture!;
     // 截获页面自己消费的那次载荷：表格行数只跟它比，不假设库里有多少归档
     const responded = page.waitForResponse(
-      (res) =>
-        res.request().method() === "GET" && new URL(res.url()).pathname === "/api/documents",
+      (res) => res.request().method() === "GET" && new URL(res.url()).pathname === "/api/documents",
       { timeout: 15_000 },
     );
     await page.goto("/documents");

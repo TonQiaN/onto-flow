@@ -7,13 +7,7 @@ import { useState } from "react";
  * /api/runs/[id]/cancel。成功后由 onCancelled 触发详情刷新
  * （SSE 也会推最新 snapshot，状态随即变为「已取消」）。
  */
-export function CancelButton({
-  runId,
-  onCancelled,
-}: {
-  runId: string;
-  onCancelled: () => void;
-}) {
+export function CancelButton({ runId, onCancelled }: { runId: string; onCancelled: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -25,9 +19,7 @@ export function CancelButton({
       const res = await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(
-          typeof data?.error === "string" ? data.error : "取消运行失败",
-        );
+        setError(typeof data?.error === "string" ? data.error : "取消运行失败");
         return;
       }
       setConfirming(false);

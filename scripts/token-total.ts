@@ -6,10 +6,5 @@ export function totalUsageTokens(usage: {
   cacheReadTokens: number;
   cacheWriteTokens: number;
 }): number {
-  return (
-    usage.inputTokens +
-    usage.outputTokens +
-    usage.cacheReadTokens +
-    usage.cacheWriteTokens
-  );
+  return usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
 }

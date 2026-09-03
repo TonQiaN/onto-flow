@@ -6,10 +6,6 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   return NextResponse.json(
-    db
-      .select()
-      .from(purchasePlans)
-      .orderBy(desc(purchasePlans.createdAt))
-      .all(),
+    db.select().from(purchasePlans).orderBy(desc(purchasePlans.createdAt)).all(),
   );
 }

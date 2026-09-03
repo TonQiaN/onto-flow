@@ -133,10 +133,7 @@ describe("按工作流集合收窄候选", () => {
   ];
 
   it("候选按集合顺序排列，集合里库中已没有的 id 跳过", () => {
-    expect(pickBySet(rows, ["c", "missing", "a"]).map((r) => r.name)).toEqual([
-      "丙",
-      "甲",
-    ]);
+    expect(pickBySet(rows, ["c", "missing", "a"]).map((r) => r.name)).toEqual(["丙", "甲"]);
     expect(pickBySet(rows, [])).toEqual([]);
   });
 

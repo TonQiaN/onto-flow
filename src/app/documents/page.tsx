@@ -46,12 +46,9 @@ function fmtBudget(value: number | null): string {
 
 function conclusionStyle(conclusion: string | null): string {
   if (!conclusion) return "border-zinc-200 bg-zinc-50 text-zinc-500";
-  if (conclusion.includes("退回"))
-    return "border-red-200 bg-red-50 text-red-700";
-  if (conclusion.includes("保留"))
-    return "border-amber-200 bg-amber-50 text-amber-700";
-  if (conclusion.includes("通过"))
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (conclusion.includes("退回")) return "border-red-200 bg-red-50 text-red-700";
+  if (conclusion.includes("保留")) return "border-amber-200 bg-amber-50 text-amber-700";
+  if (conclusion.includes("通过")) return "border-emerald-200 bg-emerald-50 text-emerald-700";
   return "border-zinc-200 bg-zinc-50 text-zinc-600";
 }
 
@@ -106,10 +103,7 @@ export default function DocumentsPage() {
         {loadError && (
           <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {loadError}
-            <button
-              onClick={() => void load()}
-              className="ml-3 underline hover:text-red-900"
-            >
+            <button onClick={() => void load()} className="ml-3 underline hover:text-red-900">
               重试
             </button>
           </div>
@@ -138,18 +132,14 @@ export default function DocumentsPage() {
               <tbody>
                 {plans.map((plan) => {
                   const expanded = expandedId === plan.id;
-                  const feedback = expanded
-                    ? prettyFeedback(plan.reviewFeedback)
-                    : null;
+                  const feedback = expanded ? prettyFeedback(plan.reviewFeedback) : null;
                   return (
                     <PlanRows
                       key={plan.id}
                       plan={plan}
                       expanded={expanded}
                       feedback={feedback}
-                      onToggle={() =>
-                        setExpandedId(expanded ? null : plan.id)
-                      }
+                      onToggle={() => setExpandedId(expanded ? null : plan.id)}
                     />
                   );
                 })}
@@ -181,19 +171,11 @@ function PlanRows({
           expanded ? "bg-zinc-50" : ""
         }`}
       >
-        <td className="px-4 py-3 font-mono text-xs text-zinc-700">
-          {plan.planNo}
-        </td>
-        <td className="max-w-64 truncate px-4 py-3 text-zinc-900">
-          {plan.planTitle}
-        </td>
+        <td className="px-4 py-3 font-mono text-xs text-zinc-700">{plan.planNo}</td>
+        <td className="max-w-64 truncate px-4 py-3 text-zinc-900">{plan.planTitle}</td>
         <td className="px-4 py-3 text-zinc-600">{plan.planYear ?? "—"}</td>
-        <td className="max-w-48 truncate px-4 py-3 text-zinc-600">
-          {plan.orgUnits ?? "—"}
-        </td>
-        <td className="px-4 py-3 text-zinc-600">
-          {fmtBudget(plan.totalBudget)}
-        </td>
+        <td className="max-w-48 truncate px-4 py-3 text-zinc-600">{plan.orgUnits ?? "—"}</td>
+        <td className="px-4 py-3 text-zinc-600">{fmtBudget(plan.totalBudget)}</td>
         <td className="px-4 py-3">
           <span
             className={`inline-flex items-center rounded border px-1.5 py-0.5 text-xs ${conclusionStyle(plan.reviewConclusion)}`}
@@ -201,9 +183,7 @@ function PlanRows({
             {plan.reviewConclusion || "—"}
           </span>
         </td>
-        <td className="px-4 py-3 text-xs text-zinc-500">
-          {fmtTime(plan.createdAt)}
-        </td>
+        <td className="px-4 py-3 text-xs text-zinc-500">{fmtTime(plan.createdAt)}</td>
       </tr>
       {expanded && (
         <tr className="border-b border-zinc-100 bg-zinc-50/60">
@@ -211,31 +191,21 @@ function PlanRows({
             <div className="space-y-4">
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-zinc-500">
                 {plan.planType && <span>集采分类：{plan.planType}</span>}
-                {plan.itemCount != null && (
-                  <span>条目数：{plan.itemCount}</span>
-                )}
+                {plan.itemCount != null && <span>条目数：{plan.itemCount}</span>}
                 {plan.budgetNote && <span>预算口径：{plan.budgetNote}</span>}
-                {plan.categorySummary && (
-                  <span>品类摘要：{plan.categorySummary}</span>
-                )}
-                {plan.scheduleSummary && (
-                  <span>进度安排：{plan.scheduleSummary}</span>
-                )}
+                {plan.categorySummary && <span>品类摘要：{plan.categorySummary}</span>}
+                {plan.scheduleSummary && <span>进度安排：{plan.scheduleSummary}</span>}
               </div>
 
               <div>
-                <h3 className="mb-1 text-xs font-medium text-zinc-700">
-                  计划全文
-                </h3>
+                <h3 className="mb-1 text-xs font-medium text-zinc-700">计划全文</h3>
                 <pre className="max-h-96 overflow-auto rounded-md border border-zinc-200 bg-white p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-800">
                   {plan.planContent}
                 </pre>
               </div>
 
               <div>
-                <h3 className="mb-1 text-xs font-medium text-zinc-700">
-                  审核评价
-                </h3>
+                <h3 className="mb-1 text-xs font-medium text-zinc-700">审核评价</h3>
                 {feedback ? (
                   <pre className="max-h-72 overflow-auto rounded-md border border-zinc-200 bg-white p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-800">
                     {feedback}
@@ -247,9 +217,7 @@ function PlanRows({
 
               {plan.pendingIssues && (
                 <div>
-                  <h3 className="mb-1 text-xs font-medium text-zinc-700">
-                    待确认事项
-                  </h3>
+                  <h3 className="mb-1 text-xs font-medium text-zinc-700">待确认事项</h3>
                   <pre className="max-h-48 overflow-auto rounded-md border border-zinc-200 bg-white p-3 font-mono text-xs leading-5 whitespace-pre-wrap text-zinc-800">
                     {plan.pendingIssues}
                   </pre>

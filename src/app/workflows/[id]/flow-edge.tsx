@@ -75,8 +75,7 @@ export const FlowEdgeView = memo(function FlowEdgeView({
     const downstream = visuals.statusByNode[target];
     if (upstream === "success") {
       if (downstream === "running") state = "flowing";
-      else if (downstream === "skipped" || downstream === "cancelled")
-        state = "blocked";
+      else if (downstream === "skipped" || downstream === "cancelled") state = "blocked";
       else state = "flowed";
     }
   }
@@ -97,13 +96,7 @@ export const FlowEdgeView = memo(function FlowEdgeView({
           hasRun
             ? {
                 stroke: selected ? "#18181b" : STROKE[state],
-                strokeWidth: selected
-                  ? 2.5
-                  : flowing
-                    ? 2.5
-                    : state === "flowed"
-                      ? 2
-                      : 1.75,
+                strokeWidth: selected ? 2.5 : flowing ? 2.5 : state === "flowed" ? 2 : 1.75,
                 strokeOpacity: state === "blocked" ? 0.5 : 1,
                 transition: "stroke 200ms ease, stroke-width 200ms ease",
               }

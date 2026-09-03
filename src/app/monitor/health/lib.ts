@@ -132,11 +132,9 @@ const rec = (v: unknown): Record<string, unknown> =>
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-const strOrNull = (v: unknown): string | null =>
-  typeof v === "string" && v.length > 0 ? v : null;
+const strOrNull = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
 
-const num = (v: unknown): number =>
-  typeof v === "number" && Number.isFinite(v) ? v : 0;
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 /** 对齐 @/server/monitor/types 的 DiskDirStat：{ bytes, dirs?, files? } */
 function asDiskEntry(value: unknown): DiskEntry {
@@ -172,8 +170,7 @@ function asOrphanRuns(value: unknown): OrphanRun[] {
         workflowName: str(o.workflowName),
         status: str(o.status) || "running",
         startedAt: typeof o.startedAt === "number" ? o.startedAt : null,
-        pendingNodes:
-          typeof o.pendingNodes === "number" ? o.pendingNodes : null,
+        pendingNodes: typeof o.pendingNodes === "number" ? o.pendingNodes : null,
         reason: strOrNull(o.reason),
       },
     ];

@@ -71,10 +71,7 @@ function recordDuration(record: TrajectoryRecord): string {
 }
 
 function sessionTokens(session: TrajectorySession): number {
-  return session.records.reduce(
-    (total, record) => total + sumTokens(record.usage),
-    0,
-  );
+  return session.records.reduce((total, record) => total + sumTokens(record.usage), 0);
 }
 
 function TrajectoryTimeline({
@@ -92,9 +89,7 @@ function TrajectoryTimeline({
   if (timed.length === 0) return null;
 
   const start = Math.min(...timed.map((record) => record.startedAt));
-  const rawEnd = Math.max(
-    ...timed.map((record) => record.finishedAt ?? record.startedAt),
-  );
+  const rawEnd = Math.max(...timed.map((record) => record.finishedAt ?? record.startedAt));
   const end = rawEnd > start ? rawEnd : start + 1;
   const span = end - start;
   const lanes = [
@@ -131,7 +126,9 @@ function TrajectoryTimeline({
                       title={`${record.label} · ${recordDuration(record)}`}
                       onClick={() => onSelect(record.id)}
                       className={`absolute top-0.5 h-2 rounded-sm transition-opacity ${TIMELINE_COLOR[record.kind]} ${
-                        selectedId === record.id ? "ring-1 ring-zinc-900 ring-offset-1" : "opacity-75 hover:opacity-100"
+                        selectedId === record.id
+                          ? "ring-1 ring-zinc-900 ring-offset-1"
+                          : "opacity-75 hover:opacity-100"
                       }`}
                       style={{
                         left: `${Math.min(left, 99.2)}%`,
@@ -189,9 +186,7 @@ function DetailPane({ record }: { record: TrajectoryRecord | null }) {
       <div className="border-b border-zinc-100 px-3 py-2.5">
         <div className="flex flex-wrap items-center gap-2">
           <RecordBadge kind={record.kind} />
-          <span className="min-w-0 truncate text-xs font-medium text-zinc-800">
-            {record.label}
-          </span>
+          <span className="min-w-0 truncate text-xs font-medium text-zinc-800">{record.label}</span>
           <span className="ml-auto font-mono text-[10px] text-zinc-400">
             {formatClock(record.startedAt)} · {recordDuration(record)}
           </span>
@@ -230,9 +225,7 @@ function DetailPane({ record }: { record: TrajectoryRecord | null }) {
           {active.content || "（空）"}
         </pre>
         {active.truncated && (
-          <p className="mt-1.5 text-[10px] text-amber-700">
-            内容过长，当前仅显示前一部分。
-          </p>
+          <p className="mt-1.5 text-[10px] text-amber-700">内容过长，当前仅显示前一部分。</p>
         )}
       </div>
     </div>
@@ -279,9 +272,7 @@ function RecordLedger({
                     : "border-transparent hover:border-zinc-200 hover:bg-zinc-50"
                 }`}
               >
-                <span className="mt-0.5 font-mono text-[10px] text-zinc-300">
-                  #{record.seq}
-                </span>
+                <span className="mt-0.5 font-mono text-[10px] text-zinc-300">#{record.seq}</span>
                 <RecordBadge kind={record.kind} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs text-zinc-700">
@@ -406,18 +397,12 @@ export function AgentTrajectory({
     if (!activeSession) return [];
     const needle = query.trim().toLocaleLowerCase("zh-CN");
     return needle
-      ? activeSession.records.filter((record) =>
-          recordSearchText(record).includes(needle),
-        )
+      ? activeSession.records.filter((record) => recordSearchText(record).includes(needle))
       : activeSession.records;
   }, [activeSession, query]);
 
   const selected = useMemo(() => {
-    return (
-      records.find((record) => record.id === selectedId) ??
-      records[0] ??
-      null
-    );
+    return records.find((record) => record.id === selectedId) ?? records[0] ?? null;
   }, [records, selectedId]);
 
   useEffect(() => {
@@ -449,9 +434,7 @@ export function AgentTrajectory({
           className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50/60"
         >
           {loading && data === null ? (
-            <div className="px-4 py-10 text-center text-xs text-zinc-400">
-              正在读取会话轨迹…
-            </div>
+            <div className="px-4 py-10 text-center text-xs text-zinc-400">正在读取会话轨迹…</div>
           ) : error ? (
             <div className="flex items-center justify-between gap-3 px-4 py-4 text-xs text-red-700">
               <span>{error}</span>
@@ -505,7 +488,12 @@ export function AgentTrajectory({
                       ? `${activeSession.provider}/${activeSession.model}`
                       : "模型未知"}
                   </span>
-                  <span>耗时 {activeSession.durationMs == null ? "—" : formatDuration(activeSession.durationMs)}</span>
+                  <span>
+                    耗时{" "}
+                    {activeSession.durationMs == null
+                      ? "—"
+                      : formatDuration(activeSession.durationMs)}
+                  </span>
                   <span>回合 {activeSession.turns}</span>
                   <span>步骤 {activeSession.steps}</span>
                   <span>调用 {activeSession.calls}</span>
@@ -542,9 +530,7 @@ export function AgentTrajectory({
               </div>
             </>
           ) : (
-            <div className="px-4 py-8 text-center text-xs text-zinc-400">
-              暂无会话轨迹
-            </div>
+            <div className="px-4 py-8 text-center text-xs text-zinc-400">暂无会话轨迹</div>
           )}
         </div>
       )}

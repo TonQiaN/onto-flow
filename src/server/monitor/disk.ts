@@ -54,8 +54,7 @@ export function dirStat(root: string, countDirsAtDepth = 1): DirStat {
         const childDepth = depth + 1;
         if (childDepth === countDirsAtDepth) topDirs += 1;
         stack.push({ dir: full, depth: childDepth });
-      }
-      else if (entry.isFile()) {
+      } else if (entry.isFile()) {
         files += 1;
         bytes += safeSize(full);
       }

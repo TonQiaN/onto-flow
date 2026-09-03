@@ -8,10 +8,7 @@ import { cleanupByPrefix } from "./helpers";
 const PREFIX = "e2e-PDF输入-";
 const uploadedDirs = new Set<string>();
 type RevisionOwnerKind = "workflow" | "action" | "object_type";
-const revisionOwners = new Map<
-  string,
-  { kind: RevisionOwnerKind; id: string }
->();
+const revisionOwners = new Map<string, { kind: RevisionOwnerKind; id: string }>();
 
 function trackRevisionOwner(kind: RevisionOwnerKind, id: string): void {
   if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error(`测试实体 id 不安全：${id}`);
@@ -21,20 +18,16 @@ function trackRevisionOwner(kind: RevisionOwnerKind, id: string): void {
 /** revisions 是多态引用、没有 FK；实体 API 删除后按本用例创建的精确 id 清掉历史。 */
 function cleanupTrackedRevisions(): void {
   if (revisionOwners.size === 0) return;
-  const database = new Database(
-    path.join(process.cwd(), "data", "ontoflow.db"),
-  );
+  const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
   database.pragma("foreign_keys = ON");
   database.pragma("busy_timeout = 5000");
   try {
     const remove = database.prepare(
       "delete from revisions where entity_kind = ? and entity_id = ?",
     );
-    database.transaction(
-      (owners: Array<{ kind: RevisionOwnerKind; id: string }>) => {
-        for (const owner of owners) remove.run(owner.kind, owner.id);
-      },
-    )([...revisionOwners.values()]);
+    database.transaction((owners: Array<{ kind: RevisionOwnerKind; id: string }>) => {
+      for (const owner of owners) remove.run(owner.kind, owner.id);
+    })([...revisionOwners.values()]);
     const remaining = database.prepare(
       "select count(*) as total from revisions where entity_kind = ? and entity_id = ?",
     );
@@ -58,13 +51,9 @@ test.describe("工作流画布", () => {
     uploadedDirs.clear();
   });
 
-  test("打开「采购集采计划生成」：7 节点 7 连线，保存成功且无校验问题", async ({
-    page,
-  }) => {
+  test("打开「采购集采计划生成」：7 节点 7 连线，保存成功且无校验问题", async ({ page }) => {
     await page.goto("/workflows");
-    await page
-      .getByRole("heading", { name: "采购集采计划生成", exact: true })
-      .click();
+    await page.getByRole("heading", { name: "采购集采计划生成", exact: true }).click();
     await page.waitForURL(/\/workflows\/[0-9a-f-]{36}/);
 
     // 画布加载完成：7 节点 / 7 连线
@@ -75,18 +64,14 @@ test.describe("工作流画布", () => {
 
     // 保存：PUT 整图成功（不点「运行」）
     const putResponse = page.waitForResponse(
-      (res) =>
-        res.request().method() === "PUT" &&
-        /\/api\/workflows\//.test(res.url()),
+      (res) => res.request().method() === "PUT" && /\/api\/workflows\//.test(res.url()),
     );
     await page.getByRole("button", { name: "保存", exact: true }).click();
     const res = await putResponse;
     expect(res.ok()).toBeTruthy();
 
     // 保存按钮恢复可用，无错误横幅、无校验问题横幅
-    await expect(
-      page.getByRole("button", { name: "保存", exact: true }),
-    ).toBeEnabled();
+    await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
     await expect(page.getByText("保存失败")).toBeHidden();
     await expect(page.getByText(/校验问题（\d+）/)).toBeHidden();
 
@@ -319,9 +304,7 @@ test.describe("工作流画布", () => {
     expect(graph.issues).toEqual([]);
 
     // 给裁决 Action 留下 v2：页面先看到「放行」，随后在同页回滚 v1，验证画布即时同步。
-    const decisionDetailResponse = await request.get(
-      `/api/actions/${decision.id}`,
-    );
+    const decisionDetailResponse = await request.get(`/api/actions/${decision.id}`);
     expect(decisionDetailResponse.ok()).toBeTruthy();
     const decisionDetail = (await decisionDetailResponse.json()) as {
       name: string;
@@ -343,39 +326,34 @@ test.describe("工作流画布", () => {
       preloadSkillIds: string[];
       toolIds: string[];
     };
-    const decisionV2Response = await request.put(
-      `/api/actions/${decision.id}`,
-      {
-        data: {
-          name: decisionDetail.name,
-          description: decisionDetail.description,
-          prompt: decisionDetail.prompt,
-          rule: decisionDetail.rule,
-          modelId: decisionDetail.modelId,
-          reasoningEffort: decisionDetail.reasoningEffort,
-          maxReentries: decisionDetail.maxReentries,
-          onExhausted: decisionDetail.onExhausted,
-          ports: decisionDetail.ports.map((port) => ({
-            direction: port.direction,
-            name: port.name,
-            objectTypeId: port.objectTypeId,
-            position: port.position,
-            artifactPath: port.artifactPath,
-            exitName: port.name === "成品" ? "放行" : port.exitName,
-          })),
-          preloadSkillIds: decisionDetail.preloadSkillIds,
-          toolIds: decisionDetail.toolIds,
-        },
+    const decisionV2Response = await request.put(`/api/actions/${decision.id}`, {
+      data: {
+        name: decisionDetail.name,
+        description: decisionDetail.description,
+        prompt: decisionDetail.prompt,
+        rule: decisionDetail.rule,
+        modelId: decisionDetail.modelId,
+        reasoningEffort: decisionDetail.reasoningEffort,
+        maxReentries: decisionDetail.maxReentries,
+        onExhausted: decisionDetail.onExhausted,
+        ports: decisionDetail.ports.map((port) => ({
+          direction: port.direction,
+          name: port.name,
+          objectTypeId: port.objectTypeId,
+          position: port.position,
+          artifactPath: port.artifactPath,
+          exitName: port.name === "成品" ? "放行" : port.exitName,
+        })),
+        preloadSkillIds: decisionDetail.preloadSkillIds,
+        toolIds: decisionDetail.toolIds,
       },
-    );
+    });
     expect(decisionV2Response.ok()).toBeTruthy();
 
     const edgeLabel = (targetPage: Page, edgeId: string) =>
       targetPage.getByTestId(`workflow-edge-exit-${edgeId}`);
     const expectLabels = async (passName: "通过" | "放行") => {
-      await expect(
-        page.locator('[data-testid^="workflow-edge-exit-"]'),
-      ).toHaveCount(3);
+      await expect(page.locator('[data-testid^="workflow-edge-exit-"]')).toHaveCount(3);
       await expect(edgeLabel(page, inputEdgeId)).toHaveCount(0);
       await expect(edgeLabel(page, draftEdgeId)).toHaveCount(0);
       await expect(edgeLabel(page, passAEdgeId)).toHaveText(passName);
@@ -393,9 +371,7 @@ test.describe("工作流画布", () => {
     });
     await expect(decisionNode).toHaveCount(1);
     await decisionNode.dblclick();
-    await expect(
-      page.getByRole("heading", { name: "编辑 Action", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "编辑 Action", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "修订历史", exact: true }).click();
     const revisions = page.locator("section").filter({
       has: page.getByRole("heading", { name: "修订历史", exact: true }),
@@ -413,10 +389,7 @@ test.describe("工作流画布", () => {
     await v1.getByRole("button", { name: "确认回滚", exact: true }).click();
     expect((await restoreResponse).ok()).toBeTruthy();
     await expectLabels("通过");
-    await page
-      .getByRole("button", { name: "关闭", exact: true })
-      .first()
-      .click();
+    await page.getByRole("button", { name: "关闭", exact: true }).first().click();
 
     const putResponse = page.waitForResponse(
       (response) =>
@@ -433,10 +406,7 @@ test.describe("工作流画布", () => {
     await expectLabels("通过");
   });
 
-  test("文件输入可上传，取消对话框不会发起运行", async ({
-    page,
-    request,
-  }) => {
+  test("文件输入可上传，取消对话框不会发起运行", async ({ page, request }) => {
     const suffix = Date.now();
     const typeName = `${PREFIX}类型-${suffix}`;
     const workflowName = `${PREFIX}工作流-${suffix}`;
@@ -507,7 +477,8 @@ test.describe("工作流画布", () => {
 
     const fileInput = page.getByLabel("简历文件");
     const uploadResponse = page.waitForResponse(
-      (response) => response.url().endsWith("/api/uploads") && response.request().method() === "POST",
+      (response) =>
+        response.url().endsWith("/api/uploads") && response.request().method() === "POST",
     );
     await fileInput.setInputFiles({
       name: "e2e-resume.pdf",

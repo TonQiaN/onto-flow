@@ -15,15 +15,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { durationText, formatDateTime, toMillis } from "@/app/runs/lib";
-import {
-  CHART_COLORS,
-  Dot,
-  Legend,
-  MetricCard,
-  MonitorErrorBar,
-  Num,
-  Panel,
-} from "../ui";
+import { CHART_COLORS, Dot, Legend, MetricCard, MonitorErrorBar, Num, Panel } from "../ui";
 import { CleanupPanel, type CleanupUsage } from "./cleanup-panel";
 import {
   asHealth,
@@ -88,8 +80,7 @@ export default function MonitorHealthPage() {
     return () => clearInterval(timer);
   }, [autoRefresh, load]);
 
-  const workspaceOverLimit =
-    health !== null && health.disk.runs.sizeBytes > WORKSPACE_WARN_BYTES;
+  const workspaceOverLimit = health !== null && health.disk.runs.sizeBytes > WORKSPACE_WARN_BYTES;
 
   return (
     <div className="flex flex-col gap-4 px-6 py-5">
@@ -114,11 +105,7 @@ export default function MonitorHealthPage() {
           </label>
           <span className="inline-flex items-center gap-1.5">
             {loading && <Dot tone="sky" pulse />}
-            {loading
-              ? "刷新中…"
-              : loadedAt
-                ? `更新于 ${formatDateTime(loadedAt)}`
-                : "—"}
+            {loading ? "刷新中…" : loadedAt ? `更新于 ${formatDateTime(loadedAt)}` : "—"}
           </span>
           <button
             type="button"
@@ -130,21 +117,16 @@ export default function MonitorHealthPage() {
         </div>
       </header>
 
-      {healthError && (
-        <MonitorErrorBar message={healthError} onRetry={() => void load()} />
-      )}
+      {healthError && <MonitorErrorBar message={healthError} onRetry={() => void load()} />}
 
       {workspaceOverLimit && health && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-xs leading-5 text-amber-300">
           <Dot tone="amber" pulse />
           <span>
             运行工作区已占用{" "}
-            <Num className="font-semibold">
-              {formatBytes(health.disk.runs.sizeBytes)}
-            </Num>
+            <Num className="font-semibold">{formatBytes(health.disk.runs.sizeBytes)}</Num>
             ，超过阈值 <Num>{formatBytes(WORKSPACE_WARN_BYTES)}</Num>（共{" "}
-            <Num>{formatCount(health.disk.runs.count)}</Num> 个目录）。
-            建议清理旧运行的工作区目录。
+            <Num>{formatCount(health.disk.runs.count)}</Num> 个目录）。 建议清理旧运行的工作区目录。
           </span>
           <button
             type="button"
@@ -157,11 +139,7 @@ export default function MonitorHealthPage() {
       )}
 
       {health === null ? (
-        !healthError && (
-          <p className="py-16 text-center font-mono text-xs text-zinc-600">
-            加载中…
-          </p>
-        )
+        !healthError && <p className="py-16 text-center font-mono text-xs text-zinc-600">加载中…</p>
       ) : (
         <>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -174,11 +152,7 @@ export default function MonitorHealthPage() {
             <DiskCard health={health} />
           </div>
 
-          <OrphanCard
-            health={health}
-            entities={orphanEntities}
-            entityError={orphanError}
-          />
+          <OrphanCard health={health} entities={orphanEntities} entityError={orphanError} />
 
           <CleanupPanel
             usage={cleanupUsage(health)}
@@ -224,9 +198,7 @@ function EngineCard({ health }: { health: HealthPayload }) {
         <dd className="text-zinc-200">
           {engine.credentialRef || "—"}
           <span
-            className={
-              engine.credentialConfigured ? "ml-2 text-emerald-400" : "ml-2 text-red-400"
-            }
+            className={engine.credentialConfigured ? "ml-2 text-emerald-400" : "ml-2 text-red-400"}
           >
             {engine.credentialConfigured ? "已配置" : "未配置"}
           </span>
@@ -247,9 +219,9 @@ function EngineCard({ health }: { health: HealthPayload }) {
               )}
               {!engine.credentialConfigured && (
                 <li>
-                  把 <code className="font-mono">{engine.credentialRef}</code>{" "}
-                  写进仓库根的 <code className="font-mono">.env.local</code>（已被 .gitignore
-                  排除），然后重启 Next.js 进程——凭据在启动时按引用名从进程环境挑值。
+                  把 <code className="font-mono">{engine.credentialRef}</code> 写进仓库根的{" "}
+                  <code className="font-mono">.env.local</code>（已被 .gitignore 排除），然后重启
+                  Next.js 进程——凭据在启动时按引用名从进程环境挑值。
                 </li>
               )}
             </ol>
@@ -308,11 +280,7 @@ function DatabaseCard({ health }: { health: HealthPayload }) {
     <Panel
       title="数据库"
       subtitle={database.path || "data/ontoflow.db"}
-      right={
-        <Num className="text-[11px] text-zinc-400">
-          {formatBytes(database.sizeBytes)}
-        </Num>
-      }
+      right={<Num className="text-[11px] text-zinc-400">{formatBytes(database.sizeBytes)}</Num>}
     >
       {database.tables.length === 0 ? (
         <p className="font-mono text-xs text-zinc-600">暂无表统计</p>
@@ -356,11 +324,7 @@ function DatabaseCard({ health }: { health: HealthPayload }) {
 }
 
 /** 三个数据目录的配色，取自 ui.tsx 的图表色板 */
-const DISK_COLORS = [
-  CHART_COLORS.tokens,
-  CHART_COLORS.cancelled,
-  CHART_COLORS.success,
-];
+const DISK_COLORS = [CHART_COLORS.tokens, CHART_COLORS.cancelled, CHART_COLORS.success];
 
 function DiskCard({ health }: { health: HealthPayload }) {
   const { disk } = health;
@@ -382,27 +346,14 @@ function DiskCard({ health }: { health: HealthPayload }) {
     const w = total > 0 ? (seg.entry.sizeBytes / total) * 100 : 0;
     const x = cursor;
     cursor += w;
-    return (
-      <rect
-        key={seg.key}
-        x={x}
-        y={0}
-        width={w}
-        height={6}
-        fill={DISK_COLORS[i]}
-      />
-    );
+    return <rect key={seg.key} x={x} y={0} width={w} height={6} fill={DISK_COLORS[i]} />;
   });
 
   return (
     <Panel
       title="磁盘占用"
       subtitle={`工作区阈值 ${formatBytes(WORKSPACE_WARN_BYTES)}，超出即在页面顶部告警`}
-      right={
-        <Num className="text-[11px] text-zinc-400">
-          合计 {formatBytes(total)}
-        </Num>
-      }
+      right={<Num className="text-[11px] text-zinc-400">合计 {formatBytes(total)}</Num>}
     >
       <svg
         viewBox="0 0 100 6"
@@ -438,9 +389,7 @@ function DiskCard({ health }: { health: HealthPayload }) {
               <td className="py-1.5 text-right">
                 <Num
                   className={
-                    seg.key === "runs" && over
-                      ? "font-semibold text-amber-300"
-                      : "text-zinc-200"
+                    seg.key === "runs" && over ? "font-semibold text-amber-300" : "text-zinc-200"
                   }
                 >
                   {formatBytes(seg.entry.sizeBytes)}
@@ -489,9 +438,7 @@ function OrphanCard({
           </span>
         </h3>
         {runs.length === 0 ? (
-          <p className="font-mono text-xs text-zinc-600">
-            无 —— 没有悬挂的运行
-          </p>
+          <p className="font-mono text-xs text-zinc-600">无 —— 没有悬挂的运行</p>
         ) : (
           <div className="overflow-x-auto rounded border border-zinc-800">
             <table className="w-full font-mono text-[11px]">
@@ -518,9 +465,7 @@ function OrphanCard({
                           {r.id.slice(0, 8)}
                         </Link>
                       </td>
-                      <td className="px-2 py-1.5 text-zinc-300">
-                        {r.workflowName || "—"}
-                      </td>
+                      <td className="px-2 py-1.5 text-zinc-300">{r.workflowName || "—"}</td>
                       <td className="px-2 py-1.5 text-amber-300">{r.status}</td>
                       <td className="px-2 py-1.5 text-zinc-400">
                         {started == null ? "—" : formatDateTime(started)}
@@ -546,8 +491,7 @@ function OrphanCard({
         <h3 className="mb-2 text-xs font-medium text-zinc-300">
           孤儿实体
           <span className="ml-2 font-normal text-zinc-500">
-            没有被任何工作流 / Action
-            引用的库条目，点击可直接打开（工作流是顶层实体，不参与判定）
+            没有被任何工作流 / Action 引用的库条目，点击可直接打开（工作流是顶层实体，不参与判定）
           </span>
         </h3>
         {entityError ? (
@@ -555,9 +499,7 @@ function OrphanCard({
             {entityError}
           </p>
         ) : grouped.size === 0 ? (
-          <p className="font-mono text-xs text-zinc-600">
-            无 —— 所有库条目都至少被引用一次
-          </p>
+          <p className="font-mono text-xs text-zinc-600">无 —— 所有库条目都至少被引用一次</p>
         ) : (
           <div className="space-y-2">
             {[...grouped.entries()].map(([kind, list]) => (
@@ -605,9 +547,7 @@ function MiniBar({ ratio }: { ratio: number }) {
 /* -------------------------------------------------------------------------- */
 
 function scrollToCleanup(): void {
-  document
-    .getElementById("cleanup")
-    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById("cleanup")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 /**
@@ -622,9 +562,7 @@ function cleanupUsage(health: HealthPayload): CleanupUsage {
       health.disk.runs.count,
     )} 个目录`,
     events: `${formatCount(counts.runEvents)} 条事件`,
-    runs: `${formatCount(counts.runs)} 条运行 · ${formatCount(
-      counts.nodeUsage,
-    )} 条用量明细`,
+    runs: `${formatCount(counts.runs)} 条运行 · ${formatCount(counts.nodeUsage)} 条用量明细`,
   };
 }
 

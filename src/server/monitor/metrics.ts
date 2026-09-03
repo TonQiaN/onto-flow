@@ -83,9 +83,7 @@ function parsePayload(raw: unknown): Record<string, unknown> | null {
   if (typeof raw !== "string") return null;
   try {
     const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object"
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
   } catch {
     return null;
   }
@@ -295,9 +293,7 @@ export function getLiveSessions(): SessionsPayload {
       group by run_id, node_id
     )
   `);
-  const activityByNode = new Map(
-    activities.map((a) => [`${a.runId} ${a.nodeId ?? ""}`, a]),
-  );
+  const activityByNode = new Map(activities.map((a) => [`${a.runId} ${a.nodeId ?? ""}`, a]));
 
   const now = Date.now();
   const items: LiveSession[] = rows.map((row) => {
@@ -310,9 +306,7 @@ export function getLiveSessions(): SessionsPayload {
       nodeLabel: row.nodeLabel,
       workflowName: row.workflowName,
       actionName: row.actionName,
-      model:
-        row.displayName ||
-        [row.providerId, row.modelId].filter(Boolean).join("/"),
+      model: row.displayName || [row.providerId, row.modelId].filter(Boolean).join("/"),
       variant: row.variant,
       status: row.status as NodeStatus,
       startedAt,
@@ -523,8 +517,7 @@ export function getTrace(runId: string): TracePayload | null {
     // （最后几段 text 仍会落库）。session span 因此按最后一条事件收口，
     // 保证它的 step 子 span 不会溢出父区间。
     const nodeEvents = eventsByNode.get(node.nodeId) ?? [];
-    const lastEventTs =
-      nodeEvents.length > 0 ? num(nodeEvents[nodeEvents.length - 1].ts) : 0;
+    const lastEventTs = nodeEvents.length > 0 ? num(nodeEvents[nodeEvents.length - 1].ts) : 0;
     const sessionEnd = Math.max(nodeEnd, lastEventTs);
 
     const sessionSpanId = `session:${node.nodeId}`;
@@ -668,8 +661,7 @@ function buildStepSpans(ctx: StepContext): TraceSpan[] {
       const status = text(payload?.status) || "pending";
       const existing = tools.get(callId);
       const detail =
-        text(payload?.title) ||
-        clip(text(payload?.input) || text(payload?.output), 120);
+        text(payload?.title) || clip(text(payload?.input) || text(payload?.output), 120);
       if (existing) {
         existing.end = ts;
         existing.status = status;
@@ -832,10 +824,7 @@ function parseTypes(raw: string | undefined): string[] {
 
 /** 按 id 倒序 + 游标分页；q 匹配 payload 文本（sqlite LIKE 对 ASCII 大小写不敏感） */
 export function getLogs(query: LogsQuery): LogsPayload {
-  const limit = Math.min(
-    Math.max(1, Math.trunc(query.limit ?? LOG_LIMIT_DEFAULT)),
-    LOG_LIMIT_MAX,
-  );
+  const limit = Math.min(Math.max(1, Math.trunc(query.limit ?? LOG_LIMIT_DEFAULT)), LOG_LIMIT_MAX);
 
   const conds: SQL[] = [];
   if (query.runId) conds.push(sql`run_events.run_id = ${query.runId}`);
@@ -852,9 +841,7 @@ export function getLogs(query: LogsQuery): LogsPayload {
     );
   }
   if (query.q) {
-    conds.push(
-      sql`run_events.payload like ${`%${escapeLike(query.q)}%`} escape '\\'`,
-    );
+    conds.push(sql`run_events.payload like ${`%${escapeLike(query.q)}%`} escape '\\'`);
   }
   if (query.onlyErrors) {
     conds.push(sql`(
@@ -866,8 +853,7 @@ export function getLogs(query: LogsQuery): LogsPayload {
   if (query.cursor != null && Number.isFinite(query.cursor)) {
     conds.push(sql`run_events.id < ${Math.trunc(query.cursor)}`);
   }
-  const where =
-    conds.length > 0 ? sql` where ${sql.join(conds, sql` and `)}` : sql.empty();
+  const where = conds.length > 0 ? sql` where ${sql.join(conds, sql` and `)}` : sql.empty();
 
   const rows = db.all<LogRow>(sql`
     select
@@ -885,10 +871,7 @@ export function getLogs(query: LogsQuery): LogsPayload {
   `);
 
   const items = rows.map(toLogItem);
-  const nextCursor =
-    items.length === limit && items.length > 0
-      ? items[items.length - 1].id
-      : null;
+  const nextCursor = items.length === limit && items.length > 0 ? items[items.length - 1].id : null;
   return { items, nextCursor };
 }
 
@@ -913,9 +896,7 @@ export function getLogsAfter(afterId: number, limit = 50): LogItem[] {
 
 /** 当前最大事件 id（SSE 连接时定基线，避免把历史全推一遍） */
 export function getMaxEventId(): number {
-  const row = db.get<{ maxId: number | null }>(
-    sql`select max(id) as maxId from run_events`,
-  );
+  const row = db.get<{ maxId: number | null }>(sql`select max(id) as maxId from run_events`);
   return num(row?.maxId);
 }
 
@@ -950,10 +931,7 @@ const COST_DAYS_MAX = 90;
  * 历史成本仍按当时的名字归集。
  */
 export function getCost(daysInput?: number): CostPayload {
-  const days = Math.min(
-    Math.max(1, Math.trunc(daysInput ?? COST_DAYS_DEFAULT)),
-    COST_DAYS_MAX,
-  );
+  const days = Math.min(Math.max(1, Math.trunc(daysInput ?? COST_DAYS_DEFAULT)), COST_DAYS_MAX);
   const since = startOfDay(Date.now()) - (days - 1) * DAY_MS;
 
   const byModel = db.all<CostByModel>(sql`

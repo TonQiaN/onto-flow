@@ -22,11 +22,7 @@ export async function POST(request: Request) {
     if (!isCleanupTarget(target)) {
       return jsonError(400, "target 必须是 workspaces / events / runs 之一");
     }
-    if (
-      typeof beforeDays !== "number" ||
-      !Number.isInteger(beforeDays) ||
-      beforeDays < 1
-    ) {
+    if (typeof beforeDays !== "number" || !Number.isInteger(beforeDays) || beforeDays < 1) {
       return jsonError(400, "beforeDays 必须是正整数（保留最近 N 天）");
     }
     if (dryRun !== undefined && typeof dryRun !== "boolean") {

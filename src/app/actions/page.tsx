@@ -51,10 +51,7 @@ async function fetchAllItems<T>(path: string): Promise<T[]> {
 }
 
 /** 从扁平文件夹清单还原带完整路径的 FolderRef（新建默认归属用）；拿不到时返回 null */
-function folderRefFrom(
-  folders: FolderDto[],
-  id: string | null,
-): FolderRef | null {
+function folderRefFrom(folders: FolderDto[], id: string | null): FolderRef | null {
   if (!id) return null;
   const byId = new Map(folders.map((f) => [f.id, f]));
   const target = byId.get(id);
@@ -72,27 +69,15 @@ function folderRefFrom(
 
 export default function ActionsPage() {
   return (
-    <Suspense
-      fallback={<p className="p-8 text-sm text-zinc-400">加载 Action 库…</p>}
-    >
+    <Suspense fallback={<p className="p-8 text-sm text-zinc-400">加载 Action 库…</p>}>
       <ActionsLibrary />
     </Suspense>
   );
 }
 
 function ActionsLibrary() {
-  const {
-    q,
-    folder,
-    sort,
-    page,
-    highlight,
-    setQ,
-    setFolder,
-    setSort,
-    setPage,
-    openEntity,
-  } = useLibraryQuery();
+  const { q, folder, sort, page, highlight, setQ, setFolder, setSort, setPage, openEntity } =
+    useLibraryQuery();
 
   const [data, setData] = useState<ListEnvelope<ActionItem> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -180,9 +165,7 @@ function ActionsLibrary() {
       s.status === "rejected" ||
       t.status === "rejected"
     ) {
-      setSupportError(
-        "模型 / 对象类型 / Skill / Tool 基础数据加载失败，编辑功能暂不可用",
-      );
+      setSupportError("模型 / 对象类型 / Skill / Tool 基础数据加载失败，编辑功能暂不可用");
     }
   }, []);
 
@@ -211,8 +194,7 @@ function ActionsLibrary() {
   // highlight 定位：列表加载后把高亮卡片滚到视口中央（每个目标只滚一次）
   const scrolledRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!highlight || data === null || scrolledRef.current === highlight)
-      return;
+    if (!highlight || data === null || scrolledRef.current === highlight) return;
     const el = document.getElementById(`entity-${highlight}`);
     if (el) {
       el.scrollIntoView({ block: "center" });
@@ -221,13 +203,11 @@ function ActionsLibrary() {
   }, [highlight, data]);
 
   const items = data?.items ?? [];
-  const editorReady =
-    models !== null && objectTypes !== null && skills !== null && tools !== null;
+  const editorReady = models !== null && objectTypes !== null && skills !== null && tools !== null;
   const modelById = new Map((models ?? []).map((m) => [m.id, m]));
 
   async function remove(action: ActionItem) {
-    if (!window.confirm(`确认删除 Action「${action.name}」？此操作不可撤销。`))
-      return;
+    if (!window.confirm(`确认删除 Action「${action.name}」？此操作不可撤销。`)) return;
     setRowError((prev) => ({ ...prev, [action.id]: "" }));
     try {
       const res = await fetch(`/api/actions/${action.id}`, {
@@ -345,9 +325,7 @@ function ActionsLibrary() {
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <h2 className="text-sm font-semibold text-zinc-900">
-                      {action.name}
-                    </h2>
+                    <h2 className="text-sm font-semibold text-zinc-900">{action.name}</h2>
                     <p className="mt-1 text-sm text-zinc-500">
                       {action.description || "（无描述）"}
                     </p>
@@ -412,16 +390,12 @@ function ActionsLibrary() {
                   <RefCount count={action.refCount} />
                   {/* ActionDto 目前不含 updatedAt（模块 B 的 DTO），补上后此处自动显示 */}
                   {action.updatedAt && (
-                    <span className="text-zinc-400">
-                      更新于 {formatTime(action.updatedAt)}
-                    </span>
+                    <span className="text-zinc-400">更新于 {formatTime(action.updatedAt)}</span>
                   )}
                 </div>
 
                 {rowError[action.id] && (
-                  <p className="mt-2 text-xs text-red-600">
-                    {rowError[action.id]}
-                  </p>
+                  <p className="mt-2 text-xs text-red-600">{rowError[action.id]}</p>
                 )}
               </li>
             );
@@ -433,9 +407,7 @@ function ActionsLibrary() {
         <ActionEditor
           initial={editor.mode === "edit" ? editor.action : null}
           initialFolder={
-            editor.mode === "edit"
-              ? editor.action.folder
-              : folderRefFrom(folders, folder)
+            editor.mode === "edit" ? editor.action.folder : folderRefFrom(folders, folder)
           }
           refCount={editor.mode === "edit" ? editor.action.refCount : 0}
           models={models}

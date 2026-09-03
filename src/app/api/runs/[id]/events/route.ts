@@ -19,10 +19,7 @@ const QUIET_TICKS = 3;
  * 新 run_events 逐条发 event: log；run/nodes 有变化再发 snapshot；
  * run 到终态且静默期内再无任何变化后发 event: end 并关闭。不依赖进程内 pubsub。
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const exists = db.select().from(runs).where(eq(runs.id, id)).get();
   if (!exists) return jsonError(404, "运行不存在");
@@ -41,9 +38,7 @@ export async function GET(
       const send = (event: string, data: unknown) => {
         if (closed) return;
         try {
-          controller.enqueue(
-            encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-          );
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         } catch {
           cleanup();
         }

@@ -141,14 +141,11 @@ export function ToolEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(
-        initial ? `/api/tools/${initial.id}` : "/api/tools",
-        {
-          method: initial ? "PUT" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(built.payload),
-        },
-      );
+      const res = await fetch(initial ? `/api/tools/${initial.id}` : "/api/tools", {
+        method: initial ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(built.payload),
+      });
       if (!res.ok) {
         setError(await readError(res));
         return;
@@ -178,10 +175,7 @@ export function ToolEditor({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/30"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
       <div
         className="flex h-full w-full max-w-2xl flex-col bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
@@ -190,10 +184,7 @@ export function ToolEditor({
           <h2 className="text-base font-semibold text-zinc-900">
             {initial ? "编辑 Tool" : "新建 Tool"}
           </h2>
-          <button
-            onClick={onClose}
-            className="text-sm text-zinc-400 hover:text-zinc-600"
-          >
+          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-600">
             关闭
           </button>
         </div>
@@ -250,9 +241,7 @@ export function ToolEditor({
                 「默认停用的工具」与 Action「可见 Tool」收窄时用的名字。
               </p>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  描述
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">描述</span>
                 <input
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -261,9 +250,7 @@ export function ToolEditor({
                 />
               </label>
               <div>
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  文件夹
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">文件夹</span>
                 <FolderPicker
                   kind="tool"
                   entityId={initial?.id ?? ""}
@@ -291,7 +278,8 @@ export function ToolEditor({
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
                 />
                 <span className="mt-1 block text-xs text-zinc-400">
-                  上游 JSON Schema 子集：type 不能写成数组（如 [&quot;integer&quot;, &quot;null&quot;]），可空字段直接省略。
+                  上游 JSON Schema 子集：type 不能写成数组（如 [&quot;integer&quot;,
+                  &quot;null&quot;]），可空字段直接省略。
                 </span>
               </label>
               <div className="grid grid-cols-[1fr_12rem] gap-4">
@@ -336,16 +324,14 @@ export function ToolEditor({
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
                 />
                 <span className="mt-1 block text-xs text-zinc-400">
-                  可以 import node: 内置模块与仓库依赖；不能 import @deepseek-ai/*——能力只经 ctx 拿，
-                  cordis 包装由平台生成。
+                  可以 import node: 内置模块与仓库依赖；不能 import @deepseek-ai/*——能力只经 ctx
+                  拿， cordis 包装由平台生成。
                 </span>
               </label>
             </>
           )}
 
-          {tab === "refs" && initial && (
-            <ReferencesPanel kind="tool" id={initial.id} />
-          )}
+          {tab === "refs" && initial && <ReferencesPanel kind="tool" id={initial.id} />}
 
           {tab === "revisions" && initial && (
             <RevisionPanel

@@ -30,21 +30,19 @@ const isTest = (file: string): boolean => /\.test\.tsx?$/.test(file);
 
 // 本文件的测试名引用了被禁的写法（await db.、"use server"），扫描集要把自己排除。
 const SELF = path.join(ROOT, "src", "rules.test.ts");
-const sourceFiles = [
-  ...walk(path.join(ROOT, "src")),
-  ...walk(path.join(ROOT, "scripts")),
-].filter((file) => isSource(file) && file !== SELF);
+const sourceFiles = [...walk(path.join(ROOT, "src")), ...walk(path.join(ROOT, "scripts"))].filter(
+  (file) => isSource(file) && file !== SELF,
+);
 
 const apiRoutes = sourceFiles.filter(
   (file) => rel(file).startsWith("src/app/api/") && path.basename(file) === "route.ts",
 );
 
 /** 一行 `a.b.c: <file>` 的违规清单，`toEqual([])` 失败时直接列出位置。 */
-function violations(
-  files: string[],
-  check: (content: string, file: string) => string[],
-): string[] {
-  return files.flatMap((file) => check(read(file), file).map((detail) => `${rel(file)}: ${detail}`));
+function violations(files: string[], check: (content: string, file: string) => string[]): string[] {
+  return files.flatMap((file) =>
+    check(read(file), file).map((detail) => `${rel(file)}: ${detail}`),
+  );
 }
 
 describe("AGENTS.md · Repository layout", () => {
@@ -79,7 +77,8 @@ describe("AGENTS.md · Conventions · handle()", () => {
       const imported = /import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(content);
       const out: string[] = [];
       if (methods === 0) out.push("没有导出任何 HTTP 方法");
-      if (handled !== methods) out.push(`导出 ${methods} 个方法，只有 ${handled} 处 return handle(`);
+      if (handled !== methods)
+        out.push(`导出 ${methods} 个方法，只有 ${handled} 处 return handle(`);
       if (!imported) out.push("没有从 @/lib/http 导入 handle");
       return out;
     });
@@ -118,7 +117,9 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
     if (isTest(file)) return false;
     if (/["']use client["']/.test(read(file).slice(0, 600))) return true;
     const r = rel(file);
-    return (r.startsWith("src/app/") && !r.startsWith("src/app/api/")) || r.startsWith("src/components/");
+    return (
+      (r.startsWith("src/app/") && !r.startsWith("src/app/api/")) || r.startsWith("src/components/")
+    );
   });
   // tool-form.ts 的 TOOL_EXECUTE_TEMPLATE 是给 Tool 作者的源码骨架，字符串里有一行
   // `import type { ToolContext } from "@/server/harness/tool-contract"`（类型导入，运行时被擦掉）；
@@ -129,7 +130,10 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
     if (rel(file) !== TEMPLATE_CARRIER) return content;
     // 截在声明本身而不是第一次提到这个名字的地方：前面的注释提一句不该把盲区上移
     const cut = content.indexOf("export const TOOL_EXECUTE_TEMPLATE = `");
-    expect(cut, `${TEMPLATE_CARRIER} 里找不到 TOOL_EXECUTE_TEMPLATE 的声明，豁免失效`).toBeGreaterThan(0);
+    expect(
+      cut,
+      `${TEMPLATE_CARRIER} 里找不到 TOOL_EXECUTE_TEMPLATE 的声明，豁免失效`,
+    ).toBeGreaterThan(0);
     return content.slice(0, cut);
   };
   const SERVER_SPECIFIER = /^@\/(?:server|db)(?:\/|$)/;
@@ -147,7 +151,8 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
         const [, typeOnly, specifier] = match;
         if (!SERVER_SPECIFIER.test(specifier)) continue;
         if (!typeOnly) out.push(`从 ${specifier} 导入了运行时值`);
-        else if (specifier !== SANCTIONED_TYPE_SOURCE) out.push(`import type 来自 ${specifier}，只允许 ${SANCTIONED_TYPE_SOURCE}`);
+        else if (specifier !== SANCTIONED_TYPE_SOURCE)
+          out.push(`import type 来自 ${specifier}，只允许 ${SANCTIONED_TYPE_SOURCE}`);
       }
       for (const match of content.matchAll(SIDE_EFFECT_IMPORT_RE)) {
         if (SERVER_SPECIFIER.test(match[1])) out.push(`副作用导入 ${match[1]}`);
@@ -172,7 +177,9 @@ describe("AGENTS.md · Conventions · globalThis", () => {
    * cannot lose it.」既查通过别名读写的属性，也查 cast 出来的类型字面量 / 接口声明的顶层键。
    */
   const KEY_RE = /^ontoflow[A-Z]/;
-  const globalFiles = sourceFiles.filter((file) => !isTest(file) && read(file).includes("globalThis"));
+  const globalFiles = sourceFiles.filter(
+    (file) => !isTest(file) && read(file).includes("globalThis"),
+  );
 
   /** 从 `{` 起取平衡花括号内的正文（不含外层括号）。 */
   function braceBody(text: string, open: number): string {
@@ -273,7 +280,9 @@ describe("AGENTS.md · Conventions · revision restore", () => {
 
   it("「rollback replays the same write<Kind>()」——writers/index.ts 为每种 EntityKind 注册了写入器", () => {
     const registry = read(path.join(ROOT, "src/server/writers/index.ts"));
-    const registered = [...registry.matchAll(/registerEntityWriter\("([a-z_]+)"/g)].map((m) => m[1]).sort();
+    const registered = [...registry.matchAll(/registerEntityWriter\("([a-z_]+)"/g)]
+      .map((m) => m[1])
+      .sort();
     expect(registered).toEqual([...ENTITY_KINDS].sort());
   });
 });
@@ -353,7 +362,11 @@ describe("AGENTS.md · The harness seam · Pin @deepseek-ai versions exactly", (
     const found: string[] = [];
     for (const section of ["dependencies", "devDependencies", "overrides"]) {
       for (const [name, version] of Object.entries(pkg[section] ?? {})) {
-        if (name.startsWith("@deepseek-ai/") && typeof version === "string" && !EXACT.test(version)) {
+        if (
+          name.startsWith("@deepseek-ai/") &&
+          typeof version === "string" &&
+          !EXACT.test(version)
+        ) {
           found.push(`${section}.${name}: ${version}`);
         }
       }
@@ -374,7 +387,8 @@ describe("AGENTS.md · Decisions and the glossary · skills 双树", () => {
     expect(claudeFiles.length).toBeGreaterThan(0);
     expect(listing(codex)).toEqual(claudeFiles);
     const differing = claudeFiles.filter(
-      (file) => !fs.readFileSync(path.join(claude, file)).equals(fs.readFileSync(path.join(codex, file))),
+      (file) =>
+        !fs.readFileSync(path.join(claude, file)).equals(fs.readFileSync(path.join(codex, file))),
     );
     expect(differing).toEqual([]);
   });

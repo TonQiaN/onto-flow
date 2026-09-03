@@ -100,9 +100,7 @@ export async function launchRun(
     ...(options.requestTimeoutMs === undefined
       ? {}
       : { requestTimeoutMs: options.requestTimeoutMs }),
-    ...(options.onSessionEvent === undefined
-      ? {}
-      : { onSessionEvent: options.onSessionEvent }),
+    ...(options.onSessionEvent === undefined ? {} : { onSessionEvent: options.onSessionEvent }),
     onCrash: (exit) =>
       options.onCrash?.(
         `harness 子进程未经收束退出（code=${String(exit.code)}，signal=${String(exit.signal)}）`,

@@ -43,7 +43,6 @@ import {
   type WorkflowDetail,
 } from "../types";
 
-
 /** 全局设置里本页要看的两样：开关默认值（供「继承」显示）与 MCP 登记表 */
 interface GlobalView {
   toggles: CompositionToggles;
@@ -59,11 +58,7 @@ function utf8Bytes(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
-export default function WorkflowSettingsPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function WorkflowSettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   return <WorkflowSettingsEditor workflowId={id} />;
 }
@@ -142,11 +137,14 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
           nextNotes.push("全局设置读取失败：「继承」显示的是出厂默认值，MCP 登记表为空。");
         }
         const skillRows = skillRes.ok ? skillRes.items : [];
-        if (!skillRes.ok) nextNotes.push("Skill 库读取失败，技能集清单为空；已有集合保存时原样保留。");
+        if (!skillRes.ok)
+          nextNotes.push("Skill 库读取失败，技能集清单为空；已有集合保存时原样保留。");
         const toolRows = toolRes.ok ? toolRes.items : [];
-        if (!toolRes.ok) nextNotes.push("Tool 库读取失败，Tool 集清单为空；已有集合保存时原样保留。");
+        if (!toolRes.ok)
+          nextNotes.push("Tool 库读取失败，Tool 集清单为空；已有集合保存时原样保留。");
         const actionRows = actRes.ok ? actRes.items : [];
-        if (!actRes.ok) nextNotes.push("Action 库读取失败，无法标出画布上哪些 Action 在预载 / 使用集合项。");
+        if (!actRes.ok)
+          nextNotes.push("Action 库读取失败，无法标出画布上哪些 Action 在预载 / 使用集合项。");
         if (cancelled) return;
 
         applyDetail(wf);
@@ -183,10 +181,7 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
     () => effectiveToggles(global.toggles, toggles),
     [global.toggles, toggles],
   );
-  const actionById = useMemo(
-    () => new Map(actions.map((a) => [a.id, a])),
-    [actions],
-  );
+  const actionById = useMemo(() => new Map(actions.map((a) => [a.id, a])), [actions]);
   const preloadedBy = useMemo(
     () => actionNamesByEntity(nodes, actionById, "preloadSkillIds"),
     [nodes, actionById],
@@ -197,7 +192,11 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
   );
   /** 子集里登记表没有的名字：受理时静默忽略，这里列出来让人能把它勾掉 */
   const unregisteredMcp = useMemo(
-    () => outsideSet(mcpServers, global.mcpServers.map((s) => s.name)),
+    () =>
+      outsideSet(
+        mcpServers,
+        global.mcpServers.map((s) => s.name),
+      ),
     [mcpServers, global.mcpServers],
   );
   const instructionBytes = utf8Bytes(instructions);
@@ -287,8 +286,8 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
       </div>
       <p className="mt-1 text-sm text-zinc-500">
         这一层声明本工作流有什么：共同指令、插件开关的覆盖、启用的 MCP 子集、技能集与 Tool 集。
-        全局设置给默认值，Action 只在技能集里选预载、在 Tool 集里选可见。改动在<b>下一次运行</b>生效，
-        在跑的运行持有受理时的快照。
+        全局设置给默认值，Action 只在技能集里选预载、在 Tool 集里选可见。改动在<b>下一次运行</b>
+        生效， 在跑的运行持有受理时的快照。
       </p>
       {description && <p className="mt-1 text-xs text-zinc-400">{description}</p>}
 
@@ -301,7 +300,9 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
       )}
       {issues.length > 0 && (
         <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-          <p className="font-medium">受理前要处理的问题（运行会被拒绝，画布保存整图也会被拒绝）：</p>
+          <p className="font-medium">
+            受理前要处理的问题（运行会被拒绝，画布保存整图也会被拒绝）：
+          </p>
           <ul className="mt-1 list-disc space-y-0.5 pl-4">
             {issues.map((issue) => (
               <li key={issue}>{issue}</li>
@@ -330,7 +331,9 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
           }`}
         />
         <p className={`text-xs ${instructionTooLong ? "text-red-600" : "text-zinc-400"}`}>
-          ≈ {estimateTokens(instructions).toLocaleString("zh-CN")} tokens · {instructionBytes.toLocaleString("zh-CN")} / {WORKFLOW_INSTRUCTIONS_MAX_BYTES.toLocaleString("zh-CN")} 字节
+          ≈ {estimateTokens(instructions).toLocaleString("zh-CN")} tokens ·{" "}
+          {instructionBytes.toLocaleString("zh-CN")} /{" "}
+          {WORKFLOW_INSTRUCTIONS_MAX_BYTES.toLocaleString("zh-CN")} 字节
           {instructionTooLong && "，超过上限"}
         </p>
       </Section>
@@ -379,7 +382,10 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
         title="MCP 服务器"
         hint="从全局登记表里选本工作流要接的服务器。只有全局启用且在这里勾选的才会进入运行的组合；全局停用的服务器即使勾了也不生效。"
         action={
-          <Link href="/settings" className="text-xs text-zinc-500 underline decoration-dotted underline-offset-2 hover:text-zinc-900">
+          <Link
+            href="/settings"
+            className="text-xs text-zinc-500 underline decoration-dotted underline-offset-2 hover:text-zinc-900"
+          >
             管理登记表
           </Link>
         }
@@ -438,7 +444,10 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
         title={`技能集（${skillIds.length}）`}
         hint="勾选的技能物化进运行工作区，本工作流每个 Action 都看得见名字与描述、由模型自行决定加载；Action 只能从这里选预载。估算是预载时整段 SKILL.md 正文进入会话首条消息的 token 量。"
         action={
-          <Link href="/skills" className="text-xs text-zinc-500 underline decoration-dotted underline-offset-2 hover:text-zinc-900">
+          <Link
+            href="/skills"
+            className="text-xs text-zinc-500 underline decoration-dotted underline-offset-2 hover:text-zinc-900"
+          >
             打开 Skill 库
           </Link>
         }
@@ -480,7 +489,10 @@ function WorkflowSettingsEditor({ workflowId }: { workflowId: string }) {
         title={`Tool 集（${toolIds.length}）`}
         hint="勾选的 Tool 全部物化进运行，但只对勾选了它的 Action 可见；Action 只能从这里选可见 Tool。估算是公名、描述与参数 schema 进入每个可见会话工具清单的 token 量。"
         action={
-          <Link href="/tools" className="text-xs text-zinc-500 underline decoration-dotted underline-offset-2 hover:text-zinc-900">
+          <Link
+            href="/tools"
+            className="text-xs text-zinc-500 underline decoration-dotted underline-offset-2 hover:text-zinc-900"
+          >
             打开 Tool 库
           </Link>
         }

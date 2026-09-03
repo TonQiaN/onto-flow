@@ -6,23 +6,16 @@ import type { PortValue } from "@/lib/values";
 
 /** cancelled 是人为终结的独立终态，区别于 failed */
 export type RunStatus = "running" | "success" | "failed" | "cancelled";
-export type NodeStatus =
-  | "pending"
-  | "running"
-  | "success"
-  | "failed"
-  | "skipped"
-  | "cancelled";
+export type NodeStatus = "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
 
 /** 列表页状态筛选：空串代表「全部」，其余写进 URL 的 ?status= */
-export const RUN_STATUS_FILTERS: Array<{ value: "" | RunStatus; label: string }> =
-  [
-    { value: "", label: "全部" },
-    { value: "success", label: "成功" },
-    { value: "failed", label: "失败" },
-    { value: "cancelled", label: "已取消" },
-    { value: "running", label: "进行中" },
-  ];
+export const RUN_STATUS_FILTERS: Array<{ value: "" | RunStatus; label: string }> = [
+  { value: "", label: "全部" },
+  { value: "success", label: "成功" },
+  { value: "failed", label: "失败" },
+  { value: "cancelled", label: "已取消" },
+  { value: "running", label: "进行中" },
+];
 
 export function asStatusFilter(value: string | null): "" | RunStatus {
   const hit = RUN_STATUS_FILTERS.find((f) => f.value !== "" && f.value === value);

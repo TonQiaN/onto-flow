@@ -63,10 +63,7 @@ describe("validateGraph", () => {
       actionNode("a1", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_B }]),
       outputNode("out", TYPE_B),
     ];
-    const edges = [
-      edge("e1", "in", "value", "a1", "x"),
-      edge("e2", "a1", "y", "out", "value"),
-    ];
+    const edges = [edge("e1", "in", "value", "a1", "x"), edge("e2", "a1", "y", "out", "value")];
     expect(validateGraph(nodes, edges)).toEqual([]);
   });
 
@@ -81,9 +78,7 @@ describe("validateGraph", () => {
   });
 
   it("拒绝未连线的输入端口", () => {
-    const nodes = [
-      actionNode("a1", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]),
-    ];
+    const nodes = [actionNode("a1", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }])];
     const issues = validateGraph(nodes, []);
     expect(issues.some((i) => i.message.includes("未连线"))).toBe(true);
   });
@@ -110,7 +105,10 @@ describe("validateGraph", () => {
     const review = actionNode(
       "review",
       [{ name: "x", type: TYPE_A }],
-      [{ name: "通过", type: TYPE_A }, { name: "打回", type: TYPE_A }],
+      [
+        { name: "通过", type: TYPE_A },
+        { name: "打回", type: TYPE_A },
+      ],
     );
     review.outputs[0].exitName = "通过";
     review.outputs[1].exitName = "打回";
@@ -126,7 +124,11 @@ describe("validateGraph", () => {
 
   it("回边的目标没有重入上限时报错", () => {
     const fix = actionNode("fix", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]);
-    const review = actionNode("review", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]);
+    const review = actionNode(
+      "review",
+      [{ name: "x", type: TYPE_A }],
+      [{ name: "y", type: TYPE_A }],
+    );
     const nodes = [inputNode("in", TYPE_A), fix, review];
     const edges = [
       edge("e1", "in", "value", "fix", "x"),
@@ -141,7 +143,10 @@ describe("validateGraph", () => {
     const a = actionNode(
       "a",
       [{ name: "x", type: TYPE_A }],
-      [{ name: "p", type: TYPE_A }, { name: "q", type: TYPE_A }],
+      [
+        { name: "p", type: TYPE_A },
+        { name: "q", type: TYPE_A },
+      ],
     );
     a.outputs[0].exitName = "通过";
     const nodes = [inputNode("in", TYPE_A), a];
@@ -151,10 +156,7 @@ describe("validateGraph", () => {
   });
 
   it("拒绝指向不存在端口的连线", () => {
-    const nodes = [
-      inputNode("in", TYPE_A),
-      actionNode("a1", [{ name: "x", type: TYPE_A }], []),
-    ];
+    const nodes = [inputNode("in", TYPE_A), actionNode("a1", [{ name: "x", type: TYPE_A }], [])];
     const edges = [edge("e1", "in", "nope", "a1", "x")];
     const issues = validateGraph(nodes, edges);
     expect(issues.some((i) => i.message.includes("没有输出端口"))).toBe(true);
@@ -186,10 +188,7 @@ describe("classifyEdges", () => {
       actionNode("a", [{ name: "x", type: TYPE_A }], [{ name: "y", type: TYPE_A }]),
       outputNode("out", TYPE_A),
     ];
-    const edges = [
-      edge("e1", "in", "value", "a", "x"),
-      edge("e2", "a", "y", "out", "value"),
-    ];
+    const edges = [edge("e1", "in", "value", "a", "x"), edge("e2", "a", "y", "out", "value")];
     expect(classifyEdges(nodes, edges).backEdgeIds.size).toBe(0);
   });
 });
@@ -199,7 +198,10 @@ describe("exitsOf", () => {
     const node = actionNode(
       "a",
       [],
-      [{ name: "p", type: TYPE_A }, { name: "q", type: TYPE_A }],
+      [
+        { name: "p", type: TYPE_A },
+        { name: "q", type: TYPE_A },
+      ],
     );
     node.outputs[0].exitName = "打回";
     node.outputs[1].exitName = "通过";
@@ -211,7 +213,10 @@ describe("exitsOf", () => {
     const node = actionNode(
       "a",
       [],
-      [{ name: "p", type: TYPE_A }, { name: "q", type: TYPE_A }],
+      [
+        { name: "p", type: TYPE_A },
+        { name: "q", type: TYPE_A },
+      ],
     );
     const exits = exitsOf(node);
     expect(exits).toHaveLength(1);

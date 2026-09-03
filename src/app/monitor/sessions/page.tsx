@@ -20,14 +20,7 @@ import {
   type RunNodeRow,
   type RunRow,
 } from "@/app/runs/lib";
-import {
-  ConnectionBadge,
-  Dot,
-  MonitorEmpty,
-  MonitorErrorBar,
-  Num,
-  StatusChip,
-} from "../ui";
+import { ConnectionBadge, Dot, MonitorEmpty, MonitorErrorBar, Num, StatusChip } from "../ui";
 import { useMonitorStream, type LiveSession } from "../use-monitor-stream";
 
 const EVENT_LIMIT = 600;
@@ -85,9 +78,7 @@ export default function MonitorSessionsPage() {
           <header className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
             <div className="flex items-baseline gap-2">
               <h2 className="text-sm font-medium text-zinc-200">进行中的会话</h2>
-              <Num className="text-[11px] text-zinc-500">
-                {loading ? "—" : rows.length}
-              </Num>
+              <Num className="text-[11px] text-zinc-500">{loading ? "—" : rows.length}</Num>
             </div>
             <ConnectionBadge
               state={connection.state}
@@ -98,9 +89,7 @@ export default function MonitorSessionsPage() {
 
           <div className="min-h-0 flex-1 overflow-auto">
             {loading ? (
-              <p className="px-4 py-10 text-center text-xs text-zinc-600">
-                等待实时数据…
-              </p>
+              <p className="px-4 py-10 text-center text-xs text-zinc-600">等待实时数据…</p>
             ) : rows.length === 0 ? (
               <div className="p-4">
                 <MonitorEmpty
@@ -140,9 +129,7 @@ export default function MonitorSessionsPage() {
                     return (
                       <tr
                         key={session.sessionId}
-                        onClick={() =>
-                          setSelectedId(on ? null : session.sessionId)
-                        }
+                        onClick={() => setSelectedId(on ? null : session.sessionId)}
                         className={`cursor-pointer border-t border-zinc-800/70 transition-colors ${
                           on ? "bg-zinc-800/60" : "hover:bg-zinc-800/30"
                         }`}
@@ -150,9 +137,7 @@ export default function MonitorSessionsPage() {
                         <td className="px-4 py-2.5">
                           <span className="inline-flex items-center gap-1.5">
                             <Dot tone="sky" pulse />
-                            <Num className="text-zinc-300">
-                              {session.sessionId.slice(0, 8)}
-                            </Num>
+                            <Num className="text-zinc-300">{session.sessionId.slice(0, 8)}</Num>
                           </span>
                         </td>
                         <td className="max-w-[16rem] px-3 py-2.5">
@@ -175,26 +160,18 @@ export default function MonitorSessionsPage() {
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-right">
-                          <Num className="text-zinc-300">
-                            {elapsedText(session)}
-                          </Num>
+                          <Num className="text-zinc-300">{elapsedText(session)}</Num>
                         </td>
                         <td className="px-3 py-2.5 text-right">
-                          <Num className="text-zinc-300">
-                            {formatTokens(session.tokens)}
-                          </Num>
+                          <Num className="text-zinc-300">{formatTokens(session.tokens)}</Num>
                         </td>
                         <td className="px-3 py-2.5 text-right">
-                          <Num className="text-zinc-300">
-                            {formatCost(session.cost)}
-                          </Num>
+                          <Num className="text-zinc-300">{formatCost(session.cost)}</Num>
                         </td>
                         <td className="max-w-[18rem] px-4 py-2.5">
                           {session.lastActivity ? (
                             <span className="block truncate text-zinc-500">
-                              <span className="text-zinc-400">
-                                {session.lastActivity.type}
-                              </span>{" "}
+                              <span className="text-zinc-400">{session.lastActivity.type}</span>{" "}
                               {session.lastActivity.text}
                             </span>
                           ) : (
@@ -227,10 +204,7 @@ export default function MonitorSessionsPage() {
 function eventSummary(row: RunEventRow): string {
   const payload = row.payload;
   if (!payload) return "";
-  if (
-    (row.type === "text" || row.type === "reasoning") &&
-    typeof payload.text === "string"
-  ) {
+  if ((row.type === "text" || row.type === "reasoning") && typeof payload.text === "string") {
     return payload.text;
   }
   if (row.type === "tool") {
@@ -256,13 +230,7 @@ const EVENT_TONE: Record<string, string> = {
   "session.idle": "text-emerald-300",
 };
 
-function SessionDrawer({
-  session,
-  onClose,
-}: {
-  session: LiveSession;
-  onClose: () => void;
-}) {
+function SessionDrawer({ session, onClose }: { session: LiveSession; onClose: () => void }) {
   const [events, setEvents] = useState<RunEventRow[]>([]);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
@@ -285,9 +253,7 @@ function SessionDrawer({
         seen.add(row.id);
         setEvents((prev) => {
           const next = [...prev, row];
-          return next.length > EVENT_LIMIT
-            ? next.slice(next.length - EVENT_LIMIT)
-            : next;
+          return next.length > EVENT_LIMIT ? next.slice(next.length - EVENT_LIMIT) : next;
         });
       } catch {
         // 忽略坏帧
@@ -391,27 +357,16 @@ function SessionDrawer({
         ref={boxRef}
         className="min-h-0 flex-1 overflow-auto px-3 py-2 font-mono text-[11px] leading-5"
       >
-        {streamError && (
-          <p className="mb-2 text-red-400">{streamError}</p>
-        )}
+        {streamError && <p className="mb-2 text-red-400">{streamError}</p>}
         {events.length === 0 ? (
-          <p className="py-8 text-center text-zinc-600">
-            等待该会话产生事件…
-          </p>
+          <p className="py-8 text-center text-zinc-600">等待该会话产生事件…</p>
         ) : (
           events.map((row) => {
             const ts = toMillis(row.ts);
             return (
-              <div
-                key={row.id}
-                className="break-all whitespace-pre-wrap text-zinc-400"
-              >
-                <span className="text-zinc-600">
-                  [{ts == null ? "--:--:--" : formatClock(ts)}]
-                </span>{" "}
-                <span
-                  className={`font-semibold ${EVENT_TONE[row.type] ?? "text-zinc-300"}`}
-                >
+              <div key={row.id} className="break-all whitespace-pre-wrap text-zinc-400">
+                <span className="text-zinc-600">[{ts == null ? "--:--:--" : formatClock(ts)}]</span>{" "}
+                <span className={`font-semibold ${EVENT_TONE[row.type] ?? "text-zinc-300"}`}>
                   {row.type}
                 </span>{" "}
                 {eventSummary(row)}
@@ -483,9 +438,7 @@ function CancelRunPanel({ session }: { session: LiveSession }) {
         error?: unknown;
       } | null;
       if (!res.ok) {
-        setError(
-          typeof data?.error === "string" ? data.error : "中止运行失败",
-        );
+        setError(typeof data?.error === "string" ? data.error : "中止运行失败");
         return;
       }
       setDone(true);
@@ -508,9 +461,7 @@ function CancelRunPanel({ session }: { session: LiveSession }) {
   if (!confirming) {
     return (
       <div className="flex items-center justify-between border-t border-zinc-800 px-4 py-3">
-        <span className="text-[11px] text-zinc-600">
-          中止会终结整次运行，不可恢复
-        </span>
+        <span className="text-[11px] text-zinc-600">中止会终结整次运行，不可恢复</span>
         <button
           type="button"
           onClick={() => {
@@ -536,9 +487,7 @@ function CancelRunPanel({ session }: { session: LiveSession }) {
         {detail ? (
           <>
             <p>
-              <span className="text-red-300">
-                {impact.running.length} 个节点
-              </span>
+              <span className="text-red-300">{impact.running.length} 个节点</span>
               正在执行，其 opencode 会话将被 abort 并标记为「已取消」
               {impact.running.length > 0 && (
                 <span className="text-zinc-500">
@@ -547,14 +496,11 @@ function CancelRunPanel({ session }: { session: LiveSession }) {
               )}
             </p>
             <p>
-              <span className="text-amber-300">
-                {impact.pending.length} 个节点
-              </span>
+              <span className="text-amber-300">{impact.pending.length} 个节点</span>
               尚未开始，将标记为「已跳过」
             </p>
             <p className="text-zinc-500">
-              已完成的 {impact.success} 个节点及其产出保留，运行终态为「已取消」
-              （不计为失败）。
+              已完成的 {impact.success} 个节点及其产出保留，运行终态为「已取消」 （不计为失败）。
             </p>
           </>
         ) : (

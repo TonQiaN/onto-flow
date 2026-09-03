@@ -25,7 +25,8 @@ import {
   models,
   objectTypes,
   revisions,
-  skills, skillFiles,
+  skills,
+  skillFiles,
   tools,
   workflowEdges,
   workflowNodes,
@@ -360,16 +361,9 @@ function upsertObjectType(input: {
     jsonSchema: input.jsonSchema ?? null,
     builtin: input.builtin ?? false,
   };
-  const existing = db
-    .select()
-    .from(objectTypes)
-    .where(eq(objectTypes.name, input.name))
-    .get();
+  const existing = db.select().from(objectTypes).where(eq(objectTypes.name, input.name)).get();
   if (existing) {
-    db.update(objectTypes)
-      .set(values)
-      .where(eq(objectTypes.id, existing.id))
-      .run();
+    db.update(objectTypes).set(values).where(eq(objectTypes.id, existing.id)).run();
     return existing.id;
   }
   const id = crypto.randomUUID();
@@ -379,20 +373,11 @@ function upsertObjectType(input: {
   return id;
 }
 
-function upsertModel(input: {
-  providerId: string;
-  modelId: string;
-  displayName: string;
-}): string {
+function upsertModel(input: { providerId: string; modelId: string; displayName: string }): string {
   const existing = db
     .select()
     .from(models)
-    .where(
-      and(
-        eq(models.providerId, input.providerId),
-        eq(models.modelId, input.modelId),
-      ),
-    )
+    .where(and(eq(models.providerId, input.providerId), eq(models.modelId, input.modelId)))
     .get();
   if (existing) {
     db.update(models)
@@ -408,16 +393,8 @@ function upsertModel(input: {
   return id;
 }
 
-function upsertSkill(input: {
-  name: string;
-  description: string;
-  content: string;
-}): string {
-  const existing = db
-    .select()
-    .from(skills)
-    .where(eq(skills.name, input.name))
-    .get();
+function upsertSkill(input: { name: string; description: string; content: string }): string {
+  const existing = db.select().from(skills).where(eq(skills.name, input.name)).get();
   if (existing) {
     db.update(skills)
       .set({ description: input.description, content: input.content })
@@ -435,7 +412,11 @@ function upsertSkill(input: {
 /** Tool 契约（ADR-0017）：按展示名查找，契约字段整体覆盖。 */
 /** 展示名已被别的公名占用时点名报错：种子只认公名，不按展示名猜身份。 */
 function assertToolNameFree(name: string, publicName: string): void {
-  const taken = db.select({ publicName: tools.publicName }).from(tools).where(eq(tools.name, name)).get();
+  const taken = db
+    .select({ publicName: tools.publicName })
+    .from(tools)
+    .where(eq(tools.name, name))
+    .get();
   if (taken && taken.publicName !== publicName) {
     throw new Error(
       `种子 Tool「${name}」（公名 ${publicName}）在库里找不到，但展示名已被公名为 ${taken.publicName} 的 Tool 占用：改掉或删掉那个 Tool 再重跑种子`,
@@ -463,7 +444,10 @@ function upsertTool(input: {
   // 幂等键是模型可见的公名：展示名是可以改的中文，公名才是全库唯一的身份。
   const existing = db.select().from(tools).where(eq(tools.publicName, input.publicName)).get();
   if (existing) {
-    db.update(tools).set({ name: input.name, ...values }).where(eq(tools.id, existing.id)).run();
+    db.update(tools)
+      .set({ name: input.name, ...values })
+      .where(eq(tools.id, existing.id))
+      .run();
     return existing.id;
   }
   // 公名不在库里、展示名却已被另一个 Tool 占用：不能按展示名猜它就是种子（会把别人的契约整份
@@ -506,11 +490,7 @@ function upsertAction(input: {
     modelId: input.modelId,
     reasoningEffort: input.reasoningEffort,
   };
-  const existing = db
-    .select()
-    .from(actions)
-    .where(eq(actions.name, input.name))
-    .get();
+  const existing = db.select().from(actions).where(eq(actions.name, input.name)).get();
   let actionId: string;
   if (existing) {
     actionId = existing.id;
@@ -579,11 +559,7 @@ function upsertWorkflow(input: {
     instructions: input.instructions,
     settings: input.settings,
   };
-  const existing = db
-    .select()
-    .from(workflows)
-    .where(eq(workflows.name, input.name))
-    .get();
+  const existing = db.select().from(workflows).where(eq(workflows.name, input.name)).get();
   let workflowId: string;
   if (existing) {
     workflowId = existing.id;
@@ -613,9 +589,7 @@ function upsertFolder(name: string, parentId: string | null): string {
     .where(
       and(
         eq(folders.name, name),
-        parentId === null
-          ? isNull(folders.parentId)
-          : eq(folders.parentId, parentId),
+        parentId === null ? isNull(folders.parentId) : eq(folders.parentId, parentId),
       ),
     )
     .get();
@@ -626,18 +600,9 @@ function upsertFolder(name: string, parentId: string | null): string {
 }
 
 /** 单归属指派，整体替换语义：先删该实体已有指派再插 */
-function assignFolder(
-  entityKind: FolderEntityKind,
-  entityId: string,
-  folderId: string,
-): void {
+function assignFolder(entityKind: FolderEntityKind, entityId: string, folderId: string): void {
   db.delete(entityFolders)
-    .where(
-      and(
-        eq(entityFolders.entityKind, entityKind),
-        eq(entityFolders.entityId, entityId),
-      ),
-    )
+    .where(and(eq(entityFolders.entityKind, entityKind), eq(entityFolders.entityId, entityId)))
     .run();
   db.insert(entityFolders).values({ entityKind, entityId, folderId }).run();
 }
@@ -731,8 +696,7 @@ const skillBianzhi = upsertSkill({
 });
 const skillShenhe = upsertSkill({
   name: "集采计划审核要点",
-  description:
-    "对集采计划做完整性、口径一致性、合规性与可执行性逐条审核的检查清单与结论规则。",
+  description: "对集采计划做完整性、口径一致性、合规性与可执行性逐条审核的检查清单与结论规则。",
   content: SKILL_SHENHE_CONTENT,
 });
 
@@ -772,7 +736,11 @@ const actionTidy = upsertAction({
   reasoningEffort: "low",
   inputs: [{ name: "需求文件", objectTypeId: otRequirementFile }],
   outputs: [
-    { name: "需求Prompt", objectTypeId: otRequirementPrompt, artifactPath: "requirement-prompt.md" },
+    {
+      name: "需求Prompt",
+      objectTypeId: otRequirementPrompt,
+      artifactPath: "requirement-prompt.md",
+    },
   ],
   preloadSkillIds: [],
   toolIds: [],
@@ -794,9 +762,7 @@ const actionGenerate = upsertAction({
   modelId: modelDeepseek,
   reasoningEffort: "high",
   inputs: [{ name: "需求Prompt", objectTypeId: otRequirementPrompt }],
-  outputs: [
-    { name: "集采计划", objectTypeId: otPlan, artifactPath: "procurement-plan.md" },
-  ],
+  outputs: [{ name: "集采计划", objectTypeId: otPlan, artifactPath: "procurement-plan.md" }],
   preloadSkillIds: [skillBianzhi],
   toolIds: [],
 });
@@ -843,9 +809,7 @@ const actionArchive = upsertAction({
     { name: "集采计划", objectTypeId: otPlan },
     { name: "审核评价", objectTypeId: otReview },
   ],
-  outputs: [
-    { name: "归档回执", objectTypeId: otReceipt, artifactPath: "archive-receipt.md" },
-  ],
+  outputs: [{ name: "归档回执", objectTypeId: otReceipt, artifactPath: "archive-receipt.md" }],
   preloadSkillIds: [],
   toolIds: [toolSavePlan],
 });
@@ -1053,11 +1017,7 @@ assignFolder("object_type", otReview, folderJicai);
 function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
   switch (kind) {
     case "object_type": {
-      const row = db
-        .select()
-        .from(objectTypes)
-        .where(eq(objectTypes.id, id))
-        .get();
+      const row = db.select().from(objectTypes).where(eq(objectTypes.id, id)).get();
       if (!row) throw new Error(`对象类型不存在：${id}`);
       return {
         name: row.name,
@@ -1112,11 +1072,7 @@ function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
         .where(eq(actionPreloads.actionId, id))
         .orderBy(asc(actionPreloads.position))
         .all();
-      const toolLinks = db
-        .select()
-        .from(actionTools)
-        .where(eq(actionTools.actionId, id))
-        .all();
+      const toolLinks = db.select().from(actionTools).where(eq(actionTools.actionId, id)).all();
       return {
         name: row.name,
         description: row.description,
@@ -1139,16 +1095,8 @@ function entityPayload(kind: EntityKind, id: string): Record<string, unknown> {
     case "workflow": {
       const row = db.select().from(workflows).where(eq(workflows.id, id)).get();
       if (!row) throw new Error(`工作流不存在：${id}`);
-      const nodes = db
-        .select()
-        .from(workflowNodes)
-        .where(eq(workflowNodes.workflowId, id))
-        .all();
-      const edges = db
-        .select()
-        .from(workflowEdges)
-        .where(eq(workflowEdges.workflowId, id))
-        .all();
+      const nodes = db.select().from(workflowNodes).where(eq(workflowNodes.workflowId, id)).all();
+      const edges = db.select().from(workflowEdges).where(eq(workflowEdges.workflowId, id)).all();
       const skillSet = db
         .select()
         .from(workflowSkills)

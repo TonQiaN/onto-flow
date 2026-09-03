@@ -49,12 +49,7 @@ const NODE_STATUSES: readonly RunVisualStatus[] = [
   "cancelled",
 ];
 
-const RUN_STATUSES: readonly RunVisualRunStatus[] = [
-  "running",
-  "success",
-  "failed",
-  "cancelled",
-];
+const RUN_STATUSES: readonly RunVisualRunStatus[] = ["running", "success", "failed", "cancelled"];
 
 /** 某个画布节点在本次运行中的视觉数据（来自 SSE snapshot 的 run_nodes 行） */
 export interface NodeVisual {
@@ -249,9 +244,7 @@ function parseSnapshot(raw: string): SnapshotPatch {
       startedAt,
       finishedAt,
       durationMs:
-        startedAt != null && finishedAt != null
-          ? Math.max(0, finishedAt - startedAt)
-          : null,
+        startedAt != null && finishedAt != null ? Math.max(0, finishedAt - startedAt) : null,
       inputTokens,
       outputTokens,
       totalTokens: sumTokens({
@@ -297,9 +290,7 @@ function applyLogRow(prev: RunState, row: Record<string, unknown>): RunState {
   if (!nodeId || !type) return prev;
 
   const payload =
-    row.payload && typeof row.payload === "object"
-      ? (row.payload as Record<string, unknown>)
-      : {};
+    row.payload && typeof row.payload === "object" ? (row.payload as Record<string, unknown>) : {};
   const at = toMillis(row.ts) ?? Date.now();
   const base = prev.activity[nodeId] ?? EMPTY_ACTIVITY;
   let next: NodeActivity | null = null;
@@ -423,10 +414,7 @@ export function useRunVisuals(): RunVisualsController {
 
       es.addEventListener("log", (ev) => {
         try {
-          const row = JSON.parse((ev as MessageEvent<string>).data) as Record<
-            string,
-            unknown
-          >;
+          const row = JSON.parse((ev as MessageEvent<string>).data) as Record<string, unknown>;
           const eventId = num(row.id);
           // 重连后服务端从 id=0 全量回放，已消费过的不能再累加字数
           if (eventId !== 0 && eventId <= seenEventIdRef.current) return;

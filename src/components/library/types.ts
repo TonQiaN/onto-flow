@@ -3,12 +3,7 @@
  * 契约见 docs/DESIGN-V2.md 第一/二/三/四节。
  */
 
-export type EntityKind =
-  | "workflow"
-  | "action"
-  | "skill"
-  | "tool"
-  | "object_type";
+export type EntityKind = "workflow" | "action" | "skill" | "tool" | "object_type";
 
 export const ENTITY_KIND_LABEL: Record<EntityKind, string> = {
   workflow: "工作流",
@@ -36,12 +31,7 @@ export const ENTITY_KIND_API: Record<EntityKind, string> = {
   object_type: "/api/object-types",
 };
 
-export type SortKey =
-  | "updated_desc"
-  | "updated_asc"
-  | "name_asc"
-  | "name_desc"
-  | "refs_desc";
+export type SortKey = "updated_desc" | "updated_asc" | "name_asc" | "name_desc" | "refs_desc";
 
 export const SORT_OPTIONS: ReadonlyArray<{ value: SortKey; label: string }> = [
   { value: "updated_desc", label: "最近更新" },

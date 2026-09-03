@@ -31,36 +31,18 @@ import {
 } from "@/lib/workflow-settings";
 import { DATA_DIR, isWithinData, resolveWithinData, safeBasename } from "@/server/fs-safety";
 import { assertSafeId } from "@/server/harness/ids";
-import {
-  launchRun,
-  UnsettledRunLaunchError,
-} from "@/server/harness/launch";
+import { launchRun, UnsettledRunLaunchError } from "@/server/harness/launch";
 import type { RunProcess } from "@/server/harness/runtime";
 import {
   createRunWorkspace,
   WORKSPACE_INPUTS_SUBDIR,
   type RunWorkspace,
 } from "@/server/harness/workspace";
-import {
-  resolveWorkflow,
-  WorkflowResolveError,
-  type ResolvedWorkflow,
-} from "@/server/resolve";
-import {
-  releaseSkillProjections,
-  retainSkillProjections,
-} from "@/server/skill-library";
+import { resolveWorkflow, WorkflowResolveError, type ResolvedWorkflow } from "@/server/resolve";
+import { releaseSkillProjections, retainSkillProjections } from "@/server/skill-library";
 import { readSettings, type SettingsDocument } from "@/server/settings";
-import {
-  finalizeUnsettledActionUsage,
-  refreshUnsettledActionUsage,
-  runActionNode,
-} from "./action";
-import {
-  collectCapabilities,
-  materializeToolPlugins,
-  toolFilterForAction,
-} from "./capabilities";
+import { finalizeUnsettledActionUsage, refreshUnsettledActionUsage, runActionNode } from "./action";
+import { collectCapabilities, materializeToolPlugins, toolFilterForAction } from "./capabilities";
 import { recordSessionEvent, type EventSinkContext } from "./events";
 
 export type StartRunResult =
@@ -68,9 +50,7 @@ export type StartRunResult =
   | { ok: false; status: 404 | 429; error: string }
   | { ok: false; status: 422; error: string; issues: ValidationIssue[] };
 
-export type CancelRunResult =
-  | { ok: true }
-  | { ok: false; status: 404 | 409; error: string };
+export type CancelRunResult = { ok: true } | { ok: false; status: 404 | 409; error: string };
 
 /** 运行由哪个受理边界发起；专用入口只读取自己留下的持久来源证明。 */
 export type RunInvocationProvenance =
@@ -81,9 +61,7 @@ export type RunInvocationProvenance =
       resultNodes: { outputNodeId: string; validatorNodeId: string };
     };
 
-export type RunCompletionGate = (
-  runId: string,
-) =>
+export type RunCompletionGate = (runId: string) =>
   | {
       ok: true;
       evidence: Record<string, unknown>;
@@ -125,8 +103,8 @@ g.ontoflowRunDisposalFailures = disposalFailures;
  * 子进程已退出但最终用量尚未完整落库的运行。任务会持续重试；Map 与 activeRuns
  * 一起挂在 globalThis，HMR 不能让清理路径失去这份隔离所有权。
  */
-const pendingUsageSettlements: Map<string, Promise<void>> =
-  g.ontoflowPendingUsageSettlements ?? new Map();
+const pendingUsageSettlements: Map<string, Promise<void>> = g.ontoflowPendingUsageSettlements ??
+new Map();
 g.ontoflowPendingUsageSettlements = pendingUsageSettlements;
 
 function waitForUsageSettlementRetry(attempt: number): Promise<void> {
@@ -177,8 +155,7 @@ function boundedInputFilename(candidate: string): string {
   if (Buffer.byteLength(basename, "utf8") <= INPUT_FILENAME_MAX_BYTES) return basename;
 
   const candidateExtension = path.extname(basename);
-  const extension =
-    Buffer.byteLength(candidateExtension, "utf8") <= 16 ? candidateExtension : "";
+  const extension = Buffer.byteLength(candidateExtension, "utf8") <= 16 ? candidateExtension : "";
   const stem = extension ? basename.slice(0, -extension.length) : basename;
   const suffix = `-${createHash("sha256").update(basename).digest("hex").slice(0, 12)}${extension}`;
   const prefixBudget = INPUT_FILENAME_MAX_BYTES - Buffer.byteLength(suffix, "utf8");
@@ -842,11 +819,7 @@ async function executeRun(
         name: tool.publicName,
         visible: visibleTools.has(tool.publicName),
       })),
-      toolFilter: toolFilterForAction(
-        capabilities,
-        nodeRow.actionId,
-        globalSettings.disabledTools,
-      ),
+      toolFilter: toolFilterForAction(capabilities, nodeRow.actionId, globalSettings.disabledTools),
     });
     // cancelRun 可能在 Action 已产出、但会话仍在收束的 await 窗口落下终态。
     // 这里必须在写成功前再查一次，否则晚到的 Action 返回会把 cancelled 覆盖成 success。
@@ -910,10 +883,9 @@ async function executeRun(
         finalizeUnsettledActionUsage(runId);
         runProcesses.delete(runId);
       } catch (usageError) {
-        firstError ??=
-          `运行子进程退出后的用量结算失败：${
-            usageError instanceof Error ? usageError.message : String(usageError)
-          }`;
+        firstError ??= `运行子进程退出后的用量结算失败：${
+          usageError instanceof Error ? usageError.message : String(usageError)
+        }`;
         console.error("[engine] 退出后的用量结算失败", runId, usageError);
         scheduleUsageSettlementRetry(runId);
       }
@@ -936,11 +908,7 @@ async function executeRun(
       if (!completion.ok) {
         firstError = `运行完成校验失败：${completion.error}`;
       } else {
-        const row = db
-          .select({ imports: runs.imports })
-          .from(runs)
-          .where(eq(runs.id, runId))
-          .get();
+        const row = db.select({ imports: runs.imports }).from(runs).where(eq(runs.id, runId)).get();
         if (!row) throw new Error("运行记录不存在");
         db.transaction((tx) => {
           if (completion.result) {
@@ -1028,11 +996,7 @@ async function executeRun(
  * executeRun 在下一个节点开始前停止调度。HTTP 入口在阶段二接。
  */
 export async function cancelRun(runId: string): Promise<CancelRunResult> {
-  const run = db
-    .select({ status: runs.status })
-    .from(runs)
-    .where(eq(runs.id, runId))
-    .get();
+  const run = db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get();
   if (!run) return { ok: false, status: 404, error: "运行不存在" };
   if (run.status !== "running") {
     return { ok: false, status: 409, error: "该运行已结束，无法取消" };
@@ -1093,27 +1057,16 @@ function failWholeRun(runId: string, message: string, attempt = 0): void {
     cancelledRuns.delete(runId);
     if (wasCancelled) return;
     // 已经写过终态（含被取消）的运行不覆盖：取消不是失败
-    const run = db
-      .select({ status: runs.status })
-      .from(runs)
-      .where(eq(runs.id, runId))
-      .get();
+    const run = db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get();
     if (!run || run.status !== "running") return;
 
     db.update(runNodes)
       .set({ status: "failed", error: message, finishedAt: new Date() })
-      .where(
-        and(eq(runNodes.runId, runId), eq(runNodes.status, "running")),
-      )
+      .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "running")))
       .run();
     db.update(runNodes)
       .set({ status: "skipped", finishedAt: new Date() })
-      .where(
-        and(
-          eq(runNodes.runId, runId),
-          inArray(runNodes.status, ["pending"]),
-        ),
-      )
+      .where(and(eq(runNodes.runId, runId), inArray(runNodes.status, ["pending"])))
       .run();
     db.update(runs)
       .set({ status: "failed", error: message, finishedAt: new Date() })

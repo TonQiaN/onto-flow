@@ -67,7 +67,6 @@ export function handleAffinity(
   if (connecting.nodeId === nodeId) return "blocked";
   if (connecting.handleType === side) return "blocked";
   if (connecting.objectTypeId !== objectTypeId) return "blocked";
-  if (side === "target" && connecting.occupied.has(`${nodeId}:${portName}`))
-    return "blocked";
+  if (side === "target" && connecting.occupied.has(`${nodeId}:${portName}`)) return "blocked";
   return "ok";
 }

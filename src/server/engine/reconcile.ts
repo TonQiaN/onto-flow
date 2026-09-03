@@ -10,11 +10,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db, runNodes, runs } from "@/db";
 
 export function reconcileOrphanRuns(): void {
-  const orphans = db
-    .select({ id: runs.id })
-    .from(runs)
-    .where(eq(runs.status, "running"))
-    .all();
+  const orphans = db.select({ id: runs.id }).from(runs).where(eq(runs.status, "running")).all();
   if (orphans.length === 0) return;
 
   const ids = orphans.map((r) => r.id);

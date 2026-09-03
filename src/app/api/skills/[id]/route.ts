@@ -36,8 +36,7 @@ export async function DELETE(_request: Request, { params }: Params) {
     if (!row) return jsonError(404, "技能不存在");
 
     const usedBy = usedByNames("skill", id);
-    if (usedBy.length > 0)
-      return jsonError(409, "该技能正被工作流引用，无法删除", { usedBy });
+    if (usedBy.length > 0) return jsonError(409, "该技能正被工作流引用，无法删除", { usedBy });
 
     db.delete(skills).where(eq(skills.id, id)).run();
     // 数据库立即删除；已受理运行若仍持有活链接，投影延迟到最后一个运行收束后再删。

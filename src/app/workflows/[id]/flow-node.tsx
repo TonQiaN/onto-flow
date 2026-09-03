@@ -68,10 +68,7 @@ const STATUS_DOT: Record<RunNodeStatus, string> = {
   cancelled: "bg-amber-500",
 };
 
-function handleStyle(
-  objectTypeId: string,
-  side: "left" | "right",
-): React.CSSProperties {
+function handleStyle(objectTypeId: string, side: "left" | "right"): React.CSSProperties {
   const style: React.CSSProperties = {
     width: 11,
     height: 11,
@@ -170,9 +167,7 @@ function RunFooter({
   return (
     <div
       className={`rounded-b-[10px] border-t px-3 py-1 ${
-        failed
-          ? "border-red-100 bg-red-50/70"
-          : "border-emerald-100 bg-emerald-50/60"
+        failed ? "border-red-100 bg-red-50/70" : "border-emerald-100 bg-emerald-50/60"
       }`}
     >
       <div
@@ -180,9 +175,7 @@ function RunFooter({
           failed ? "text-red-700" : "text-emerald-700"
         }`}
       >
-        <span>
-          {visual?.durationMs != null ? formatDuration(visual.durationMs) : "—"}
-        </span>
+        <span>{visual?.durationMs != null ? formatDuration(visual.durationMs) : "—"}</span>
         {visual && visual.totalTokens > 0 && (
           <>
             <span className="opacity-40">·</span>
@@ -193,10 +186,7 @@ function RunFooter({
         )}
       </div>
       {failed && visual?.error && (
-        <p
-          className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-red-600"
-          title={visual.error}
-        >
+        <p className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-red-600" title={visual.error}>
           {visual.error}
         </p>
       )}
@@ -217,20 +207,10 @@ function PortRow({
   const { connecting } = useCanvasState();
   const [hover, setHover] = useState(false);
   const isOut = side === "source";
-  const affinity = handleAffinity(
-    connecting,
-    nodeId,
-    port.name,
-    port.objectTypeId,
-    side,
-  );
+  const affinity = handleAffinity(connecting, nodeId, port.name, port.objectTypeId, side);
 
   const handleClass =
-    affinity === "ok"
-      ? "ff-handle-ok"
-      : affinity === "blocked"
-        ? "ff-handle-dim"
-        : "";
+    affinity === "ok" ? "ff-handle-ok" : affinity === "blocked" ? "ff-handle-dim" : "";
 
   return (
     <div
@@ -358,9 +338,7 @@ export const FlowNodeView = memo(function FlowNodeView({
             {data.label}
           </span>
           <span className="mt-0.5 block truncate text-[10px] text-zinc-400">
-            {meta
-              ? `${meta.modelName} · 思考 ${EFFORT_LABEL[meta.effort]}`
-              : "　"}
+            {meta ? `${meta.modelName} · 思考 ${EFFORT_LABEL[meta.effort]}` : "　"}
           </span>
         </div>
 
@@ -404,9 +382,7 @@ export const FlowNodeView = memo(function FlowNodeView({
       <div className="flex items-center gap-2 rounded-t-[10px] border-b border-zinc-200 bg-gradient-to-b from-zinc-50 to-white px-3 py-1.5">
         <span
           className={`rounded px-1.5 py-0.5 text-[9px] font-medium leading-none ${
-            isInput
-              ? "bg-sky-100 text-sky-700"
-              : "bg-emerald-100 text-emerald-700"
+            isInput ? "bg-sky-100 text-sky-700" : "bg-emerald-100 text-emerald-700"
           }`}
         >
           {isInput ? "输入" : "输出"}
@@ -415,11 +391,7 @@ export const FlowNodeView = memo(function FlowNodeView({
       </div>
       <div className="py-1.5">
         {port ? (
-          <PortRow
-            nodeId={id}
-            port={port}
-            side={isInput ? "source" : "target"}
-          />
+          <PortRow nodeId={id} port={port} side={isInput ? "source" : "target"} />
         ) : (
           <p className="px-3 py-1 text-xs text-zinc-400">（未绑定类型）</p>
         )}

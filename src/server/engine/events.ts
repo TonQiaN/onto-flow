@@ -84,8 +84,7 @@ const COMPACTION_VARIANT = "compaction";
 const usageStore = globalThis as typeof globalThis & {
   ontoflowUnpersistedUsage?: Map<string, UnpersistedUsage>;
 };
-const unpersistedUsage =
-  usageStore.ontoflowUnpersistedUsage ?? new Map<string, UnpersistedUsage>();
+const unpersistedUsage = usageStore.ontoflowUnpersistedUsage ?? new Map<string, UnpersistedUsage>();
 usageStore.ontoflowUnpersistedUsage = unpersistedUsage;
 
 /** 返回本会话没有写进 node_usage 的紧凑汇总，供 Action 最终结算补入。 */
@@ -182,9 +181,7 @@ export function recordSessionEvent(ctx: EventSinkContext, event: unknown): void 
       return;
     }
     case "turn/end": {
-      const reason = data.reason as
-        | { kind?: string; error?: { message?: string } }
-        | undefined;
+      const reason = data.reason as { kind?: string; error?: { message?: string } } | undefined;
       if (reason?.kind === "error") {
         insert(ctx, ts, "session.error", {
           error: reason.error?.message ?? "回合以错误结束",
@@ -194,9 +191,7 @@ export function recordSessionEvent(ctx: EventSinkContext, event: unknown): void 
       return;
     }
     case "assistant/chunk": {
-      const chunk = data.chunk as
-        | { type?: string; usage?: Record<string, number> }
-        | undefined;
+      const chunk = data.chunk as { type?: string; usage?: Record<string, number> } | undefined;
       if (chunk?.type !== "usage" || !chunk.usage) return;
       persistUsageDetail(ctx, ts, {
         messageId: `turn${num(data.turn)}-step${num(data.step)}`,
@@ -322,9 +317,7 @@ function insert(
   payload: Record<string, unknown>,
 ): void {
   try {
-    db.insert(runEvents)
-      .values({ runId: ctx.runId, nodeId: ctx.nodeId, ts, type, payload })
-      .run();
+    db.insert(runEvents).values({ runId: ctx.runId, nodeId: ctx.nodeId, ts, type, payload }).run();
   } catch (err) {
     // 日志写不进去不该让运行失败：运行本身的权威记录是 runs/run_nodes。
     console.error("[engine] 事件落库失败", ctx.runId, ctx.nodeId, err);
@@ -338,11 +331,7 @@ function insert(
  * 冲突目标显式声明，只吞同键重放，不吞其他约束错误。费用按这条明细的到达时刻计峰谷。
  * @returns 这条明细的人民币费用（未知模型为 0）
  */
-function persistUsageDetail(
-  ctx: EventSinkContext,
-  ts: Date,
-  detail: UsageDetail,
-): number {
+function persistUsageDetail(ctx: EventSinkContext, ts: Date, detail: UsageDetail): number {
   const { messageId, providerId, modelId, variant, usage } = detail;
   const key = usageKey(ctx, messageId);
   const sample: UnpersistedUsage = {
@@ -416,9 +405,7 @@ function emptyUsageTotals(): UsageTotals {
 
 function isReplaceOp(value: unknown): boolean {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { op?: unknown }).op === "replace"
+    typeof value === "object" && value !== null && (value as { op?: unknown }).op === "replace"
   );
 }
 

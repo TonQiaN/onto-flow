@@ -106,7 +106,11 @@ export function runCompositionEntries(
       name: "@deepseek-ai/dsh-spill-local",
       config: { root: path.join(workspace.homeDir, RUN_SPILL_SUBDIR) },
     },
-    { id: "spill-policy", name: "@deepseek-ai/dsh-spill-policy", config: { maxInlineBytes: 50_000 } },
+    {
+      id: "spill-policy",
+      name: "@deepseek-ai/dsh-spill-policy",
+      config: { maxInlineBytes: 50_000 },
+    },
     // 零配置守卫：timeout-policy 只对声明了 timeoutMs 的工具生效（tool-web、glob/grep；
     // MCP 工具的超时由 MCP SDK 的请求超时自己强制，不经它）；
     // repeat-tool-reminder 只注入提醒、不否决调用。
@@ -170,10 +174,20 @@ export function runCompositionEntries(
         ]
       : []),
     // 后台任务通道（dsh-jobs）不挂（ADR-0014），关掉 run_in_background 免得模型走进注定报错的分支。
-    { id: "tool-bash", name: "@deepseek-ai/dsh-tool-bash", config: { enableRunInBackground: false } },
+    {
+      id: "tool-bash",
+      name: "@deepseek-ai/dsh-tool-bash",
+      config: { enableRunInBackground: false },
+    },
     // allowParallelInProgress 是必填项；取上游 base 的值。
     ...(toggles.todo
-      ? [{ id: "tool-todo", name: "@deepseek-ai/dsh-tool-todo", config: { allowParallelInProgress: true } }]
+      ? [
+          {
+            id: "tool-todo",
+            name: "@deepseek-ai/dsh-tool-todo",
+            config: { allowParallelInProgress: true },
+          },
+        ]
       : []),
     {
       id: "agent-instructions",
@@ -203,8 +217,16 @@ export function runCompositionEntries(
     // SSRF 防护未做）。默认不挂，见 CompositionToggles.webSearch。
     ...(toggles.webSearch
       ? [
-          { id: "web", name: "@deepseek-ai/dsh-web", config: { searchProvider: DEEPSEEK_PROVIDER } },
-          { id: "web-search-deepseek", name: "@deepseek-ai/dsh-web-search-deepseek", config: { apiKeyEnv } },
+          {
+            id: "web",
+            name: "@deepseek-ai/dsh-web",
+            config: { searchProvider: DEEPSEEK_PROVIDER },
+          },
+          {
+            id: "web-search-deepseek",
+            name: "@deepseek-ai/dsh-web-search-deepseek",
+            config: { apiKeyEnv },
+          },
           {
             id: "tool-web",
             name: "@deepseek-ai/dsh-tool-web",

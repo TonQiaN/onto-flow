@@ -141,4 +141,3 @@ export const COMPOSITION_TOGGLE_LABELS: Record<
     hint: "token 计量、工具结果剪枝与到阈值时的摘要三行同进同出；关掉后长会话会撞上下文上限。",
   },
 };
-

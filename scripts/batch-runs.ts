@@ -1,7 +1,4 @@
-import type {
-  CancelRunResult,
-  StartRunResult,
-} from "../src/server/engine/runner";
+import type { CancelRunResult, StartRunResult } from "../src/server/engine/runner";
 
 interface BatchCleanupOptions {
   cancelRun: (runId: string) => Promise<CancelRunResult>;
@@ -52,9 +49,7 @@ export async function abortRunBatch(
         ? `已取消并收束同批已受理的 ${runIds.length} 个运行`
         : `已请求取消，但 ${active.length} 个执行器在 ${timeoutMs}ms 内未退出：${active.join(", ")}`;
   const cancellation =
-    cancellationFailures.length === 0
-      ? ""
-      : `；取消调用异常：${cancellationFailures.join("；")}`;
+    cancellationFailures.length === 0 ? "" : `；取消调用异常：${cancellationFailures.join("；")}`;
   throw new Error(`${reason}；${cleanup}${cancellation}`);
 }
 
@@ -69,13 +64,10 @@ export async function admitWholeBatch(
   const settled = await Promise.allSettled(starts);
   const failures = settled.flatMap((entry, index) => {
     if (entry.status === "rejected") {
-      const reason =
-        entry.reason instanceof Error ? entry.reason.message : String(entry.reason);
+      const reason = entry.reason instanceof Error ? entry.reason.message : String(entry.reason);
       return [`第 ${index + 1} 个运行启动异常：${reason}`];
     }
-    return entry.value.ok
-      ? []
-      : [`第 ${index + 1} 个运行启动失败：${JSON.stringify(entry.value)}`];
+    return entry.value.ok ? [] : [`第 ${index + 1} 个运行启动失败：${JSON.stringify(entry.value)}`];
   });
   const runIds = settled.flatMap((entry) =>
     entry.status === "fulfilled" && entry.value.ok ? [entry.value.runId] : [],

@@ -3,11 +3,7 @@ import { inArray } from "drizzle-orm";
 import { db, tools } from "@/db";
 import { handle } from "@/lib/http";
 import "@/server/writers";
-import {
-  listEnvelope,
-  parseListQuery,
-  selectLibraryPage,
-} from "@/server/writers/list";
+import { listEnvelope, parseListQuery, selectLibraryPage } from "@/server/writers/list";
 import { createTool } from "@/server/writers/tool";
 import { respond } from "@/server/writers/types";
 
@@ -30,9 +26,7 @@ export async function GET(request: Request) {
       query,
     });
     const rows =
-      page.ids.length > 0
-        ? db.select().from(tools).where(inArray(tools.id, page.ids)).all()
-        : [];
+      page.ids.length > 0 ? db.select().from(tools).where(inArray(tools.id, page.ids)).all() : [];
     return NextResponse.json(listEnvelope(page, rows));
   });
 }

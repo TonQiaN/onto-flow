@@ -12,7 +12,9 @@
     "db:push": "drizzle-kit push",
     "db:seed": "tsx scripts/seed.ts",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.1",
@@ -104,6 +106,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "drizzle-kit": "^0.31.10",
+    "oxfmt": "0.66.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",

@@ -76,8 +76,7 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
   const name = typeof body.name === "string" ? body.name.trim() : "";
   if (!name) return writeFail(400, "名称不能为空");
 
-  const description =
-    typeof body.description === "string" ? body.description : "";
+  const description = typeof body.description === "string" ? body.description : "";
   const prompt = typeof body.prompt === "string" ? body.prompt : "";
   const rule = typeof body.rule === "string" ? body.rule : "";
 
@@ -86,8 +85,7 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
   if (!db.select().from(models).where(eq(models.id, modelId)).get())
     return writeFail(400, "指定的模型不存在");
 
-  const effortRaw =
-    body.reasoningEffort === undefined ? "high" : body.reasoningEffort;
+  const effortRaw = body.reasoningEffort === undefined ? "high" : body.reasoningEffort;
   if (typeof effortRaw !== "string" || !EFFORTS.includes(effortRaw))
     return writeFail(400, "思考强度必须是 off/low/high/max 之一");
   const reasoningEffort = effortRaw as Effort;
@@ -96,8 +94,7 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
   const ports: PortPayload[] = [];
   const seen = new Set<string>();
   for (const [index, item] of (body.ports as unknown[]).entries()) {
-    if (typeof item !== "object" || item === null)
-      return writeFail(400, "端口格式不正确");
+    if (typeof item !== "object" || item === null) return writeFail(400, "端口格式不正确");
     const port = item as Record<string, unknown>;
     const direction = port.direction;
     if (direction !== "input" && direction !== "output")
@@ -107,8 +104,7 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
     const key = `${direction} ${portName}`;
     if (seen.has(key)) return writeFail(400, `同方向端口名重复：「${portName}」`);
     seen.add(key);
-    const objectTypeId =
-      typeof port.objectTypeId === "string" ? port.objectTypeId : "";
+    const objectTypeId = typeof port.objectTypeId === "string" ? port.objectTypeId : "";
     if (!objectTypeId) return writeFail(400, `端口「${portName}」缺少对象类型`);
     const position = typeof port.position === "number" ? port.position : index;
     // 产物路径与出口只对输出端口有意义；输入端口传了也一律丢弃，
@@ -150,8 +146,7 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
         .all()
         .map((r) => r.id),
     );
-    if (typeIds.some((t) => !found.has(t)))
-      return writeFail(400, "端口引用的对象类型不存在");
+    if (typeIds.some((t) => !found.has(t))) return writeFail(400, "端口引用的对象类型不存在");
   }
 
   // 「⊆ 所在工作流技能集」不在这里校验：Action 今天仍是共享库实体，同一个 Action
@@ -167,8 +162,7 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
         .all()
         .map((r) => r.id),
     );
-    if (preloadSkillIds.some((s) => !found.has(s)))
-      return writeFail(400, "预载的技能不存在");
+    if (preloadSkillIds.some((s) => !found.has(s))) return writeFail(400, "预载的技能不存在");
   }
 
   const toolIds = parseIdArray(body.toolIds);
@@ -182,8 +176,7 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
         .all()
         .map((r) => r.id),
     );
-    if (toolIds.some((t) => !found.has(t)))
-      return writeFail(400, "可见的 Tool 不存在");
+    if (toolIds.some((t) => !found.has(t))) return writeFail(400, "可见的 Tool 不存在");
   }
 
   const rawReentries = body.maxReentries;
@@ -239,11 +232,7 @@ function revisionPayload(p: ActionPayload): Record<string, unknown> {
 /** 组装 ActionDto（join 端口的 objectTypeName/kind，附 preloadSkillIds/toolIds），按传入 id 顺序 */
 export function loadActionDtos(ids: string[]): ActionDto[] {
   if (ids.length === 0) return [];
-  const actionRows = db
-    .select()
-    .from(actions)
-    .where(inArray(actions.id, ids))
-    .all();
+  const actionRows = db.select().from(actions).where(inArray(actions.id, ids)).all();
   if (actionRows.length === 0) return [];
 
   const presentIds = actionRows.map((a) => a.id);
@@ -293,12 +282,8 @@ export function loadActionDtos(ids: string[]): ActionDto[] {
         ports: portRows
           .filter((p) => p.actionId === a.id)
           .map(({ actionId: _actionId, ...port }) => port),
-        preloadSkillIds: preloadRows
-          .filter((s) => s.actionId === a.id)
-          .map((s) => s.skillId),
-        toolIds: toolRows
-          .filter((t) => t.actionId === a.id)
-          .map((t) => t.toolId),
+        preloadSkillIds: preloadRows.filter((s) => s.actionId === a.id).map((s) => s.skillId),
+        toolIds: toolRows.filter((t) => t.actionId === a.id).map((t) => t.toolId),
       } satisfies ActionDto,
     ]),
   );
@@ -322,9 +307,7 @@ function insertRelations(tx: Tx, actionId: string, p: ActionPayload) {
       .run();
   if (p.preloadSkillIds.length > 0)
     tx.insert(actionPreloads)
-      .values(
-        p.preloadSkillIds.map((skillId, position) => ({ actionId, skillId, position })),
-      )
+      .values(p.preloadSkillIds.map((skillId, position) => ({ actionId, skillId, position })))
       .run();
   if (p.toolIds.length > 0)
     tx.insert(actionTools)

@@ -72,9 +72,9 @@ describe("简历匹配工作流行为摘要", () => {
         toolPublicNames: ["a_tool", "b_tool"],
       }),
     ).toBe(resumeMatchActionBehaviorSha256(behavior));
-    expect(
-      resumeMatchActionBehaviorSha256({ ...behavior, preloadSkillNames: [] }),
-    ).not.toBe(resumeMatchActionBehaviorSha256(behavior));
+    expect(resumeMatchActionBehaviorSha256({ ...behavior, preloadSkillNames: [] })).not.toBe(
+      resumeMatchActionBehaviorSha256(behavior),
+    );
   });
 });
 
@@ -178,9 +178,7 @@ describe("简历匹配 JSON 结果契约", () => {
     expect(validateResumeMatchResult(result)).toEqual([]);
 
     result.veto.dimensions = [];
-    expect(validateResumeMatchResult(result)).toContain(
-      "$.veto.dimensions 应为 [mustHave]",
-    );
+    expect(validateResumeMatchResult(result)).toContain("$.veto.dimensions 应为 [mustHave]");
   });
 
   it("只有未核验的硬性条件可以缺少原文证据", () => {
@@ -217,9 +215,7 @@ describe("简历匹配 JSON 结果契约", () => {
     expect(validateResumeMatchResult(result)).toEqual([]);
 
     result.adjustments = [];
-    expect(validateResumeMatchResult(result)).toContain(
-      "$.adjustments 缺少已改分维度 domainFit",
-    );
+    expect(validateResumeMatchResult(result)).toContain("$.adjustments 缺少已改分维度 domainFit");
   });
 
   it("嵌入 Tool 的函数源码只需携带转译器的 __name 辅助函数", () => {

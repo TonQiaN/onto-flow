@@ -67,7 +67,9 @@ describe("Action 预载技能与可见 Tool", () => {
     expect(created.data.toolIds).toEqual(["tool-1"]);
     expect(
       sqlite
-        .prepare("select skill_id as skillId, position from action_preloads where action_id = ? order by position")
+        .prepare(
+          "select skill_id as skillId, position from action_preloads where action_id = ? order by position",
+        )
         .all(created.data.id),
     ).toEqual([
       { skillId: "skill-b", position: 0 },
@@ -83,7 +85,10 @@ describe("Action 预载技能与可见 Tool", () => {
     });
     expect(JSON.parse(revision.payload)).not.toHaveProperty("skillIds");
 
-    const updated = writeAction(created.data.id, { ...payload(0, "fail"), preloadSkillIds: ["skill-a"] });
+    const updated = writeAction(created.data.id, {
+      ...payload(0, "fail"),
+      preloadSkillIds: ["skill-a"],
+    });
     expect(updated.ok).toBe(true);
     expect(loadActionDto(created.data.id)?.preloadSkillIds).toEqual(["skill-a"]);
     expect(loadActionDto(created.data.id)?.toolIds).toEqual([]);
@@ -91,7 +96,11 @@ describe("Action 预载技能与可见 Tool", () => {
 
   it("预载不存在的技能时 400；Action 保存不检查它是否在某个工作流的技能集里", () => {
     const missing = createAction({ ...payload(0, "fail"), preloadSkillIds: ["nope"] });
-    expect(missing).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("预载") });
+    expect(missing).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining("预载"),
+    });
 
     const notInAnyWorkflow = createAction({ ...payload(0, "fail"), preloadSkillIds: ["skill-a"] });
     expect(notInAnyWorkflow.ok).toBe(true);
