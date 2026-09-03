@@ -1599,6 +1599,78 @@ describe("冻结图与轮次行", () => {
     expect(row.startedAt).toBeLessThanOrEqual(row.finishedAt!);
   });
 
+  it("Action 已把本轮写成 success、取消随后才到时，轮次行仍被改回 cancelled", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+
+    let release: (() => void) | undefined;
+    let markSettled: (() => void) | undefined;
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 反向次序：action.ts 已经把这一轮收口成 success（此刻取消还没到，条件更新写得进去），
+    // 取消随后才落下——`closeRunningRounds` 找不到 running 的行，只有 runner 的取消分支能纠正。
+    controls.runActionNode.mockImplementation(
+      async (ctx: { runId: string; node: { id: string }; round: number }) => {
+        const key = { runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round };
+        beginRound({ ...key, sessionId: ctx.node.id, startedAt: new Date() });
+        settleRoundIfRunning({
+          ...key,
+          status: "success",
+          finishedAt: new Date(),
+          exitName: null,
+          outputs: { result: { kind: "text", text: "已收口的成功" } },
+        });
+        markSettled?.();
+        await gate;
+        return { outputs: { result: { kind: "text", text: "已收口的成功" } }, selectedExit: null };
+      },
+    );
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await settled;
+    expect(roundRows(startedRun.runId).find((r) => r.nodeId === "action-node")?.status).toBe(
+      "success",
+    );
+    await expect(cancelRun(startedRun.runId)).resolves.toEqual({ ok: true });
+    // 取消只收口仍 running 的行，这一行已经是 success，它动不了。
+    expect(roundRows(startedRun.runId).find((r) => r.nodeId === "action-node")?.status).toBe(
+      "success",
+    );
+    release?.();
+
+    // 等执行器真正收束：cancelRun 早就把 runs 写成 cancelled，只看它会在任务恢复前就通过。
+    await vi.waitFor(() => {
+      expect(isRunExecutionActive(startedRun.runId)).toBe(false);
+    });
+    expect(
+      (
+        sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+          status: string;
+        }
+      ).status,
+    ).toBe("cancelled");
+
+    // 节点与轮次的终态必须一致，否则回放会在一段成功上叠一个取消的节点。
+    const node = sqlite
+      .prepare("select status from run_nodes where run_id = ? and node_id = 'action-node'")
+      .get(startedRun.runId) as { status: string };
+    const row = roundRows(startedRun.runId).find((r) => r.nodeId === "action-node")!;
+    expect(node.status).toBe("cancelled");
+    expect(row.status).toBe("cancelled");
+    expect(row.finishedAt).not.toBeNull();
+    // 收口只改终态列：这一轮真跑出来的产物留着，抽屉仍看得到。
+    expect(row.outputs).toContain("已收口的成功");
+  });
+
   it("取消赶在 Action 收束之前落下时，Action 侧的成功不覆盖 cancelled", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());

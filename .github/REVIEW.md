@@ -59,7 +59,7 @@
 - [ ] 运行在准入时冻结定义（`resolveWorkflow` 一次事件循环内取完：图、Action、模型、端口、工作流指令与设置、技能集、Tool 集、每个 Action 的预载与可见 Tool），后续节点没有再回查共享库；`runs.settingsSnapshot` 与 runs 行同一事务写入，组合的开关 / MCP / Tool 插件都从冻结对象合成
 - [ ] 预载没有绕过上游手势：`buildPrompt` 在正文前每个预载技能一行 `/<slug>`，没有把 SKILL.md 正文拼进 prompt，也没有在会话创建窗口里注册技能（A Skill is a directory…）
 - [ ] 运行绝不停留在 `running`：新增的终态路径与 `executeRun` / `cancelRun` / `failWholeRun` / `reconcileOrphanRuns` 一致；`cancelled` 与 `failed` 仍是两个终态，前者 `run.error` 为 null
-- [ ] 轮次行也绝不停留在 `running`（A run never stays `running`, and neither does a round）：上面四条路径加 `runner.ts` 对 `runActionNode` 抛出的 catch，都经 `engine/rounds.ts` 把仍 running 的 `run_node_rounds` 行收口成对应终态，并给被批量跳过的 pending 节点各补一行零时长 `skipped`；`runActionNode` 的骨架行 insert 仍是函数第一条语句，排在任何会抛的准备步骤之前，它的成功收口仍走带 `status = 'running'` 条件的 `settleRoundIfRunning`（取消赶在收束前落下时先到的终态赢）
+- [ ] 轮次行也绝不停留在 `running`（A run never stays `running`, and neither does a round）：上面四条路径加 `runner.ts` 对 `runActionNode` 抛出的 catch，都经 `engine/rounds.ts` 把仍 running 的 `run_node_rounds` 行收口成对应终态，并给被批量跳过的 pending 节点各补一行零时长 `skipped`；`runActionNode` 的骨架行 insert 仍是函数第一条语句，排在任何会抛的准备步骤之前，它的成功收口仍走带 `status = 'running'` 条件的 `settleRoundIfRunning`（取消赶在收束前落下时先到的终态赢），而 `runner.ts` 取消分支那次改写仍是**无条件**的 `settleRound`（反向次序：成功先落、取消后到，`closeRunningRounds` 找不到 running 的行，只有这一处能把轮次行拉回 cancelled）——两处条件性相反是有意的，节点与轮次的终态必须一致
 - [ ] 重入的轮次号按**节点**取自己的下一个未用值（`NodeState.usedRound + 1`），没有回到「触发重入那个节点的轮次 + 1」——嵌套 / 重叠回边会据此撞 `(run_id, node_id, round)` 唯一键；输入 / 输出 / 被跳过的节点同样各占一行轮次（ADR-0018）
 - [ ] 子进程收束失败时运行被隔离（留在 `activeRuns`、保留进程句柄），预览 / 清理 / 删除 / 新运行容量 fail-closed
 - [ ] 看一次运行只有 `/runs/<id>`（ADR-0018）：它只读受理时冻结的 `runs.graph`，不回查 `workflow_nodes` / `workflow_edges`；编辑器没有运行条、并行切换器与 `?runId=` 深链，发起后跳运行页；导航「运行中」面板每一路深链 `/runs/<id>`

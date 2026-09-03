@@ -292,7 +292,8 @@ export async function runActionNode(ctx: ActionNodeContext): Promise<ActionNodeR
   // 这一轮到此为止：收口轮次行，记下本轮真正走出的出口与产物。失败路径的收口在
   // runner.ts 的 catch 里（超时、缺结构化输出、产物不在盘上、会话关不掉都从这里抛出去）。
   // 只在这一行仍是 running 时写：取消可能在上面那两次 await 之间到达并先写下 cancelled，
-  // 无条件写成功会把取消覆盖掉。
+  // 无条件写成功会把取消覆盖掉。反向次序（成功先落、取消后到）由 runner.ts 取消分支里那次
+  // 无条件改写兜底——两处的条件性正好相反，改一处之前先读另一处。
   settleRoundIfRunning({
     runId: ctx.runId,
     nodeId: ctx.node.id,
