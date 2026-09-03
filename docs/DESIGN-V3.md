@@ -196,9 +196,11 @@
   按同一组筛选（不分页）聚合：`runs` 是筛选集里 **distinct** 的 `runs.id` 数（零用量的运行——
   免费的输入→输出工作流、首次模型调用前就失败的运行——也算），`tokens` / `cost` 与 `byModel` 来自
   按 `run_id` 预聚合的 `node_usage` 子查询 **left join** 到筛选集，不能用内连接把无用量的运行挤掉。
-- 现有数组消费者改读 `items`：`src/components/nav.tsx`（`?status=running&pageSize=100`）、
-  `src/app/workflows/page.tsx`（同上）、`src/app/monitor/page.tsx`（最近失败；第 4 批整页删除，
-  本批只改读法保持绿）。
+- 现有数组消费者**全部**改读 `items`，每个 stacked PR 都必须自己能跑：`src/components/nav.tsx`
+  （`?status=running&pageSize=100`）、`src/app/workflows/page.tsx`（同上）、`src/app/monitor/page.tsx`
+  （最近失败）、`src/app/monitor/trace/page.tsx`（运行下拉）、`src/app/monitor/logs/page.tsx`（运行
+  筛选下拉）、`src/app/workflows/[id]/editor.tsx`（`runsInFlight` 轮询）——后四者在第 3、4 批才删除，
+  本批只改读法保持绿。合并前 `rg -n '"/api/runs' src` 逐个核对没有漏网的数组读法。
 
 **页面 `/runs`**（`src/app/runs/page.tsx` 重写）
 
@@ -255,16 +257,20 @@
    `runner.test.ts` 为四条路径各补一条断言。**重入耗尽**（`onExhausted: "fail"`）不是一轮：`reenter()`
    把 `run_nodes` 写成 failed 时必须同时把 `run_nodes.finishedAt` 写成耗尽时刻并留下 error，回放据此
    在最后一轮成功之后的那个时刻把节点翻成失败（见下面的推导规则）。
-3. `run_events.session_id: text`（可空：引擎自己发的 `usage` 等运行级事件没有会话）：`events.ts`
-   落库时从 `ctx.sessionId` 写入，事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
-   `<节点id>#<轮次+1>`，见 `engine/action.ts`）。没有会话 id 的事件不参与节点活动推导。
+3. `run_events.session_id: text`：`events.ts` 的通用落库从 `ctx.sessionId` 写入；`action.ts` 里
+   `refreshUnsettledUsageRollup()` 自己插的 `usage` 事件（`usageEventPayload()` 已带该会话 id）也
+   必须写这一列——两处插入点都改，别只改一处。事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
+   `<节点id>#<轮次+1>`，见 `engine/action.ts`）。列保持可空只是为了早于本批的历史行；新写入的事件
+   没有一条允许为 null，`runner.test.ts` 断言之。
 
 **数据路径**：`GET /api/runs/[id]` 返回 `{ run, nodes, rounds }`；SSE `/api/runs/[id]/events` 的
 `snapshot` 帧同样带 `rounds`（轮次行有变化就重发 snapshot，与 `nodes` 同一指纹），`log` 帧就是带
 `sessionId` 的 `run_events` 行。运行页只从这两处取数，没有第三个接口。
 
 事件清理（`cleanup.ts` 的 events 目标）不删 `run_node_rounds`——它每行几十字节，是回放退化后仍要
-保留的骨架。
+保留的骨架。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
+`detailStat` 影响面统计与预览文案要加上 `run_node_rounds` 的行数（今天只报 `run_nodes` /
+`run_events` / `node_usage` / `run_results`），`cleanup.test.ts` 补断言：dryRun 报出的行数与真删一致。
 
 ```ts
 interface RunGraph {

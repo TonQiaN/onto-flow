@@ -6,6 +6,7 @@ import {
   test,
   type APIRequestContext,
   type Page,
+  type Route,
 } from "@playwright/test";
 import { cleanupByPrefix, DATA_DIR, openDb } from "./helpers";
 
@@ -405,30 +406,48 @@ async function expectMetricHasValue(page: Page, label: string): Promise<string> 
 /**
  * 执行 action 并截获页面自己发出的那次 GET 响应，把它的 JSON 交给断言——
  * DOM 与「页面实际拿到的载荷」比对，而不是测试另拉一份可能已经变化的数据。
+ *
+ * 用请求拦截而不是 waitForResponse + json()：进行中的自动刷新紧接着再发一次同样的请求时，
+ * 浏览器会丢掉上一份响应体，Playwright 报 `Network.getResponseBody` 协议错误。这里由测试
+ * 自己取回响应、留下正文、再原样交给页面，页面渲染的就是断言拿到的那一份，没有第二次请求。
  */
 async function captureJson<T>(
   page: Page,
   matches: (url: URL) => boolean,
   action: () => Promise<unknown>,
 ): Promise<T> {
-  const responded = page.waitForResponse(
-    (res) => res.request().method() === "GET" && matches(new URL(res.url())),
-    { timeout: 15_000 },
-  );
-  await action();
-  const res = await responded;
-  expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
+  let captured = null as { value: T } | null;
+  let settle!: () => void;
+  const first = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  const handler = async (route: Route) => {
+    if (route.request().method() !== "GET" || captured) {
+      await route.continue();
+      return;
+    }
+    const res = await route.fetch();
+    const body = await res.text();
+    expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
+    captured = { value: JSON.parse(body) as T };
+    await route.fulfill({ response: res, body, headers: res.headers() });
+    settle();
+  };
+  // route / unroute 按同一个匹配器引用配对，否则拦截会留到页面生命周期结束
+  const matcher = (url: URL) => matches(url);
+  await page.route(matcher, handler);
   try {
-    return (await res.json()) as T;
-  } catch (error) {
-    // 页面紧接着又发了一次同样的请求（进行中的自动刷新）或已经离开时，浏览器会丢掉上一份响应体，
-    // Playwright 报 `Network.getResponseBody: No resource with given identifier found`。此时载荷本身
-    // 没有变化，直接再取一次同一个 URL；其他错误照常抛出。
-    if (!(error instanceof Error) || !error.message.includes("getResponseBody")) throw error;
-    const again = await page.request.get(res.url());
-    expect(again.ok(), `接口 ${res.url()} 重取应成功（HTTP ${again.status()}）`).toBe(true);
-    return (await again.json()) as T;
+    await action();
+    await Promise.race([
+      first,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("15s 内没有截获到匹配的 GET 请求")), 15_000),
+      ),
+    ]);
+  } finally {
+    await page.unroute(matcher, handler);
   }
+  return captured!.value;
 }
 
 const isLogs = (url: URL) => url.pathname === "/api/monitor/logs";
