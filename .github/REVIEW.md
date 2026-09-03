@@ -43,7 +43,7 @@
 
 ## 4. 路由与客户端边界（Conventions）
 
-- [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/runs/[id]/events`（原生 SSE）与 `api/models`（早于规则的单语句 GET）是仅有的两个例外，没有被复制
+- [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/runs/[id]/events`（原生 SSE）是仅有的例外，没有被复制
 - [ ] 每个 route `export const dynamic = "force-dynamic"`
 - [ ] 客户端代码（含 `"use client"` 文件与 `src/app`（`api/` 除外）、`src/components` 下没有指令的共享模块）没有从 `@/server` 或 `@/db` 导入运行时值；`import type` 只从 `@/server/monitor/types`。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
 - [ ] 能到达修订还原的 route 带 `import "@/server/writers";`，否则 restore 静默答 501
