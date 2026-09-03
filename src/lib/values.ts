@@ -16,14 +16,3 @@ export type PortValue =
         mime: string;
       };
     };
-
-export function portValueToDisplay(v: PortValue): string {
-  switch (v.kind) {
-    case "text":
-      return v.text;
-    case "json":
-      return JSON.stringify(v.json, null, 2);
-    case "file":
-      return `[文件] ${v.file.name}`;
-  }
-}

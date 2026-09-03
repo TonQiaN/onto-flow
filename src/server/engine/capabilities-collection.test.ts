@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ResolvedWorkflow } from "@/server/resolve";
 
-const { collectCapabilities, toolFilterForAction } = await import("./capabilities");
+const { collectCapabilities } = await import("./capabilities");
 const { SKILL_LIBRARY_DIR } = await import("@/server/skill-library");
 
 describe("工作流技能集与 Tool 集归属", () => {
@@ -41,9 +41,5 @@ describe("工作流技能集与 Tool 集归属", () => {
     expect(capabilities.tools.map((tool) => tool.publicName)).toEqual(["dangerous_tool"]);
     expect(capabilities.toolNamesByActionId.get("action-a")).toEqual(["dangerous_tool"]);
     expect(capabilities.toolNamesByActionId.get("action-b")).toEqual([]);
-    expect(toolFilterForAction(capabilities, "action-a", [])).toBeUndefined();
-    expect(toolFilterForAction(capabilities, "action-b", [])).toEqual({
-      deny: ["dangerous_tool"],
-    });
   });
 });

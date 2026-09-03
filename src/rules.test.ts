@@ -57,14 +57,13 @@ describe("AGENTS.md · Repository layout", () => {
 
 describe("AGENTS.md · Conventions · handle()", () => {
   /**
-   * 「Every API route body runs inside handle() from @/lib/http. Two do not:
-   * api/runs/[id]/events returns a raw SSE Response, and api/models is a one-statement GET
-   * that predates the rule — do not copy them.」
+   * 「Every API route body runs inside handle() from @/lib/http. One does not:
+   * api/runs/[id]/events returns a raw SSE Response — do not copy it.」
    */
-  const EXEMPT = ["src/app/api/runs/[id]/events/route.ts", "src/app/api/models/route.ts"];
+  const EXEMPT = ["src/app/api/runs/[id]/events/route.ts"];
   const METHOD_RE = /^export (?:async )?function (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/gm;
 
-  it("两个例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
+  it("唯一例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));
     const found = violations(files, (content) => {
       const methods = content.match(METHOD_RE)?.length ?? 0;
@@ -80,7 +79,7 @@ describe("AGENTS.md · Conventions · handle()", () => {
     expect(found).toEqual([]);
   });
 
-  it("两个例外 route 仍然存在、仍然不用 handle()；修好了就把它从白名单删掉", () => {
+  it("白名单里的例外 route 仍然存在、仍然不用 handle()；修好了就把它从白名单删掉", () => {
     for (const relPath of EXEMPT) {
       const file = path.join(ROOT, relPath);
       expect(fs.existsSync(file), `${relPath} 不存在，白名单已过期`).toBe(true);

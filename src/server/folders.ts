@@ -6,7 +6,7 @@
  *   foldersForEntities(kind, ids): Map<entityId, FolderRef>   ← 四个库列表 API 批量取归属
  *   subtreeIds(folderId)：自身+全部子孙 id                     ← 列表过滤「含子孙」语义
  *   listFolders / listEntityLeaves / createFolder / updateFolder / deleteFolder
- *   assignEntityFolder / normalizeFolderName / isFolderEntityKind
+ *   assignEntityFolder / isFolderEntityKind
  */
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { FOLDER_ENTITY_KINDS, db, entityFolders, folders, type FolderEntityKind } from "@/db";
@@ -74,7 +74,7 @@ export function listEntityLeaves(
 }
 
 /** 文件夹名规范化：折叠连续空白、去首尾空白；拒绝空名与含 `/`（层级由 parentId 表达） */
-export function normalizeFolderName(raw: unknown): Result<string> {
+function normalizeFolderName(raw: unknown): Result<string> {
   if (typeof raw !== "string") return fail(400, "文件夹名必须是字符串");
   const collapsed = raw.replace(/\s+/g, " ").trim();
   if (collapsed === "") return fail(400, "文件夹名不能为空");

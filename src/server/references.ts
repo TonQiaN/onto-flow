@@ -12,7 +12,7 @@
  * 工作流已经引用的集合里做选择，工作流保存时校验子集关系，删除保护不看它们。
  *
  * 对外接口（其它模块可直接 import，签名保持稳定）：
- *   isEntityKind / listEntities / entityExists / entityHref
+ *   isEntityKind / listEntities / entityExists
  *   referencesOf / refCounts / orphans / impactOfActionPorts
  */
 import { asc, eq, inArray, isNotNull, or } from "drizzle-orm";
@@ -71,20 +71,8 @@ const ENTITY_TABLES = {
   object_type: objectTypes,
 } as const;
 
-const ENTITY_LABELS: Record<EntityKind, string> = {
-  workflow: "工作流",
-  action: "Action",
-  skill: "技能",
-  tool: "工具",
-  object_type: "对象类型",
-};
-
 export function isEntityKind(value: unknown): value is EntityKind {
   return typeof value === "string" && (ENTITY_KINDS as readonly string[]).includes(value);
-}
-
-export function entityLabel(kind: EntityKind): string {
-  return ENTITY_LABELS[kind];
 }
 
 /** 该 kind 的全部实体（只取 id + name），按名字升序 */
@@ -98,14 +86,8 @@ export function entityExists(kind: EntityKind, id: string): boolean {
   return db.select({ id: table.id }).from(table).where(eq(table.id, id)).get() !== undefined;
 }
 
-export function entityName(kind: EntityKind, id: string): string | null {
-  const table = ENTITY_TABLES[kind];
-  const row = db.select({ name: table.name }).from(table).where(eq(table.id, id)).get();
-  return row?.name ?? null;
-}
-
 /** 技能集与 Tool 集在工作流设置页里编辑，引用面板直接跳到那里。 */
-export function workflowSettingsHref(workflowId: string): string {
+function workflowSettingsHref(workflowId: string): string {
   return `/workflows/${workflowId}/settings`;
 }
 
@@ -113,7 +95,7 @@ export function workflowSettingsHref(workflowId: string): string {
  * 实体在前端的可跳转路径。
  * workflow 有独立详情页；其余四个库是列表页 + highlight 查询参数。
  */
-export function entityHref(kind: EntityKind, id: string): string {
+function entityHref(kind: EntityKind, id: string): string {
   switch (kind) {
     case "workflow":
       return `/workflows/${id}`;
