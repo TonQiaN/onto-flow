@@ -1,18 +1,13 @@
 /**
  * 监控页的聚合查询层。
  *
- * 原则：**能在 sqlite 里算完就不要把行拉进内存**——总览/成本/日志全部走聚合 SQL 与
+ * 原则：**能在 sqlite 里算完就不要把行拉进内存**——总览与日志全部走聚合 SQL 与
  * 游标分页；只有 Trace（单次运行）才把该运行的事件读全，因为要推导 span 树。
  * 所有时间字段出口统一为 epoch 毫秒（见 ./types.ts 的约定）。
  */
 import { sql, type SQL } from "drizzle-orm";
 import { db } from "@/db";
 import type {
-  CostByAction,
-  CostByModel,
-  CostByWorkflow,
-  CostDailyPoint,
-  CostPayload,
   LiveSession,
   LogItem,
   LogsPayload,
@@ -28,7 +23,6 @@ import type {
 } from "./types";
 
 const HOUR_MS = 3_600_000;
-const DAY_MS = 86_400_000;
 
 /** output 已含 reasoning；总量只加 input/output/cacheRead/cacheWrite。 */
 const NODE_TOKENS = sql`(
@@ -64,13 +58,6 @@ function localISO(ms: number): string {
     `T${pad(d.getHours())}:${pad(d.getMinutes())}:00` +
     `${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`
   );
-}
-
-/** 本地日期 YYYY-MM-DD */
-function localDay(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 const num = (value: unknown): number =>
@@ -910,115 +897,5 @@ function toLogItem(row: LogRow): LogItem {
     payload: parsePayload(row.payload),
     nodeLabel: row.nodeLabel,
     workflowName: row.workflowName,
-  };
-}
-
-// ============================================================ 成本分析
-
-const COST_DAYS_DEFAULT = 7;
-const COST_DAYS_MAX = 90;
-
-/**
- * 成本分析**只读 node_usage**（逐条 assistant 消息的真实用量）。
- *
- * 四张表（byModel / byAction / byWorkflow / daily）必须共用同一个窗口谓词
- * `node_usage.ts >= since`：曾经 byAction/byWorkflow 改用 `runs.started_at >= since`
- * 过滤 run_nodes 汇总列，同一页的合计互相对不上——跨零点的长运行会被整段算进运行开始
- * 那一天，而 byModel/daily 按消息时间拆到两天。所以 byAction/byWorkflow 也从 node_usage
- * 出发，join run_nodes / runs 只为取归集维度（actionName / workflowName），不取用量列。
- *
- * byAction 的 actionName 从 run_nodes.snapshot 里 json_extract——Action 改名或删除后，
- * 历史成本仍按当时的名字归集。
- */
-export function getCost(daysInput?: number): CostPayload {
-  const days = Math.min(Math.max(1, Math.trunc(daysInput ?? COST_DAYS_DEFAULT)), COST_DAYS_MAX);
-  const since = startOfDay(Date.now()) - (days - 1) * DAY_MS;
-
-  const byModel = db.all<CostByModel>(sql`
-    select
-      node_usage.model_id as modelId,
-      node_usage.provider_id as providerId,
-      -- 压缩摘要那次调用也是一行 node_usage（variant = compaction），钱要算、消息数不算
-      sum(case when node_usage.variant = 'compaction' then 0 else 1 end) as messages,
-      coalesce(sum(${USAGE_TOKENS}), 0) as tokens,
-      coalesce(sum(node_usage.cost), 0) as cost
-    from node_usage where node_usage.ts >= ${since}
-    group by node_usage.provider_id, node_usage.model_id
-    order by cost desc, tokens desc
-  `);
-
-  // nodes = 窗口内产生过用量的节点执行次数（run_id + node_id 去重），不是 node_usage 行数
-  const byAction = db.all<CostByAction>(sql`
-    select
-      json_extract(run_nodes.snapshot, '$.actionName') as actionName,
-      count(distinct node_usage.run_id || ' ' || node_usage.node_id) as nodes,
-      coalesce(sum(${USAGE_TOKENS}), 0) as tokens,
-      coalesce(sum(node_usage.cost), 0) as cost
-    from node_usage
-    join run_nodes
-      on run_nodes.run_id = node_usage.run_id and run_nodes.node_id = node_usage.node_id
-    where node_usage.ts >= ${since}
-      and json_extract(run_nodes.snapshot, '$.actionName') is not null
-    group by actionName
-    order by cost desc, tokens desc
-  `);
-
-  // runs = 窗口内产生过用量的运行数；空跑（一条 assistant 消息都没有）本就 0 成本，不列
-  const byWorkflow = db.all<CostByWorkflow>(sql`
-    select
-      runs.workflow_name as workflowName,
-      count(distinct node_usage.run_id) as runs,
-      coalesce(sum(${USAGE_TOKENS}), 0) as tokens,
-      coalesce(sum(node_usage.cost), 0) as cost
-    from node_usage
-    join runs on runs.id = node_usage.run_id
-    where node_usage.ts >= ${since}
-    group by runs.workflow_name
-    order by cost desc, runs desc
-  `);
-
-  const dailyRows = db.all<BucketRow>(sql`
-    select
-      cast((node_usage.ts - ${since}) / ${DAY_MS} as integer) as bucket,
-      coalesce(sum(${USAGE_TOKENS}), 0) as a,
-      coalesce(sum(node_usage.cost), 0) as b
-    from node_usage where node_usage.ts >= ${since}
-    group by bucket
-  `);
-  const dailyByBucket = new Map(dailyRows.map((r) => [num(r.bucket), r]));
-  const daily: CostDailyPoint[] = [];
-  for (let i = 0; i < days; i++) {
-    const dayMs = since + i * DAY_MS;
-    const row = dailyByBucket.get(i);
-    daily.push({
-      dayISO: localDay(dayMs),
-      tokens: num(row?.a),
-      cost: num(row?.b),
-    });
-  }
-
-  return {
-    days,
-    since,
-    byModel: byModel.map((r) => ({
-      modelId: r.modelId ?? "",
-      providerId: r.providerId ?? "",
-      messages: num(r.messages),
-      tokens: num(r.tokens),
-      cost: num(r.cost),
-    })),
-    byAction: byAction.map((r) => ({
-      actionName: r.actionName ?? "",
-      nodes: num(r.nodes),
-      tokens: num(r.tokens),
-      cost: num(r.cost),
-    })),
-    byWorkflow: byWorkflow.map((r) => ({
-      workflowName: r.workflowName || "（未命名工作流）",
-      runs: num(r.runs),
-      tokens: num(r.tokens),
-      cost: num(r.cost),
-    })),
-    daily,
   };
 }

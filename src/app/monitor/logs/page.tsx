@@ -209,8 +209,9 @@ function LogsConsole() {
       try {
         const res = await fetch("/api/runs", { cache: "no-store" });
         if (!res.ok) return;
-        const data = (await res.json()) as RunListItem[];
-        if (!cancelled) setRunOptions(data);
+        // 下拉只列最近一页（信封默认 30 条）；更早的运行经运行列表页深链带 runId 过来
+        const data = (await res.json()) as { items?: RunListItem[] };
+        if (!cancelled) setRunOptions(Array.isArray(data.items) ? data.items : []);
       } catch {
         // 下拉是辅助功能，失败静默
       }

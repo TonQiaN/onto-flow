@@ -13,7 +13,7 @@
 | 0a 格式化基线 | `cleanup/0a-format-baseline` | #19 | 待合并（stacked 于 #18） |
 | 0b lint / knip / CI / 记录树 / skill / proposed 记录 | `cleanup/0b-toolchain-and-notes` | #20 | 待合并（stacked 于 #19） |
 | 1 删采购演示与归档链条；seed 只种平台级；e2e 自建夹具 | `cleanup/1-remove-procurement` | #21 | 待合并（stacked 于 #20） |
-| 2 运行列表：信封、`source` 列、筛选与用量汇总 | `cleanup/2-runs-list` | — | 未开始 |
+| 2 运行列表：信封、`source` 列、筛选与用量汇总 | `cleanup/2-runs-list` | — | 进行中 |
 | 3 运行页：`graph` 列、只读画布、回放、抽屉；编辑器剥离跟随 | `cleanup/3-run-page` | — | 未开始 |
 | 4 监控台收口为系统健康一页 | `cleanup/4-monitor-health-only` | — | 未开始 |
 | 5 `find-simplifications` 第一轮 | `cleanup/5-simplifications-round-1` | — | 未开始 |
@@ -187,9 +187,12 @@
 
 ## 第 2 批：运行列表
 
-**schema**：`runs.source: text("source").notNull().default("workflow")`；`startResolvedRun` 在
-`runs` insert 里从 `invocation.source` 写入（`workflow` / `resume-match-api`），`imports.invocation`
-原样保留（专用 GET 仍凭它核对来源证明）。
+**schema**：**不加列**。受理来源这个事实已经在 `runs.imports.invocation.source` 里——那正是专用 GET
+核对归属的那份证明——再存一列就是同一事实的第二份表示，而给历史行回填又是本仓库不做的迁移。
+改为读时推导：`GET /api/runs` 的 `items[].source` 与 `source=` 筛选都用
+`coalesce(json_extract(runs.imports, '$.invocation.source'), 'workflow')`（该文件本就在 raw-sql 允许名单里）。
+coalesce 到 `workflow` 是语义不是兼容：没有 invocation 的运行只可能是画布发起的。`startResolvedRun`
+的 insert 不用改，它本来就写 `imports.invocation`。
 
 **API `GET /api/runs`**（`src/app/api/runs/route.ts`，仍在 raw-sql 允许名单）
 

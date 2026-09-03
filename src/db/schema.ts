@@ -455,7 +455,7 @@ export const runEvents = sqliteTable(
 
 /**
  * 逐 step 的用量明细，由 dsh usage chunk 到达时实时捕获落库。
- * 必须自己存：运行子进程收束后不再提供查询面——监控页的成本分析只读本表。
+ * 必须自己存：运行子进程收束后不再提供查询面——运行列表的用量汇总只读本表。
  */
 export const nodeUsage = sqliteTable(
   "node_usage",

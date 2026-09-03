@@ -58,8 +58,8 @@ async function removeStale(request: APIRequestContext): Promise<void> {
       if (!wf.name.startsWith(PREFIX)) continue;
       const runsRes = await request.get(`/api/runs?workflowId=${wf.id}`);
       if (!runsRes.ok()) continue;
-      const rows = (await runsRes.json()) as Array<{ id: string }>;
-      for (const row of rows) await request.delete(`/api/runs/${row.id}`);
+      const runsBody = (await runsRes.json()) as { items?: Array<{ id: string }> };
+      for (const row of runsBody.items ?? []) await request.delete(`/api/runs/${row.id}`);
     }
   }
   await cleanupByPrefix(request, "/api/workflows", PREFIX);

@@ -6,8 +6,8 @@ OntoFlow 工作台的领域术语表（ubiquitous language）。只记语义，�
 > （[ADR-0010](docs/adr/0010-nodes-own-their-definition.md)）：库里的 Action 目前
 > 仍被工作流节点共享引用，节点还不自带定义。这次搬迁尚未排进里程碑。
 >
-> **回放**与**运行来源**同样是已定未实现的词（[ADR-0018](docs/adr/0018-run-page-frozen-graph-replay.md)）：
-> 运行页、时间光标与来源筛选落地前，代码里还没有它们。
+> **回放**同样是已定未实现的词（[ADR-0018](docs/adr/0018-run-page-frozen-graph-replay.md)）：
+> 运行页与时间光标落地前，代码里还没有它。**运行来源**已经落地，不在此列。
 
 ## Language
 

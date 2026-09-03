@@ -67,12 +67,13 @@ function fallbackSeries(): OverviewPoint[] {
 async function fetchRecentFailures(): Promise<RunListItem[]> {
   const [failed, cancelled] = await Promise.all(
     (["failed", "cancelled"] as const).map(async (status) => {
+      // 只要最近几条，信封第一页（默认 30）已经够 FAILURE_LIMIT 取
       const res = await fetch(`/api/runs?status=${status}`, {
         cache: "no-store",
       });
       if (!res.ok) throw new Error("加载失败运行列表失败");
-      const data = (await res.json()) as unknown;
-      return Array.isArray(data) ? (data as RunListItem[]) : [];
+      const data = (await res.json()) as { items?: unknown };
+      return Array.isArray(data.items) ? (data.items as RunListItem[]) : [];
     }),
   );
   const endedAt = (row: RunListItem) => toMillis(row.finishedAt) ?? toMillis(row.startedAt) ?? 0;
@@ -198,8 +199,8 @@ export default function MonitorOverviewPage() {
           value={formatCost(today?.cost ?? 0)}
           tone="emerald"
           hint={
-            <Link href="/monitor/cost" className="underline transition-colors hover:text-zinc-300">
-              成本分析
+            <Link href="/runs" className="underline transition-colors hover:text-zinc-300">
+              按筛选归集
             </Link>
           }
           loading={loading}

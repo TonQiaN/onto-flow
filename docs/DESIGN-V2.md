@@ -199,6 +199,6 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 - 阶段二：节点面板按文件夹路径分组（单归属，未归类沉底）+ 关键词搜索；双击节点 → 复用 Action 编辑器（同一组件）+ ReferencesPanel +
   影响预览 + 「复制为新 Action 并替换本节点」；五态视觉 + 边流动动画 + 自动跟随 + 取消运行
   （`session/cancel` + 标记 cancelled + 下游 skipped）。
-- 阶段三：`/monitor` 六标签（总览 / 实时会话 / Trace / 日志检索 / 成本分析 / 系统健康），
+- 阶段三：`/monitor` 五标签（总览 / 实时会话 / Trace / 日志检索 / 系统健康），
   全局 SSE `/api/monitor/stream`，手动清理（工作区 / 事件明细 / 旧运行）与孤儿检测。
   左下角入口，与主导航分区。

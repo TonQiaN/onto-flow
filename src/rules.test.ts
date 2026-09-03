@@ -288,8 +288,9 @@ describe("AGENTS.md · Conventions · revision restore", () => {
 
 describe("AGENTS.md · Conventions · library list GETs", () => {
   /**
-   * 「All five library list GETs return { items, total, page, pageSize }, built from parseListQuery
-   * + selectLibraryPage + listEnvelope in src/server/writers/list.ts.」
+   * 「The five library list GETs and /api/runs return { items, total, page, pageSize }（/api/runs
+   * 另带 summary），built from parseListQuery + selectLibraryPage + listEnvelope in
+   * src/server/writers/list.ts；/api/runs 自己组信封，但分页参数复用同一个 parsePageQuery。」
    */
   const LIBRARIES = ["actions", "skills", "tools", "object-types", "workflows"];
 
@@ -302,6 +303,19 @@ describe("AGENTS.md · Conventions · library list GETs", () => {
         .map((name) => `${library}: 未从 @/server/writers/list 导入 ${name}`);
     });
     expect(found).toEqual([]);
+  });
+
+  it("运行列表 route 复用 parsePageQuery，并返回同一套信封字段外加 summary", () => {
+    const content = read(path.join(ROOT, "src/app/api/runs/route.ts"));
+    const block = /import \{([^}]*)\} from "@\/server\/writers\/list"/.exec(content)?.[1] ?? "";
+    // 分页默认值与上限只能有一个出处；自己再解析一遍 page/pageSize 就是第二处
+    expect(block, "api/runs/route.ts 未从 @/server/writers/list 导入 parsePageQuery").toMatch(
+      /\bparsePageQuery\b/,
+    );
+    const envelope = /return NextResponse\.json\(\{([\s\S]*?)\n {4}\}\);/.exec(content)?.[1] ?? "";
+    for (const key of ["items", "total", "page", "pageSize", "summary"]) {
+      expect(envelope, `api/runs 的返回信封缺 ${key}`).toMatch(new RegExp(`\\b${key}\\b`));
+    }
   });
 });
 
