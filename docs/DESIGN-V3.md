@@ -255,9 +255,15 @@
    **每个节点的每一次执行都是一行，不只 Action**：输入节点、输出节点在 `runner.ts` 里直接落成
    success，被跳过的节点落成 skipped，它们从不进 `action.ts`，但 `reenter()` 重置的是回边下游的
    **所有**节点——评审循环里输出节点会在打回的那轮被跳过、在通过的那轮成功，同一节点两次转换。
-   所以 `runner.ts` 在给任何节点写 success / skipped 时同样 insert 一行轮次（`sessionId` /
-   `inputs` / `outputs` / `snapshot` 为 null，`startedAt` = `finishedAt` = 落态时刻，`round` 随重置递增），
-   Action 节点的轮次行由 `action.ts` 写。回放只看轮次行，`run_nodes` 只提供终态覆盖；早于本批的运行
+   所以 `runner.ts` 在给任何节点写 success / skipped 时同样 insert 一行轮次（`sessionId` 与
+   `snapshot` 为 null；`inputs` / `outputs` 写 `runOne()` 手里的 PortValue 映射——输入节点是发起时提交
+   的值、输出节点是汇集到的值，抽屉的「输入输出」页签靠它，不读 `run_nodes`；`startedAt` =
+   `finishedAt` = 落态时刻），Action 节点的轮次行由 `action.ts` 写。**轮次号按节点单调递增**：
+   `reenter()` 今天把受影响的每个节点都设成 `target.round + 1`，嵌套或重叠的回边会让内环已经跑过
+   第 1 轮的节点被外环再次重置成第 1 轮，`(run_id, node_id, round)` 唯一键就会撞 `UNIQUE constraint
+   failed`；本批改为每个受影响节点取**自己**的下一个未用轮次号（该节点已有轮次行的最大值 + 1，
+   首轮为 0），`rounds/N/` 产物目录随之按节点计数；`runner.test.ts` 加一条嵌套回边（内环先重入、
+   外环再重入同一下游节点）的用例，断言轮次号不重复、运行不因唯一键失败。回放只看轮次行，`run_nodes` 只提供终态覆盖；早于本批的运行
    没有轮次行，节点恒为等待——同一条规则，没有旧数据分支。**每条终态路径都要收口轮次行**：一轮正常结束由 `action.ts` 写终态；`runActionNode` 抛出（超时、
    缺结构化输出、声明的产物不在盘上、会话关闭失败）时 `runner.ts` 的 catch 把 `run_nodes` 写成 failed，
    同一处也要把这一轮的轮次行写成 failed 并补 `finishedAt` 与 error；`cancelRun`、
