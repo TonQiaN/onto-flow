@@ -36,6 +36,14 @@ export interface ResolvedNode {
   onExhausted?: "fail" | "accept";
 }
 
+/**
+ * 重入上限的写边界上限。一轮开一个会话目录，而 `readAgentTrajectory` 读到第
+ * `MAX_SESSION_FILES`（128，src/server/harness/trajectory.ts）个就抛——上限再高，
+ * 轨迹页签会整块打不开。留出余量封在 100；写边界（`parseActionPayload`）与 Action
+ * 编辑器读同一个常量，客户端不能从 `@/server` 引运行时值，所以它落在这个纯模块里。
+ */
+export const MAX_REENTRIES = 100;
+
 export interface GraphEdge {
   id: string;
   sourceNodeId: string;

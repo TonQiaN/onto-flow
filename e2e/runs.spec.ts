@@ -535,6 +535,15 @@ const canvasNode = (page: Page, nodeId: string) =>
   page.locator(`[data-testid="run-canvas"] .react-flow__node[data-id="${nodeId}"]`);
 
 /**
+ * 抽屉的输入输出与快照按轮单取（ADR-0018 的骨架 / 重载荷分层）：
+ * 详情与 SSE 只带骨架，页签打开或换轮才请求这一轮的重载荷，断言正文前先等它落地。
+ */
+const roundPayload = (page: Page, nodeId: string, round: number) =>
+  page.waitForResponse(
+    (response) => response.url().includes(`/nodes/${nodeId}/rounds/${round}`) && response.ok(),
+  );
+
+/**
  * 运行页是看一次运行的唯一地方（ADR-0018）：画布画受理时冻结的图，时间轴一节点一行、
  * 一轮一段，抽屉读光标所在那一轮。轨迹用完全合成的本地会话日志，避免失败 trace 把真实
  * 简历或模型上下文收进去；fixture 只用 e2e 专属前缀与本 case 持有的目录清理，不触碰真实运行。
@@ -570,6 +579,13 @@ test.describe("运行页", () => {
     await expect(canvasNodes(page)).toHaveCount(detail.run.graph.nodes.length);
     for (const node of detail.run.graph.nodes) {
       await expect(canvasNode(page, node.id)).toHaveCount(1);
+    }
+
+    // 轮次行只带骨架：重载荷（输入输出与快照）按轮另取，不跟着每一帧 snapshot 走
+    for (const round of detail.rounds) {
+      expect(Object.keys(round)).not.toContain("inputs");
+      expect(Object.keys(round)).not.toContain("outputs");
+      expect(Object.keys(round)).not.toContain("snapshot");
     }
 
     // 时间轴：行来自 run_nodes，段来自 run_node_rounds（甲两轮、乙一轮）
@@ -666,16 +682,21 @@ test.describe("运行页", () => {
     await expect(row).toHaveCount(1);
     await expect(row.getByTestId("run-timeline-segment")).toHaveCount(2);
 
-    // 已结束的运行默认停在末尾：甲的最后一轮，产物是第二轮那份
+    // 已结束的运行默认停在末尾：甲的最后一轮，产物是第二轮那份。
+    // 重载荷不随 snapshot 下发，打开页签才按轮取一次。
     await canvasNode(page, current.nodeA).click();
     const drawer = page.getByTestId("run-drawer");
+    const secondRound = roundPayload(page, current.nodeA, 1);
     await drawer.getByTestId("run-drawer-tab-io").click();
+    await secondRound;
     await expect(drawer).toContainText("round-two.md");
     await drawer.getByRole("button", { name: "查看内容" }).click();
     await expect(drawer).toContainText("第二轮独立产物");
 
-    // 点第 1 轮那一段把光标拖回去：三个页签一律读那一轮，预览随产物路径重置
+    // 点第 1 轮那一段把光标拖回去：两个页签一律读那一轮，重载荷随之重取，预览也重置
+    const firstRound = roundPayload(page, current.nodeA, 0);
     await row.locator('[data-testid="run-timeline-segment"][data-round="0"]').click();
+    await firstRound;
     await expect(drawer).toContainText("trajectory-a.md");
     await expect(drawer).not.toContainText("第二轮独立产物");
     await drawer.getByRole("button", { name: "查看内容" }).click();

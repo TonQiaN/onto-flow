@@ -124,11 +124,11 @@ export interface RunNodeRow extends NodeUsage {
 }
 
 /**
- * run_node_rounds 表行：一个节点的一次执行（ADR-0018）。
+ * run_node_rounds 一行的**骨架**：一个节点的一次执行（ADR-0018）。
  *
  * 回放只看它——`run_nodes` 一个节点只有一行，回边重入会覆盖那一行的起止、出口、产物与
- * 快照。抽屉的「轨迹 / 输入输出 / 快照」三个页签一律读光标所在那一轮的这一行。
- * 输入 / 输出 / 被跳过的节点没有会话与快照，起止同一时刻。
+ * 快照。输入 / 输出 / 被跳过的节点没有会话，起止同一时刻。
+ * 这一轮的输入输出与快照不在这里：它们是重载荷，抽屉按轮单取（RunNodeRoundPayload）。
  */
 export interface RunNodeRoundRow {
   id: string;
@@ -143,12 +143,20 @@ export interface RunNodeRoundRow {
   /** 本轮走出的具名出口；无具名出口为 null */
   exitName: string | null;
   error: string | null;
-  inputs: Record<string, unknown> | null;
-  outputs: Record<string, unknown> | null;
-  snapshot?: unknown;
 }
 
-/** GET /api/runs/[id] 的响应；SSE 的 snapshot 帧是同一份数据 */
+/**
+ * 一轮的重载荷：GET /api/runs/[id]/nodes/[nodeId]/rounds/[round]。
+ * 抽屉的「输入输出」「快照」页签在打开或换轮时取一轮；被事件清理置空的列是 null，
+ * 与「这一轮本就没有」同一形状。
+ */
+export interface RunNodeRoundPayload {
+  inputs: Record<string, unknown> | null;
+  outputs: Record<string, unknown> | null;
+  snapshot: Record<string, unknown> | null;
+}
+
+/** GET /api/runs/[id] 的响应；SSE 的 snapshot 帧是同一份数据（rounds 只有骨架） */
 export interface RunDetailResponse {
   run: RunRow;
   nodes: RunNodeRow[];

@@ -88,8 +88,6 @@ function roundRow(
     finishedAt: finishedSecond == null ? null : at(finishedSecond),
     exitName: null,
     error: null,
-    inputs: null,
-    outputs: null,
     ...overrides,
   };
 }

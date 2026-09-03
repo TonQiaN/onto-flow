@@ -1,7 +1,8 @@
 import { and, asc, eq, gt } from "drizzle-orm";
-import { db, runEvents, runNodeRounds, runNodes, runs } from "@/db";
+import { db, runEvents, runNodes, runs } from "@/db";
 import { jsonError } from "@/lib/http";
 import { parseRunGraph } from "@/lib/run-graph";
+import { listRoundSkeletons } from "@/server/run-rounds";
 
 export const dynamic = "force-dynamic";
 
@@ -65,13 +66,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
           .where(eq(runNodes.runId, id))
           .orderBy(asc(runNodes.startedAt))
           .all();
-        // 轮次行也进快照与指纹：新的一轮开出来时页面必须立刻拿到，否则回放停在上一轮。
-        const rounds = db
-          .select()
-          .from(runNodeRounds)
-          .where(eq(runNodeRounds.runId, id))
-          .orderBy(asc(runNodeRounds.startedAt))
-          .all();
+        // 轮次骨架也进快照与指纹：新的一轮开出来时页面必须立刻拿到，否则回放停在上一轮。
+        // 只带骨架——重载荷（输入输出与快照）跟着每 500ms 一帧走等于把同一份大对象反复推送，
+        // 抽屉按轮单取（`/api/runs/[id]/nodes/[nodeId]/rounds/[round]`）。
+        const rounds = listRoundSkeletons(id);
         return { run: row ? { ...row, graph: parseRunGraph(row.graph) } : row, nodes, rounds };
       };
 

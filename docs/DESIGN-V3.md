@@ -296,7 +296,14 @@
 `snapshot` 帧同样带 `rounds`（轮次行有变化就重发 snapshot，与 `nodes` 同一指纹），`log` 帧就是带
 `sessionId` 的 `run_events` 行。运行状态只从这两处取；抽屉的轨迹页签仍按需调用现有的
 `GET /api/runs/[id]/nodes/[nodeId]/trajectory`（会话 JSONL 是轨迹的权威源，事件表里没有它），
-这条接口保留不动。
+这条接口保留不动。两处的 `rounds` 都**只带骨架**（轮次、会话、起止、终态、出口、错误，
+`listRoundSkeletons` 在 `select` 时就不取重载荷，不是取回来再删）：`inputs` / `outputs` /
+`snapshot` 是重载荷，快照含整段渲染后的提示与技能正文、循环运行按轮成倍复制，挂在每 500ms
+一帧的 snapshot 上就是把同一份大对象反复推给页面。它们改由新增的
+`GET /api/runs/[id]/nodes/[nodeId]/rounds/[round]` 按轮单取（`handle()` 里、`force-dynamic`，
+轮次非负整数否则 400、无此轮 404、被清理置空的列返回 null），抽屉的「输入输出」「快照」页签在
+打开或换轮时请求一次并把取过的轮缓存在组件内，停在轨迹页签则一条都不发。`src/app/runs/lib.ts`
+的类型随之拆成骨架 `RunNodeRoundRow` 与重载荷 `RunNodeRoundPayload`；`visualsAt` 只用骨架。
 
 **保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
 重载荷（`inputs` / `outputs` / `snapshot`；快照含 prompt、rule、渲染后的提示与技能集全文，循环运行
@@ -355,7 +362,7 @@ interface RunGraph {
   `run_node_rounds`；左 = 相对 `startedAt` 偏移，宽 = 时长；没有轮次行的节点这一行没有段），事件按
   `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
 - **抽屉**（点节点打开，右侧）：错误置顶；「输入输出」「快照」两页签读**光标所在那一轮**的
-  `run_node_rounds` 行；「轨迹」页签对任何运行都一样——调 trajectory 接口拿该节点**全部**会话的轨迹
+  `run_node_rounds` 行（重载荷按轮单取，见上面的数据路径）；「轨迹」页签对任何运行都一样——调 trajectory 接口拿该节点**全部**会话的轨迹
   （接口本就按节点读各轮 JSONL，不依赖轮次表），光标所在轮的会话 id 只用来定位到对应会话并高亮，
   没有轮次行就不定位、整份可检索地展示。复用
   `agent-trajectory.tsx`、`port-value-view.tsx`、`snapshot-view.tsx`；轨迹组件加 `cursorMs`
