@@ -259,8 +259,11 @@
    Action 节点的轮次行由 `action.ts` 写。回放只看轮次行，`run_nodes` 只提供终态覆盖；早于本批的运行
    没有轮次行，节点恒为等待——同一条规则，没有旧数据分支。**每条终态路径都要收口轮次行**：一轮正常结束由 `action.ts` 写终态；`cancelRun`、
    `failWholeRun`、`reconcileOrphanRuns` 今天直接改 `run_nodes`，本批同时把该运行里仍为 running 的轮次
-   行写成对应终态（cancelled / failed）并补 `finishedAt`，否则回放里会有一段永远在跑的会话；
-   `runner.test.ts` 为四条路径各补一条断言。**重入耗尽**（`onExhausted: "fail"`）不是一轮：`reenter()`
+   行写成对应终态（cancelled / failed）并补 `finishedAt`，否则回放里会有一段永远在跑的会话；这三条
+   路径还会把仍为 pending 的 `run_nodes` 批量改成 skipped（`runner.ts` 与 `reconcile.ts`），它们同样
+   要为每个这样的节点 insert 一行零时长的 skipped 轮次（`startedAt` = `finishedAt` = 落态时刻），
+   否则回放到末尾这些节点还是等待。`runner.test.ts` 为四条路径各补一条断言（收口 running 的行 +
+   为 pending 的节点写 skipped 行）。**重入耗尽**（`onExhausted: "fail"`）不是一轮：`reenter()`
    把 `run_nodes` 写成 failed 时必须同时把 `run_nodes.finishedAt` 写成耗尽时刻并留下 error，回放据此
    在最后一轮成功之后的那个时刻把节点翻成失败（见下面的推导规则）。
 3. `run_events.session_id: text`：`events.ts` 的通用落库从 `ctx.sessionId` 写入；`action.ts` 里
