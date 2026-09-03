@@ -36,8 +36,9 @@ export interface RunGraph {
 export const EMPTY_RUN_GRAPH: RunGraph = { version: 1, nodes: [], edges: [] };
 
 /**
- * 从受理快照构造冻结图：端口取 `resolved.nodes`（执行用的解析结果），
- * kind / 标签 / 坐标 / 实体引用取 `resolved.nodeRows`（画布上的原始行）。
+ * 从受理快照构造冻结图：标签与端口取 `resolved.nodes`（执行用的解析结果——resolveWorkflow 已把
+ * workflow_nodes.label 换成 Action 当前的名字，画布上的名字必须与执行的定义、run_nodes.label 一致），
+ * kind / 坐标 / 实体引用取 `resolved.nodeRows`（画布上的原始行，只提供几何与标识）。
  * 缺行的节点只是没有坐标可画，不影响这次运行受理。
  */
 export function buildRunGraph(resolved: ResolvedWorkflow): RunGraph {
