@@ -246,8 +246,11 @@
    级联删除。`inputs` / `outputs` / `snapshot` 是这一轮自己的 PortValue 映射与运行快照（`runOne` /
    `action.ts` 今天写进 `run_nodes` 的同一份内容，快照里含本轮真实生效的产物路径与出口归属）——
    重入会覆盖 `run_nodes` 上的这三列，抽屉的「输入输出」「快照」页签必须读光标所在那一轮的行，
-   否则光标停在第 1 轮时看到的是最后一轮的东西。引擎在一轮开始时 insert（running + `inputs` +
-   `snapshot`）、结束时 update 终态、`finishedAt`、`exitName`、`outputs`、`error`。**必须有它的原因**：
+   否则光标停在第 1 轮时看到的是最后一轮的东西。引擎在 `runActionNode` **一进门**就 insert 骨架行
+   （running + `startedAt` + `inputs`；此时还没有快照），在校验产物路径、读技能投影这些会抛出的
+   准备步骤之前——否则准备阶段抛出时 catch 没有行可收口；快照生成后 update `snapshot`，结束时
+   update 终态、`finishedAt`、`exitName`、`outputs`、`error`。`runner.test.ts` 覆盖一条会话开始前
+   就失败的 Action（产物路径非法），断言它也有一行 failed 轮次。**必须有它的原因**：
    `run_nodes` 一个节点只有一行，回边重入会覆盖它的 `startedAt` / `finishedAt` / `outputs` /
    `sessionId` / `snapshot`，只看 `run_nodes` 回放不出「第 1 轮走了打回、第 2 轮走了通过」。
    `run_nodes` 继续作为节点的**最新状态**行（运行列表与汇总读它；抽屉的三个页签一律读光标所在轮的
@@ -287,8 +290,12 @@
 `GET /api/runs/[id]/nodes/[nodeId]/trajectory`（会话 JSONL 是轨迹的权威源，事件表里没有它），
 这条接口保留不动。
 
-事件清理（`cleanup.ts` 的 events 目标）不删 `run_node_rounds`——它每行几十字节，是回放退化后仍要
-保留的骨架。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
+**保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
+重载荷（`inputs` / `outputs` / `snapshot`；快照含 prompt、rule、渲染后的提示与技能集全文，循环运行
+会成倍复制）。事件清理（`cleanup.ts` 的 events 目标）与 `run_events` 同一刀：把该运行轮次行的三个
+重载荷列置空、骨架保留，回放退化为轮次级、抽屉的输入输出与快照页签显示「已清理」；运行清理才
+删整行。`detailStat` 与预览文案把「置空的轮次行数」一并报出，`cleanup.test.ts` 断言 dryRun 与真做
+一致。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
 `detailStat` 影响面统计与预览文案要加上 `run_node_rounds` 的行数（今天只报 `run_nodes` /
 `run_events` / `node_usage` / `run_results`），`cleanup.test.ts` 补断言：dryRun 报出的行数与真删一致。
 
@@ -383,12 +390,15 @@ interface RunGraph {
 
 **文档同步**：AGENTS.md Repository layout 的 `monitor/` 两行、raw-sql 允许名单去掉 `metrics`、
 「The plugin panel…」等处提到监控台标签的句子、「The eight `/api/monitor/*` routes」改两条；
-`rules.test.ts` 允许名单同步；DESIGN.md 相关句；REVIEW.md；
+`rules.test.ts` 允许名单同步；DESIGN.md 相关句；`docs/DESIGN-V2.md` 「阶段三」里六标签监控台与
+全局 SSE stream 的规定整段改写为「系统健康一页 + health / cleanup 两条路由」；README 监控台段；
+REVIEW.md；
 `docs/simplifications/proposed/2026-09-03-dismantle-monitor-console.md` 移 `done/`。
 
 **验收**：`npm run check`、`npm run build`；`monitor.spec.ts` 只剩导航（入口进 `/monitor`，无标签）
-与系统健康用例，全绿；`rg -n "monitor/(overview|sessions|stream|logs|trace|cost)" src e2e docs`
-无结果。Chrome：系统健康页三块卡片渲染、清理面板三项 dryRun 预览成功。
+与系统健康用例，全绿；`rg -an "monitor/(overview|sessions|stream|logs|trace|cost)" src e2e docs README.md AGENTS.md .github --glob '!docs/DESIGN-V3.md' --glob '!docs/simplifications/**' --glob '!docs/adr/**'`
+无结果（本文与记录树、ADR 是历史陈述，排除；`-a` 是因为 `metrics.ts` 含字面 NUL 字节，默认会被
+当二进制跳过）。Chrome：系统健康页三块卡片渲染、清理面板三项 dryRun 预览成功。
 
 ## 第 5 批：`find-simplifications` 第一轮
 
