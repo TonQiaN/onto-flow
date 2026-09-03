@@ -53,11 +53,6 @@ interface LogsPayload {
   items: Array<{ id: number; payload: Record<string, unknown> | null }>;
 }
 
-interface TracePayload {
-  run: { workflowName: string; tokens: number; cost: number };
-  spans: Array<{ id: string; kind: string; label: string }>;
-}
-
 interface HealthPayload {
   disk: { runsDir: { bytes: number; dirs: number } };
 }
@@ -68,13 +63,7 @@ interface SessionsPayload {
 
 /* ------------------------------ 展示格式的镜像 ------------------------------ */
 
-/** 与 src/app/runs/lib.ts 的 formatCost / formatTokens 同款：按载荷算出 DOM 应显示的文本 */
-function formatCost(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return "¥0";
-  if (n < 0.0001) return "<¥0.0001";
-  return `¥${n.toFixed(4)}`;
-}
-
+/** 与 src/app/runs/lib.ts 的 formatTokens 同款：按载荷算出 DOM 应显示的文本 */
 function formatTokens(n: number): string {
   return Math.round(n).toLocaleString("zh-CN");
 }
@@ -412,7 +401,6 @@ test.afterAll(async ({ request }) => {
 const TABS: Array<{ label: string; url: RegExp }> = [
   { label: "总览", url: /\/monitor$/ },
   { label: "实时会话", url: /\/monitor\/sessions$/ },
-  { label: "Trace", url: /\/monitor\/trace(\?.*)?$/ },
   { label: "日志检索", url: /\/monitor\/logs(\?.*)?$/ },
   { label: "系统健康", url: /\/monitor\/health$/ },
 ];
@@ -497,7 +485,7 @@ async function captureJson<T>(
 const isLogs = (url: URL) => url.pathname === "/api/monitor/logs";
 
 test.describe("监控台 · 导航", () => {
-  test("左下角「监控台」入口进入 /monitor，顶栏五个标签逐个切换且 URL 变化", async ({ page }) => {
+  test("左下角「监控台」入口进入 /monitor，顶栏四个标签逐个切换且 URL 变化", async ({ page }) => {
     await page.goto("/workflows");
 
     // 主导航底部的监控台入口
@@ -507,7 +495,7 @@ test.describe("监控台 · 导航", () => {
     await page.waitForURL(/\/monitor$/);
     await expect(page.getByRole("heading", { name: "监控台", exact: true })).toBeVisible();
 
-    // 五个标签都在，且逐个点过去 URL 都变
+    // 四个标签都在，且逐个点过去 URL 都变
     for (const item of TABS) {
       await expect(tab(page, item.label)).toBeVisible();
     }
@@ -595,66 +583,6 @@ test.describe("监控台 · 实时会话", () => {
       await expect(row).toHaveCount(1);
       await expect(row).toContainText(item.workflowName);
     }
-  });
-});
-
-test.describe("监控台 · Trace", () => {
-  test("下拉默认选中 /api/runs 的第一条；夹具运行的甘特图与 trace 载荷一致：span 行、节点名与耗时", async ({
-    page,
-  }) => {
-    const current = fixture!;
-
-    // 默认选中项 = 运行列表接口的第一条（倒序即最近一次）。哪次运行最近会随真实使用变化，
-    // 所以对着页面自己拉到的载荷比对，而不是写死某个工作流。
-    const runs = await captureJson<{ items: Array<{ id: string }> }>(
-      page,
-      (url) => url.pathname === "/api/runs" && url.search === "",
-      () => page.goto("/monitor/trace"),
-    );
-    expect(runs.items.length, "夹具已写入一条运行，列表不该为空").toBeGreaterThan(0);
-    const select = page.locator("select");
-    await expect(select).toBeEnabled({ timeout: 15_000 });
-    await expect(select).toHaveValue(runs.items[0].id);
-
-    // 深链到夹具运行：span 行数、摘要条、节点名都与 trace 载荷比对
-    const trace = await captureJson<TracePayload>(
-      page,
-      (url) => url.pathname === `/api/monitor/trace/${current.runId}`,
-      () => page.goto(`/monitor/trace?runId=${current.runId}`),
-    );
-    await expect(select).toHaveValue(current.runId);
-    const spans = page.getByTestId("trace-span-row");
-    await expect(spans).toHaveCount(trace.spans.length, { timeout: 15_000 });
-    expect(trace.spans.length, "两个节点各有会话，span 树不该只剩根").toBeGreaterThan(3);
-    await expect(page.getByText(`span（${trace.spans.length} 条）`)).toBeVisible();
-    expect(trace.run.workflowName).toBe(current.workflowName);
-    await expect(
-      page.getByText(current.workflowName).filter({ visible: true }).first(),
-    ).toBeVisible();
-    for (const field of ["开始", "总耗时", "span", "节点", "token", "费用"]) {
-      await expect(page.getByText(field, { exact: true }).first()).toBeVisible();
-    }
-
-    // 两个节点的名字都在链路里；节点 span 的 detail 是 actionName、session span 的 label 是会话 id
-    for (const label of [current.labelA, current.labelB]) {
-      await expect(spans.filter({ hasText: label }).first()).toBeVisible();
-    }
-    await expect(spans.filter({ hasText: current.nodeA }).first()).toBeVisible();
-
-    // 根 span 是整次运行：右侧显示 trace 载荷里的总 token 与费用（夹具用量非零，不是「—」）
-    expect(trace.run.tokens).toBeGreaterThan(0);
-    expect(trace.run.cost).toBeGreaterThan(0);
-    await expect(spans.first()).toContainText(formatTokens(trace.run.tokens));
-    await expect(spans.first()).toContainText(formatCost(trace.run.cost));
-
-    // 每行右侧的耗时列：至少有一行是「N 秒 / N 分 N 秒 / N 毫秒」
-    await expect(spans.filter({ hasText: /\d+(\.\d+)?\s*(毫秒|秒|分)/ }).first()).toBeVisible();
-
-    // 行可展开看详情
-    const first = spans.first();
-    await first.click();
-    await expect(first).toHaveAttribute("aria-expanded", "true");
-    await expect(page.getByText(/起点 \+\d+ ms/).first()).toBeVisible();
   });
 });
 

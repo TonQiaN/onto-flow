@@ -43,8 +43,14 @@ CREATE TABLE run_nodes (
   reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
   cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0, session_id TEXT
 );
+CREATE TABLE run_node_rounds (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, round INTEGER NOT NULL,
+  session_id TEXT, status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER,
+  exit_name TEXT, error TEXT, inputs TEXT, outputs TEXT, snapshot TEXT,
+  UNIQUE(run_id, node_id, round)
+);
 CREATE TABLE run_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT,
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT, session_id TEXT,
   ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
 );
 CREATE TABLE node_usage (
@@ -219,6 +225,7 @@ beforeEach(() => {
   finalizeUnsettledActionUsage("run-1");
   sqlite.exec(`
     DELETE FROM run_nodes;
+    DELETE FROM run_node_rounds;
     DELETE FROM node_usage;
     DELETE FROM run_events;
     DELETE FROM action_skills;
@@ -253,6 +260,66 @@ afterAll(() => {
 });
 
 describe("Action 执行时边界", () => {
+  it("一进门就开出本轮的骨架行：会话还没开就失败也在时间轴上占一段", async () => {
+    const definition = admittedDefinition();
+    // 输出端口没有产物路径会在渲染提示之前抛，骨架行必须已经在库里（ADR-0018）。
+    definition.ports.outputs[0].artifactPath = null;
+
+    await expect(
+      runActionNode(
+        context({
+          definition,
+          inputs: { source: [{ kind: "file", file: { path: "a.pdf", name: "a.pdf", mime: "" } }] },
+        }),
+      ),
+    ).rejects.toThrow("没有产物路径");
+
+    const row = sqlite
+      .prepare(
+        "select round, session_id as sessionId, status, started_at as startedAt, finished_at as finishedAt, inputs, snapshot from run_node_rounds",
+      )
+      .get() as {
+      round: number;
+      sessionId: string;
+      status: string;
+      startedAt: number;
+      finishedAt: number | null;
+      inputs: string;
+      snapshot: string | null;
+    };
+    expect(row).toMatchObject({ round: 0, sessionId: "node-1", status: "running" });
+    expect(row.finishedAt).toBeNull();
+    // 骨架行带本轮输入；快照要等提示渲染完才有，这一步之前抛就一直是空。
+    expect(JSON.parse(row.inputs).source[0].file.name).toBe("a.pdf");
+    expect(row.snapshot).toBeNull();
+    // 终态由 runner.ts 的 catch 收口，这里只证明这一轮已经存在。
+  });
+
+  it("轮次行随会话推进：快照补齐、收束时记下出口与产物", async () => {
+    fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
+
+    const result = await runActionNode(context());
+
+    expect(result.selectedExit).toBeNull();
+    const row = sqlite
+      .prepare(
+        "select round, session_id as sessionId, status, exit_name as exitName, finished_at as finishedAt, outputs, snapshot from run_node_rounds",
+      )
+      .get() as {
+      round: number;
+      sessionId: string;
+      status: string;
+      exitName: string | null;
+      finishedAt: number | null;
+      outputs: string;
+      snapshot: string;
+    };
+    expect(row).toMatchObject({ round: 0, sessionId: "node-1", status: "success", exitName: null });
+    expect(row.finishedAt).not.toBeNull();
+    expect(JSON.parse(row.outputs).result.file.name).toBe("result.md");
+    expect(JSON.parse(row.snapshot).actionName).toBe("测试 Action");
+  });
+
   it("runTurn 收束前已经把 sessionId 落库，取消入口能找到活跃会话", async () => {
     let release: (() => void) | undefined;
     const waiting = new Promise<void>((resolve) => {
@@ -385,7 +452,8 @@ describe("Action 执行时边界", () => {
     expect(JSON.parse(snapshot.snapshot).renderedPrompt).toBe(renderedPrompt);
 
     sqlite.exec(
-      "DELETE FROM run_nodes; INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);",
+      "DELETE FROM run_nodes; DELETE FROM run_node_rounds;" +
+        " INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);",
     );
     finalizeUnsettledActionUsage("run-1");
     let plain = "";
@@ -478,8 +546,11 @@ describe("Action 执行时边界", () => {
       cost: 0.15,
     });
     expect(
-      sqlite.prepare("select type, payload from run_events where type = 'usage'").get(),
-    ).toMatchObject({ type: "usage" });
+      sqlite
+        .prepare("select type, session_id as sessionId from run_events where type = 'usage'")
+        .get(),
+      // 引擎自插的 usage 事件同样要带会话归属，回放才能把它落到所属那一轮的段上。
+    ).toEqual({ type: "usage", sessionId: "node-1" });
   });
 
   it("正常会话的 usage 事件瞬时写入失败时进入最终结算重试链", async () => {

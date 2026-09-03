@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, runNodes, runResults, runs } from "@/db";
 import {
   classifyEdges,
@@ -23,6 +23,7 @@ import {
   type ResolvedNode,
   type ValidationIssue,
 } from "@/lib/graph";
+import { buildRunGraph } from "@/lib/run-graph";
 import { MAX_FILE_INPUT_BYTES, type PortValue } from "@/lib/values";
 import {
   effectiveMcpServerNames,
@@ -44,6 +45,7 @@ import { readSettings, type SettingsDocument } from "@/server/settings";
 import { finalizeUnsettledActionUsage, refreshUnsettledActionUsage, runActionNode } from "./action";
 import { collectCapabilities, materializeToolPlugins, toolFilterForAction } from "./capabilities";
 import { recordSessionEvent, type EventSinkContext } from "./events";
+import { closeRunningRounds, recordSkippedRounds, settleRound } from "./rounds";
 
 export type StartRunResult =
   | { ok: true; runId: string }
@@ -423,6 +425,8 @@ export async function startResolvedRun(
           imports: { invocation },
           // 三层设置与 run 同一事务冻结（ADR-0016）。
           settingsSnapshot: settingsSnapshot as unknown as Record<string, unknown>,
+          // 图也在同一事务冻结（ADR-0018）：运行会活过图的下一次编辑，运行页只读这份。
+          graph: buildRunGraph(resolved),
           startedAt: new Date(),
         })
         .run();
@@ -488,6 +492,13 @@ interface NodeState {
   status: NodeStatus;
   /** 已经执行过几轮；第 0 轮是首次执行 */
   round: number;
+  /**
+   * 这个节点真正用掉过的最大轮次号（开跑或被跳过即算用掉），没用过为 -1。
+   * 重入取它 + 1：轮次号必须按**节点**单调递增，一律取「触发重入那个节点的轮次 + 1」时，
+   * 嵌套 / 重叠回边会让内环已经跑过第 1 轮的节点被外环再次重置成第 1 轮，
+   * 撞 (run_id, node_id, round) 唯一键，整次运行当场失败。
+   */
+  usedRound: number;
   outputs: Record<string, PortValue>;
   /** 完成时选中的出口名；undefined 表示还没跑完，null 表示默认出口 */
   selectedExit?: string | null;
@@ -513,7 +524,10 @@ async function executeRun(
   const { nodes, edges } = resolved;
   const { backEdgeIds } = classifyEdges(nodes, edges);
   const states = new Map<string, NodeState>(
-    nodes.map((n) => [n.id, { node: n, status: "pending" as NodeStatus, round: 0, outputs: {} }]),
+    nodes.map((n) => [
+      n.id,
+      { node: n, status: "pending" as NodeStatus, round: 0, usedRound: -1, outputs: {} },
+    ]),
   );
   const edgeStatus = new Map<string, EdgeStatus>(edges.map((e) => [e.id, "pending"]));
   let firstError: string | null = null;
@@ -679,7 +693,18 @@ async function executeRun(
         if (state.status !== "pending") continue;
         if (!state.node.inputs.some((p) => portDead(state.node.id, p.name))) continue;
         state.status = "skipped";
-        updateRunNode(runId, state.node.id, { status: "skipped", finishedAt: new Date() });
+        state.usedRound = Math.max(state.usedRound, state.round);
+        const at = new Date();
+        updateRunNode(runId, state.node.id, { status: "skipped", finishedAt: at });
+        // 被跳过也是这个节点这一轮的一次转换：评审循环里输出节点在打回那轮跳过、
+        // 在通过那轮成功，没有这一行就回放不出两次转换（ADR-0018）。
+        settleRound({
+          runId,
+          nodeId: state.node.id,
+          round: state.round,
+          status: "skipped",
+          finishedAt: at,
+        });
         for (const e of edges) {
           if (e.sourceNodeId === state.node.id) edgeStatus.set(e.id, "dead");
         }
@@ -709,13 +734,14 @@ async function executeRun(
     affected.add(target.node.id);
     // 整个环体一起进下一轮：只给被回流的节点加轮次的话，环里其他节点会用
     // 同一个产物路径把上一轮的东西覆盖掉，逐轮回看就没了依据。
-    const nextRound = target.round + 1;
+    // 轮次号按**节点**取自己的下一个未用值，不是一律 target.round + 1：嵌套 / 重叠回边
+    // 会让内环已经跑过第 1 轮的节点被外环再次重置，撞 (run_id, node_id, round) 唯一键。
     for (const id of affected) {
       const state = states.get(id);
       if (!state) continue;
       state.status = "pending";
       state.selectedExit = undefined;
-      state.round = nextRound;
+      state.round = state.usedRound + 1;
       updateRunNode(runId, id, { status: "pending", error: null, finishedAt: null });
       for (const e of edges) {
         // 只重置环体内部的边：目标节点的入线保留刚满足的那条回边；来自环外
@@ -734,13 +760,35 @@ async function executeRun(
     return true;
   };
 
-  /** 一个节点跑完（成功）后的统一收尾：落库、结算出线、传播跳过、处理回边。 */
-  const onNodeSuccess = (state: NodeState): void => {
+  /**
+   * 一个节点跑完（成功）后的统一收尾：落库、结算出线、传播跳过、处理回边。
+   *
+   * `ownRound` 只有输入 / 输出节点给：它们从不进 action.ts，轮次行在这里落成零时长的一行
+   * （`startedAt` = `finishedAt`），带上这一轮手里的 PortValue 映射供抽屉读；Action 的轮次行
+   * 由 action.ts 自己 begin 与收口（ADR-0018）。
+   */
+  const onNodeSuccess = (
+    state: NodeState,
+    round: number,
+    ownRound?: { inputs: Record<string, PortValue[]> },
+  ): void => {
+    const finishedAt = new Date();
     updateRunNode(runId, state.node.id, {
       status: "success",
       outputs: state.outputs,
-      finishedAt: new Date(),
+      finishedAt,
     });
+    if (ownRound) {
+      settleRound({
+        runId,
+        nodeId: state.node.id,
+        round,
+        status: "success",
+        finishedAt,
+        inputs: ownRound.inputs,
+        outputs: state.outputs,
+      });
+    }
     state.status = "success";
     settleOutgoing(state);
     propagateSkips();
@@ -768,14 +816,15 @@ async function executeRun(
     return ready.sort((a, b) => (a.node.id < b.node.id ? -1 : 1));
   };
 
-  const runOne = async (state: NodeState): Promise<void> => {
+  const runOne = async (state: NodeState, round: number): Promise<void> => {
     const nodeId = state.node.id;
     if (state.node.kind === "input") {
       updateRunNode(runId, nodeId, { status: "running", startedAt: new Date() });
       const value = runInputs[nodeId];
       if (!value) throw new Error("输入节点缺少运行输入");
       state.outputs = { value };
-      onNodeSuccess(state);
+      // 输入节点这一轮的「输入」就是发起时提交的值（已物化成工作区文件，ADR-0012）。
+      onNodeSuccess(state, round, { inputs: { value: [value] } });
       return;
     }
 
@@ -797,7 +846,7 @@ async function executeRun(
     if (state.node.kind === "output") {
       // 输出节点只有一个 value 口，透传第一份（多条入线的输出节点没有意义）。
       state.outputs = { value: nodeInputs.value[0] };
-      onNodeSuccess(state);
+      onNodeSuccess(state, round, { inputs: nodeInputs });
       return;
     }
 
@@ -814,7 +863,7 @@ async function executeRun(
       proc,
       workspace,
       sinks,
-      round: state.round,
+      round,
       skills: capabilities.skillRefs,
       tools: capabilities.tools.map((tool) => ({
         name: tool.publicName,
@@ -827,7 +876,7 @@ async function executeRun(
     if (isRunCancelled(runId)) throw new Error("运行已取消");
     state.outputs = result.outputs;
     state.selectedExit = result.selectedExit;
-    onNodeSuccess(state);
+    onNodeSuccess(state, round);
   };
 
   try {
@@ -842,23 +891,43 @@ async function executeRun(
         for (const state of pickReady()) {
           if (running.size >= MAX_CONCURRENT_NODES) break;
           state.status = "running";
-          const task = runOne(state)
+          // 轮次号在调度这一刻固定：并行兄弟的成功可能触发重入，把 state.round 改到下一轮，
+          // 而这次执行的轮次行必须收口在自己那一轮上。
+          const round = state.round;
+          state.usedRound = Math.max(state.usedRound, round);
+          const task = runOne(state, round)
             .catch((err) => {
               if (isRunCancelled(runId)) {
+                const at = new Date();
                 state.status = "cancelled";
-                updateRunNode(runId, state.node.id, {
+                updateRunNode(runId, state.node.id, { status: "cancelled", finishedAt: at });
+                settleRound({
+                  runId,
+                  nodeId: state.node.id,
+                  round,
                   status: "cancelled",
-                  finishedAt: new Date(),
+                  finishedAt: at,
                 });
                 cancelled = true;
                 return;
               }
               const message = err instanceof Error ? err.message : String(err);
+              const at = new Date();
               state.status = "failed";
               updateRunNode(runId, state.node.id, {
                 status: "failed",
                 error: message,
-                finishedAt: new Date(),
+                finishedAt: at,
+              });
+              // runActionNode 抛出（超时、缺结构化输出、产物不在盘上、会话关闭失败）时
+              // 这一轮的轮次行也要收口，否则回放里会留下一段永远在跑的会话（ADR-0018）。
+              settleRound({
+                runId,
+                nodeId: state.node.id,
+                round,
+                status: "failed",
+                finishedAt: at,
+                error: message,
               });
               firstError ??= `节点「${state.node.label}」失败：${message}`;
               for (const e of edges) {
@@ -947,20 +1016,14 @@ async function executeRun(
   const writeTerminalState = (): void => {
     const now = new Date();
     if (cancelled || isRunCancelled(runId)) {
-      db.update(runNodes)
-        .set({ status: "skipped", finishedAt: now })
-        .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
-        .run();
+      skipPendingNodes(runId, now);
       db.update(runs)
         .set({ status: "cancelled", error: null, finishedAt: now })
         .where(eq(runs.id, runId))
         .run();
       return;
     }
-    db.update(runNodes)
-      .set({ status: "skipped", finishedAt: now })
-      .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
-      .run();
+    skipPendingNodes(runId, now);
     // 输出节点标记的是工作流级最终产出。分支图里没走到的输出节点被跳过是正常的，
     // 但一个都没走到就说明这次运行什么都没产出——那不叫成功。循环按 accept 收束
     // 却始终没走出通过分支，就会落到这里。
@@ -1028,10 +1091,10 @@ export async function cancelRun(runId: string): Promise<CancelRunResult> {
     .set({ status: "cancelled", finishedAt: now })
     .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "running")))
     .run();
-  db.update(runNodes)
-    .set({ status: "skipped", finishedAt: now })
-    .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
-    .run();
+  // 取消不属于任何一轮，但它必须收口在跑的那一轮：留下 running 的轮次行，
+  // 回放里就有一段永远在跑的会话（ADR-0018）。
+  closeRunningRounds(runId, "cancelled", now, null);
+  skipPendingNodes(runId, now);
   db.update(runs)
     .set({ status: "cancelled", error: null, finishedAt: now })
     .where(eq(runs.id, runId))
@@ -1051,6 +1114,27 @@ function updateRunNode(
     .run();
 }
 
+/**
+ * 把仍 pending 的节点批量收成 skipped，并给每个这样的节点补一行零时长的 skipped 轮次
+ * ——否则回放到末尾这些节点还是等待（ADR-0018）。节点清单必须在批量改写之前取，
+ * 两步同一事务，不留「run_nodes 已 skipped 但时间轴上没有那一段」的中间态。
+ */
+function skipPendingNodes(runId: string, at: Date): void {
+  db.transaction((tx) => {
+    const pending = tx
+      .select({ nodeId: runNodes.nodeId })
+      .from(runNodes)
+      .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
+      .all()
+      .map((row) => row.nodeId);
+    tx.update(runNodes)
+      .set({ status: "skipped", finishedAt: at })
+      .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "pending")))
+      .run();
+    recordSkippedRounds(runId, pending, at, tx);
+  });
+}
+
 /** 兜底：executeRun 自身抛出的异常也不留 running 悬挂；落库失败自身有界重试 */
 function failWholeRun(runId: string, message: string, attempt = 0): void {
   try {
@@ -1061,16 +1145,16 @@ function failWholeRun(runId: string, message: string, attempt = 0): void {
     const run = db.select({ status: runs.status }).from(runs).where(eq(runs.id, runId)).get();
     if (!run || run.status !== "running") return;
 
+    const now = new Date();
     db.update(runNodes)
-      .set({ status: "failed", error: message, finishedAt: new Date() })
+      .set({ status: "failed", error: message, finishedAt: now })
       .where(and(eq(runNodes.runId, runId), eq(runNodes.status, "running")))
       .run();
-    db.update(runNodes)
-      .set({ status: "skipped", finishedAt: new Date() })
-      .where(and(eq(runNodes.runId, runId), inArray(runNodes.status, ["pending"])))
-      .run();
+    // 整运行失败同样不属于任何一轮：收口在跑的轮次行，再给未开始的节点各补一段零时长 skipped。
+    closeRunningRounds(runId, "failed", now, message);
+    skipPendingNodes(runId, now);
     db.update(runs)
-      .set({ status: "failed", error: message, finishedAt: new Date() })
+      .set({ status: "failed", error: message, finishedAt: now })
       .where(eq(runs.id, runId))
       .run();
   } catch (err) {

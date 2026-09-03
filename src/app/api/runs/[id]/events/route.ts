@@ -1,6 +1,7 @@
 import { and, asc, eq, gt } from "drizzle-orm";
-import { db, runEvents, runNodes, runs } from "@/db";
+import { db, runEvents, runNodeRounds, runNodes, runs } from "@/db";
 import { jsonError } from "@/lib/http";
+import { parseRunGraph } from "@/lib/run-graph";
 
 export const dynamic = "force-dynamic";
 
@@ -15,8 +16,9 @@ const QUIET_TICKS = 3;
 
 /**
  * SSE GET /api/runs/[id]/events
- * 连接即发 event: snapshot（{ run, nodes } 全量），之后 ~500ms 轮询 sqlite：
- * 新 run_events 逐条发 event: log；run/nodes 有变化再发 snapshot；
+ * 连接即发 event: snapshot（{ run, nodes, rounds } 全量，与 GET /api/runs/[id] 同一形状），
+ * 之后 ~500ms 轮询 sqlite：新 run_events 逐条发 event: log（行带 sessionId，据此归到轮）；
+ * run / nodes / rounds 任一有变化就重发 snapshot（三者同一指纹）；
  * run 到终态且静默期内再无任何变化后发 event: end 并关闭。不依赖进程内 pubsub。
  */
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -56,14 +58,21 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       };
 
       const readSnapshot = () => {
-        const run = db.select().from(runs).where(eq(runs.id, id)).get();
+        const row = db.select().from(runs).where(eq(runs.id, id)).get();
         const nodes = db
           .select()
           .from(runNodes)
           .where(eq(runNodes.runId, id))
           .orderBy(asc(runNodes.startedAt))
           .all();
-        return { run, nodes };
+        // 轮次行也进快照与指纹：新的一轮开出来时页面必须立刻拿到，否则回放停在上一轮。
+        const rounds = db
+          .select()
+          .from(runNodeRounds)
+          .where(eq(runNodeRounds.runId, id))
+          .orderBy(asc(runNodeRounds.startedAt))
+          .all();
+        return { run: row ? { ...row, graph: parseRunGraph(row.graph) } : row, nodes, rounds };
       };
 
       const tick = () => {

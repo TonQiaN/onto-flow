@@ -503,12 +503,6 @@ function LogsConsole() {
                         >
                           运行详情
                         </Link>
-                        <Link
-                          href={`/monitor/trace?runId=${row.runId}`}
-                          className="text-zinc-400 underline underline-offset-2 transition-colors hover:text-zinc-100"
-                        >
-                          在 Trace 中查看
-                        </Link>
                         <button
                           type="button"
                           onClick={() => void copyPayload(row)}

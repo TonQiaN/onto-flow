@@ -3,7 +3,6 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SESSION_FORMAT_VERSION } from "@deepseek-ai/dsh-session";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import Database from "better-sqlite3";
 import { cleanupByPrefix, openDb } from "./helpers";
 
 interface RunFixture {
@@ -13,6 +12,10 @@ interface RunFixture {
   runDir: string;
   nodeA: string;
   nodeB: string;
+  /** 同一工作流里另一条运行：没有冻结图、没有轮次行，模拟早于 ADR-0018 的历史运行 */
+  legacyRunId: string;
+  legacyRunDir: string;
+  legacyNode: string;
 }
 
 interface FixtureEvent {
@@ -216,32 +219,117 @@ function fixtureWorkflowDir(runDir: string): string | null {
   return path.dirname(candidate);
 }
 
+/**
+ * 冻结进 `runs.graph` 的图（ADR-0018）：两个 Action 节点一条连线。运行页只读它，
+ * 从不回查 `workflow_nodes` / `workflow_edges`——运行会活过图的下一次编辑。
+ */
+function fixtureGraph(nodeA: string, nodeB: string): unknown {
+  const objectTypeId = "e2e-轨迹-类型";
+  const port = (name: string, artifactPath: string | null) => ({
+    name,
+    objectTypeId,
+    objectTypeName: "轨迹文本",
+    kind: "text",
+    exitName: null,
+    artifactPath,
+  });
+  return {
+    version: 1,
+    nodes: [
+      {
+        id: nodeA,
+        kind: "action",
+        label: "e2e-Agent甲",
+        x: 0,
+        y: 0,
+        actionId: null,
+        objectTypeId: null,
+        inputs: [],
+        outputs: [port("结果", "trajectory-a.md")],
+      },
+      {
+        id: nodeB,
+        kind: "action",
+        label: "e2e-Agent乙",
+        x: 320,
+        y: 0,
+        actionId: null,
+        objectTypeId: null,
+        inputs: [port("素材", null)],
+        outputs: [port("结果", "trajectory-b.md")],
+      },
+    ],
+    edges: [
+      {
+        id: "e2e-轨迹-边",
+        sourceNodeId: nodeA,
+        sourcePort: "结果",
+        targetNodeId: nodeB,
+        targetPort: "素材",
+      },
+    ],
+  };
+}
+
+/** 一轮的产物映射：抽屉的「输入输出」页签读的是光标所在那一轮的这份，不是 run_nodes 上的最新值。 */
+function fileOutputs(dataRoot: string, absolutePath: string): string {
+  return JSON.stringify({
+    结果: {
+      kind: "file",
+      file: {
+        path: path.relative(dataRoot, absolutePath),
+        name: path.basename(absolutePath),
+        mime: "text/markdown",
+      },
+    },
+  });
+}
+
 async function createFixture(request: APIRequestContext): Promise<RunFixture> {
   const workflowId = randomUUID();
   const runId = randomUUID();
+  const legacyRunId = randomUUID();
   const nodeA = randomUUID();
   const nodeB = randomUUID();
+  const legacyNode = randomUUID();
   const runDir = path.join(process.cwd(), "data", "runs", workflowId, runId);
+  const legacyRunDir = path.join(process.cwd(), "data", "runs", workflowId, legacyRunId);
   const now = Date.now() - 10_000;
   const workflowName = `${PREFIX}${workflowId.slice(0, 8)}`;
-  const fixture = { workflowId, workflowName, runId, runDir, nodeA, nodeB };
+  const fixture = {
+    workflowId,
+    workflowName,
+    runId,
+    runDir,
+    nodeA,
+    nodeB,
+    legacyRunId,
+    legacyRunDir,
+    legacyNode,
+  };
   const dataRoot = path.join(process.cwd(), "data");
-  const artifactA = path.join(runDir, "workspace", "trajectory-a.md");
+  const artifactA1 = path.join(runDir, "workspace", "trajectory-a.md");
+  const artifactA2 = path.join(runDir, "workspace", "rounds", "2", "round-two.md");
   const artifactB = path.join(runDir, "workspace", "trajectory-b.md");
 
   try {
-    await mkdir(path.dirname(artifactA), { recursive: true });
+    await mkdir(path.dirname(artifactA2), { recursive: true });
     await Promise.all([
-      writeFile(artifactA, "合成轨迹产物 A", "utf8"),
+      writeFile(artifactA1, "合成轨迹产物 A", "utf8"),
+      writeFile(artifactA2, "第二轮独立产物", "utf8"),
       writeFile(artifactB, "合成轨迹产物 B", "utf8"),
     ]);
     await writeSession(runDir, nodeA, eventLog(nodeA, now, "A_ROUND_1", true));
-    await writeSession(runDir, `${nodeA}#2`, eventLog(`${nodeA}#2`, now + 100, "A_ROUND_2", false));
-    await writeSession(runDir, nodeB, eventLog(nodeB, now + 200, "B_ONLY_SENTINEL", false));
+    await writeSession(runDir, `${nodeA}#2`, eventLog(`${nodeA}#2`, now + 150, "A_ROUND_2", false));
+    await writeSession(runDir, nodeB, eventLog(nodeB, now + 320, "B_ONLY_SENTINEL", false));
+    // 早于 ADR-0018 的运行：没有冻结图、没有轮次行，只有 run_nodes 与会话日志
+    await writeSession(
+      legacyRunDir,
+      legacyNode,
+      eventLog(legacyNode, now, "LEGACY_ONLY_SENTINEL", false),
+    );
 
-    const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
-    database.pragma("foreign_keys = ON");
-    database.pragma("busy_timeout = 5000");
+    const database = openDb();
     const snapshot = JSON.stringify({
       actionName: "合成 Action",
       prompt: "合成轨迹测试",
@@ -265,38 +353,45 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
           .run(workflowId, workflowName, now, now);
         database
           .prepare(
-            "insert into runs (id, workflow_id, status, workflow_name, started_at, finished_at, run_dir) values (?, ?, 'success', ?, ?, ?, ?)",
+            "insert into runs (id, workflow_id, status, workflow_name, graph, started_at, finished_at, run_dir) values (?, ?, 'success', ?, ?, ?, ?, ?)",
           )
           .run(
             runId,
             workflowId,
             workflowName,
+            JSON.stringify(fixtureGraph(nodeA, nodeB)),
             now,
             now + 1_000,
             path.relative(process.cwd(), runDir),
           );
+        // graph 列不写：拿列默认的空图，这正是早于本批的运行在运行页上的样子
+        database
+          .prepare(
+            "insert into runs (id, workflow_id, status, workflow_name, started_at, finished_at, run_dir) values (?, ?, 'success', ?, ?, ?, ?)",
+          )
+          .run(
+            legacyRunId,
+            workflowId,
+            workflowName,
+            now,
+            now + 500,
+            path.relative(process.cwd(), legacyRunDir),
+          );
+
         const statement = database.prepare(
           "insert into run_nodes (id, run_id, node_id, label, status, snapshot, outputs, session_id, started_at, finished_at) values (?, ?, ?, ?, 'success', ?, ?, ?, ?, ?)",
         );
+        // run_nodes 只是节点的**最新状态**行：甲的产物是最后一轮那份
         statement.run(
           randomUUID(),
           runId,
           nodeA,
           "e2e-Agent甲",
           snapshot,
-          JSON.stringify({
-            结果: {
-              kind: "file",
-              file: {
-                path: path.relative(dataRoot, artifactA),
-                name: path.basename(artifactA),
-                mime: "text/markdown",
-              },
-            },
-          }),
+          fileOutputs(dataRoot, artifactA2),
           `${nodeA}#2`,
           now,
-          now + 136,
+          now + 300,
         );
         statement.run(
           randomUUID(),
@@ -304,19 +399,59 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
           nodeB,
           "e2e-Agent乙",
           snapshot,
-          JSON.stringify({
-            结果: {
-              kind: "file",
-              file: {
-                path: path.relative(dataRoot, artifactB),
-                name: path.basename(artifactB),
-                mime: "text/markdown",
-              },
-            },
-          }),
+          fileOutputs(dataRoot, artifactB),
           nodeB,
-          now + 200,
-          now + 236,
+          now + 320,
+          now + 400,
+        );
+        statement.run(
+          randomUUID(),
+          legacyRunId,
+          legacyNode,
+          "e2e-Agent旧",
+          snapshot,
+          null,
+          legacyNode,
+          now,
+          now + 400,
+        );
+
+        // 轮次行：甲两轮（第 1 轮的产物与第 2 轮不同，抽屉据此证明读的是光标所在轮），乙一轮
+        const round = database.prepare(
+          "insert into run_node_rounds (id, run_id, node_id, round, session_id, status, started_at, finished_at, outputs, snapshot) values (?, ?, ?, ?, ?, 'success', ?, ?, ?, ?)",
+        );
+        round.run(
+          randomUUID(),
+          runId,
+          nodeA,
+          0,
+          nodeA,
+          now,
+          now + 136,
+          fileOutputs(dataRoot, artifactA1),
+          snapshot,
+        );
+        round.run(
+          randomUUID(),
+          runId,
+          nodeA,
+          1,
+          `${nodeA}#2`,
+          now + 150,
+          now + 300,
+          fileOutputs(dataRoot, artifactA2),
+          snapshot,
+        );
+        round.run(
+          randomUUID(),
+          runId,
+          nodeB,
+          0,
+          nodeB,
+          now + 320,
+          now + 400,
+          fileOutputs(dataRoot, artifactB),
+          snapshot,
         );
       });
       insert();
@@ -336,9 +471,7 @@ async function removeFixture(
 ): Promise<void> {
   if (!fixture) return;
   try {
-    const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
-    database.pragma("foreign_keys = ON");
-    database.pragma("busy_timeout = 5000");
+    const database = openDb();
     try {
       // 测试中断在模拟运行态时先结束这条合成 run，让正式 DELETE 的运行中保护
       // 仍然生效；实体删除本身统一走 cleanupByPrefix。
@@ -359,9 +492,7 @@ async function removeFixture(
 
 /** 清掉上次进程被中断时遗留的本 spec 数据；前缀与 data/runs 双重收敛。 */
 async function removeStaleFixtures(request: APIRequestContext): Promise<void> {
-  const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
-  database.pragma("foreign_keys = ON");
-  database.pragma("busy_timeout = 5000");
+  const database = openDb();
   let runDirs: Array<{ runDir: string | null }> = [];
   try {
     runDirs = database
@@ -385,74 +516,30 @@ async function removeStaleFixtures(request: APIRequestContext): Promise<void> {
   }
 }
 
-function setFixtureActive(fixture: RunFixture): void {
-  const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
-  database.pragma("foreign_keys = ON");
-  database.pragma("busy_timeout = 5000");
-  try {
-    database
-      .prepare("update runs set status = 'running', finished_at = null where id = ?")
-      .run(fixture.runId);
-    database
-      .prepare(
-        "update run_nodes set status = 'running', finished_at = null where run_id = ? and node_id = ?",
-      )
-      .run(fixture.runId, fixture.nodeA);
-  } finally {
-    database.close();
-  }
+interface RunDetailPayload {
+  run: { graph: { nodes: Array<{ id: string }>; edges: unknown[] } };
+  nodes: Array<{ nodeId: string; label: string }>;
+  rounds: Array<{ nodeId: string; round: number }>;
 }
 
-function finishFixture(fixture: RunFixture): void {
-  const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
-  database.pragma("foreign_keys = ON");
-  database.pragma("busy_timeout = 5000");
-  try {
-    const finishedAt = Date.now();
-    database
-      .prepare("update runs set status = 'success', finished_at = ? where id = ?")
-      .run(finishedAt, fixture.runId);
-  } finally {
-    database.close();
-  }
+async function runDetail(page: Page, runId: string): Promise<RunDetailPayload> {
+  const res = await page.request.get(`/api/runs/${runId}`);
+  expect(res.ok()).toBeTruthy();
+  return (await res.json()) as RunDetailPayload;
 }
 
-async function replaceFixtureArtifact(
-  fixture: RunFixture,
-  relativeName: string,
-  content: string,
-): Promise<void> {
-  const artifact = path.join(fixture.runDir, "workspace", relativeName);
-  await mkdir(path.dirname(artifact), { recursive: true });
-  await writeFile(artifact, content, "utf8");
-  const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
-  database.pragma("foreign_keys = ON");
-  database.pragma("busy_timeout = 5000");
-  try {
-    database.prepare("update run_nodes set outputs = ? where run_id = ? and node_id = ?").run(
-      JSON.stringify({
-        结果: {
-          kind: "file",
-          file: {
-            path: path.relative(path.join(process.cwd(), "data"), artifact),
-            name: path.basename(artifact),
-            mime: "text/markdown",
-          },
-        },
-      }),
-      fixture.runId,
-      fixture.nodeA,
-    );
-  } finally {
-    database.close();
-  }
-}
+const canvasNodes = (page: Page) => page.locator('[data-testid="run-canvas"] .react-flow__node');
+
+/** 画布上的某个节点：React Flow v12 把节点 id 放在 data-id 上 */
+const canvasNode = (page: Page, nodeId: string) =>
+  page.locator(`[data-testid="run-canvas"] .react-flow__node[data-id="${nodeId}"]`);
 
 /**
- * 轨迹用完全合成的本地会话日志，避免失败 trace 把真实简历或模型上下文收进去。
- * fixture 只用 e2e 专属前缀与本 case 持有的目录清理，不触碰真实运行。
+ * 运行页是看一次运行的唯一地方（ADR-0018）：画布画受理时冻结的图，时间轴一节点一行、
+ * 一轮一段，抽屉读光标所在那一轮。轨迹用完全合成的本地会话日志，避免失败 trace 把真实
+ * 简历或模型上下文收进去；fixture 只用 e2e 专属前缀与本 case 持有的目录清理，不触碰真实运行。
  */
-test.describe("运行历史", () => {
+test.describe("运行页", () => {
   let fixture: RunFixture | null = null;
 
   test.beforeAll(async ({ request }) => {
@@ -472,80 +559,52 @@ test.describe("运行历史", () => {
     }
   });
 
-  test("每个 Action 按需展示独立、可检索的会话轨迹", async ({ page }) => {
+  test("画布节点数等于冻结图，时间轴行数等于节点数、段数等于轮次数", async ({ page }) => {
     const current = fixture!;
-    setFixtureActive(current);
+    const detail = await runDetail(page, current.runId);
+    expect(detail.run.graph.nodes.length).toBe(2);
+    expect(detail.rounds.length).toBe(3);
+
+    await page.goto(`/runs/${current.runId}`);
+    await expect(page.getByTestId("run-summary-bar")).toContainText(current.workflowName);
+    await expect(canvasNodes(page)).toHaveCount(detail.run.graph.nodes.length);
+    for (const node of detail.run.graph.nodes) {
+      await expect(canvasNode(page, node.id)).toHaveCount(1);
+    }
+
+    // 时间轴：行来自 run_nodes，段来自 run_node_rounds（甲两轮、乙一轮）
+    await expect(page.getByTestId("run-timeline-row")).toHaveCount(detail.nodes.length);
+    await expect(page.getByTestId("run-timeline-segment")).toHaveCount(detail.rounds.length);
+    for (const node of detail.nodes) {
+      await expect(
+        page.locator(`[data-testid="run-timeline-row"][data-node-id="${node.nodeId}"]`),
+      ).toHaveCount(1);
+    }
+  });
+
+  test("点节点开抽屉：每个 Action 按需展示独立、可检索的会话轨迹", async ({ page }) => {
+    const current = fixture!;
     const trajectoryRequests: string[] = [];
-    const trajectoryResponses: string[] = [];
     page.on("request", (request) => {
       if (request.url().includes("/trajectory")) trajectoryRequests.push(request.url());
     });
-    page.on("response", (response) => {
-      if (response.url().includes("/trajectory")) trajectoryResponses.push(response.url());
-    });
 
-    let releaseInitialRequest!: () => void;
-    const initialRequestGate = new Promise<void>((resolve) => {
-      releaseInitialRequest = resolve;
-    });
-    let holdFirstTrajectoryRequest = true;
-    await page.route("**/trajectory", async (route) => {
-      if (holdFirstTrajectoryRequest) {
-        holdFirstTrajectoryRequest = false;
-        await initialRequestGate;
-      }
-      await route.continue();
-    });
-
-    await page.goto(`/runs?workflowId=${current.workflowId}`);
-    const runRow = page.locator("tbody tr").filter({ hasText: current.workflowName });
-    await expect(runRow).toHaveCount(1);
-    await runRow.click();
-    await page.waitForURL(`/runs/${current.runId}`);
-    await expect(page.getByRole("heading", { name: "运行详情", exact: true })).toBeVisible();
-    await expect(page.getByTestId("run-workspace-path")).toHaveText(
-      path.relative(process.cwd(), path.join(current.runDir, "workspace")),
-    );
-    await expect(page.getByRole("link", { name: "回画布看动画" })).toBeVisible();
-
-    const cardA = page.locator(`[data-node-id="${current.nodeA}"]`);
-    const cardB = page.locator(`[data-node-id="${current.nodeB}"]`);
-    await expect(cardA).toContainText("e2e-Agent甲");
-    await expect(cardB).toContainText("e2e-Agent乙");
-    await expect(cardA).toContainText("输出");
-    await expect(cardA).toContainText("trajectory-a.md");
-    await cardA.getByRole("button", { name: "查看内容" }).click();
-    await expect(cardA).toContainText("合成轨迹产物 A");
-    await expect(cardB).toContainText("输出");
-    await expect(cardB).toContainText("trajectory-b.md");
+    await page.goto(`/runs/${current.runId}`);
+    await expect(canvasNodes(page)).toHaveCount(2);
+    // 轨迹按需读取：没打开抽屉前一次都不请求
     expect(trajectoryRequests).toHaveLength(0);
 
-    const toggleA = cardA.getByTestId("agent-trajectory-toggle");
-    await expect(toggleA).toHaveAttribute("aria-expanded", "false");
-    const initialRequestPromise = page.waitForRequest((request) =>
-      request.url().includes(`/nodes/${current.nodeA}/trajectory`),
-    );
     const responsePromise = page.waitForResponse(
       (response) => response.url().includes(`/nodes/${current.nodeA}/trajectory`) && response.ok(),
     );
-    await toggleA.click();
-    await initialRequestPromise;
-
-    // 首次读取尚未返回时只让 run 进入终态，刻意保留 node=running；这样
-    // status prop 不变，只有 active 会变化。终态 effect 必须把刷新排队，且
-    // 在 gate 释放前仍只能有一个请求，不能并发补拉或依赖定时轮询兜底。
-    finishFixture(current);
-    await expect(page.getByRole("link", { name: "回画布看动画" })).toHaveCount(0, {
-      timeout: 1_000,
-    });
-    expect(trajectoryRequests).toHaveLength(1);
-    releaseInitialRequest();
-    const response = await responsePromise;
-    const payload = (await response.json()) as {
+    await canvasNode(page, current.nodeA).click();
+    const drawer = page.getByTestId("run-drawer");
+    await expect(drawer).toBeVisible();
+    await drawer.getByTestId("run-drawer-tab-trajectory").click();
+    const payload = (await (await responsePromise).json()) as {
       available: boolean;
       sessions: Array<{
         round: number;
-        model: string;
         records: Array<{
           id: string;
           kind: string;
@@ -558,59 +617,71 @@ test.describe("运行历史", () => {
     expect(payload.sessions.map((session) => session.round)).toEqual([1, 2]);
     expect(payload.sessions[0]?.records[0]?.kind).toBe("system");
 
-    await expect.poll(() => trajectoryResponses.length).toBe(2);
-    expect(trajectoryRequests).toHaveLength(2);
+    const panel = drawer.getByTestId("agent-trajectory-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText("输入");
+    await expect(panel).toContainText("模型");
+    await expect(panel).toContainText("工具");
+    await expect(panel).toContainText("deepseek-official/deepseek-v4-flash");
+    // 甲的面板里不能混进乙的会话
+    await expect(panel).not.toContainText("B_ONLY_SENTINEL");
 
-    const panelA = cardA.getByTestId("agent-trajectory-panel");
-    await expect(panelA).toBeVisible();
-    await expect(panelA).toContainText("输入");
-    await expect(panelA).toContainText("模型");
-    await expect(panelA).toContainText("工具");
-    await expect(panelA).toContainText("deepseek-official/deepseek-v4-flash");
-    await expect(panelA).not.toContainText("B_ONLY_SENTINEL");
-
-    await panelA.getByRole("button", { name: "第 1 轮", exact: true }).click();
+    // 先把光标拖回第 1 轮：轨迹按光标所在轮定位会话，点记录 onSeek 才不会又把会话换回去
+    await page
+      .locator(`[data-testid="run-timeline-row"][data-node-id="${current.nodeA}"]`)
+      .locator('[data-testid="run-timeline-segment"][data-round="0"]')
+      .click();
+    await panel.getByRole("button", { name: "第 1 轮", exact: true }).click();
     const roundOne = payload.sessions[0]!;
-    await expect(panelA.getByTestId("trajectory-record")).toHaveCount(roundOne.records.length);
+    await expect(panel.getByTestId("trajectory-record")).toHaveCount(roundOne.records.length);
 
     const tool = roundOne.records.find(
       (record) => record.kind === "tool" && record.callId === "call-A_ROUND_1",
     );
     expect(tool).toBeTruthy();
-    await panelA
+    await panel
       .getByTestId("trajectory-record")
       .filter({ has: page.getByText("工具", { exact: true }) })
       .click();
     for (const detail of tool!.details) {
-      await panelA.getByRole("button", { name: detail.label, exact: true }).click();
-      await expect(panelA.getByTestId("trajectory-detail")).toContainText(detail.content);
+      await panel.getByRole("button", { name: detail.label, exact: true }).click();
+      await expect(panel.getByTestId("trajectory-detail")).toContainText(detail.content);
     }
 
-    await panelA.getByRole("searchbox", { name: "搜索 Agent 轨迹" }).fill("TOOL_OUTPUT_A_ROUND_1");
-    await expect(panelA.getByTestId("trajectory-record")).toHaveCount(1);
-    await expect(panelA).not.toContainText("B_ONLY_SENTINEL");
+    await panel.getByRole("searchbox", { name: "搜索 Agent 轨迹" }).fill("TOOL_OUTPUT_A_ROUND_1");
+    await expect(panel.getByTestId("trajectory-record")).toHaveCount(1);
 
-    await cardB.getByTestId("agent-trajectory-toggle").click();
-    const panelB = cardB.getByTestId("agent-trajectory-panel");
-    await expect(panelB).toContainText("B_ONLY_SENTINEL");
-    expect(trajectoryRequests).toHaveLength(3);
+    // 换个节点：抽屉换成乙自己的会话
+    await canvasNode(page, current.nodeB).click();
+    await drawer.getByTestId("run-drawer-tab-trajectory").click();
+    await expect(drawer.getByTestId("agent-trajectory-panel")).toContainText("B_ONLY_SENTINEL");
   });
 
-  test("循环换轮时文件预览随产物路径重置，双点开头文件仍可读取", async ({ page, request }) => {
+  test("抽屉读光标所在那一轮：回到第 1 轮看到的是第 1 轮的产物", async ({ page, request }) => {
     const current = fixture!;
-    setFixtureActive(current);
     await page.goto(`/runs/${current.runId}`);
-    const cardA = page.locator(`[data-node-id="${current.nodeA}"]`);
-    await cardA.getByRole("button", { name: "查看内容" }).click();
-    await expect(cardA).toContainText("合成轨迹产物 A");
+    await expect(canvasNodes(page)).toHaveCount(2);
 
-    await replaceFixtureArtifact(current, "rounds/2/round-two.md", "第二轮独立产物");
-    await expect(cardA).toContainText("round-two.md");
-    await expect(cardA).not.toContainText("合成轨迹产物 A");
-    await expect(cardA.getByRole("button", { name: "查看内容" })).toBeVisible();
-    await cardA.getByRole("button", { name: "查看内容" }).click();
-    await expect(cardA).toContainText("第二轮独立产物");
+    const row = page.locator(`[data-testid="run-timeline-row"][data-node-id="${current.nodeA}"]`);
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId("run-timeline-segment")).toHaveCount(2);
 
+    // 已结束的运行默认停在末尾：甲的最后一轮，产物是第二轮那份
+    await canvasNode(page, current.nodeA).click();
+    const drawer = page.getByTestId("run-drawer");
+    await drawer.getByTestId("run-drawer-tab-io").click();
+    await expect(drawer).toContainText("round-two.md");
+    await drawer.getByRole("button", { name: "查看内容" }).click();
+    await expect(drawer).toContainText("第二轮独立产物");
+
+    // 点第 1 轮那一段把光标拖回去：三个页签一律读那一轮，预览随产物路径重置
+    await row.locator('[data-testid="run-timeline-segment"][data-round="0"]').click();
+    await expect(drawer).toContainText("trajectory-a.md");
+    await expect(drawer).not.toContainText("第二轮独立产物");
+    await drawer.getByRole("button", { name: "查看内容" }).click();
+    await expect(drawer).toContainText("合成轨迹产物 A");
+
+    // 双点开头是合法文件名，预览通道照读不误
     const dotFile = path.join(current.runDir, "workspace", "..report.md");
     await writeFile(dotFile, "双点开头是合法文件名", "utf8");
     const response = await request.get(`/api/runs/${current.runId}/files`, {
@@ -621,6 +692,31 @@ test.describe("运行历史", () => {
       name: "..report.md",
       content: "双点开头是合法文件名",
     });
+  });
+
+  test("早于冻结图的运行：画布是空的，仍能从时间轴行名打开抽屉看轨迹", async ({ page }) => {
+    const current = fixture!;
+    const detail = await runDetail(page, current.legacyRunId);
+    expect(detail.run.graph.nodes).toEqual([]);
+    expect(detail.rounds).toEqual([]);
+
+    await page.goto(`/runs/${current.legacyRunId}`);
+    await expect(page.getByTestId("run-canvas")).toBeVisible();
+    await expect(canvasNodes(page)).toHaveCount(0);
+
+    // 没有轮次行的节点这一行没有段，但行名仍是进抽屉的入口
+    const row = page.locator(
+      `[data-testid="run-timeline-row"][data-node-id="${current.legacyNode}"]`,
+    );
+    await expect(row).toHaveCount(1);
+    await expect(row.getByTestId("run-timeline-segment")).toHaveCount(0);
+    await row.getByText("e2e-Agent旧").click();
+    const drawer = page.getByTestId("run-drawer");
+    await expect(drawer).toBeVisible();
+    await drawer.getByTestId("run-drawer-tab-trajectory").click();
+    await expect(drawer.getByTestId("agent-trajectory-panel")).toContainText(
+      "LEGACY_ONLY_SENTINEL",
+    );
   });
 });
 

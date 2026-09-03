@@ -38,9 +38,9 @@ src/
 | /api/internal/resume-matches | POST | 「简历匹配评分」工作流调用入口；body 严格为 `{ job: PortValue(file), resume: PortValue(file) }`，调用方先经 `/api/uploads` 取得两个值；202 返回 `runId`、`statusUrl`、`historyUrl`，不暴露工作流或节点 id |
 | /api/internal/resume-matches/[id] | GET | 只查询由该入口 POST 受理并在 run 元数据中留下来源证明的运行（同名工作流经通用入口启动仍为 404）；running/failed/cancelled 时 `result=null`，success 时读取完成门禁写入 `run_results` 的精确 JSON，再次严格校验并核对完成证据里的内容 SHA-256 后返回；工作区/事件清理不影响结果，删除 run 才级联删除 |
 | /api/runs?workflowId=&status=&source=&from=&to=&page=&pageSize= | GET | 运行列表信封 `{ items, total, page, pageSize, summary }`，`items` 按 `startedAt` 倒序、每行带 `source`（受理来源）与 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用）。七个参数：`status` 四值之一、`source` 匹配 `^[a-z][a-z0-9-]*$`、`from` / `to` 是 epoch 毫秒整数且窗口左闭右开（`startedAt ∈ [from, to)`），非法一律 400；`page` / `pageSize` 与五个库同一套（默认 30、上限 100，`parsePageQuery`）。`summary = { runs, tokens, cost, byModel: [{ providerId, modelId, tokens, cost }] }` 按同一组筛选**不分页**聚合：`runs` 数筛选集里 distinct 的运行（零用量的运行也算，因此等于 `total`），token 与费用来自按 `run_id` 预聚合的 `node_usage` 子查询 left join——内连接会把无用量的运行挤掉 |
-| /api/runs/[id] | GET, DELETE | GET：run（全列，含受理时冻结的 `settingsSnapshot`：`global` / `workflow` / `effective` 三层，见「三层设置与快照」）+ run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage / run_results 外键级联，连同运行目录），running 时 409 |
+| /api/runs/[id] | GET, DELETE | GET：`{ run, nodes, rounds }`——run 是全列，含受理时冻结的 `settingsSnapshot`（`global` / `workflow` / `effective` 三层，见「三层设置与快照」）与 `graph`（受理时冻结的图，ADR-0018；早于该列的运行是空图 `{version:1,nodes:[],edges:[]}`，形状与校验见 `src/lib/run-graph.ts`），`nodes` 是 run_nodes 全量（节点的最新状态），`rounds` 是 run_node_rounds 全量（每个节点的每一次执行一行，回放与抽屉只读它）；DELETE：删除单个已结束运行（run_nodes / run_node_rounds / run_events / node_usage / run_results 外键级联，连同运行目录），running 时 409 |
 | /api/runs/[id]/files?path= | GET | 只读预览已结束运行目录内的 UTF-8 文本文件（执行中 409；路径收敛在该 run 的 run_dir 内；256KB 按完整字符截断，二进制或非法 UTF-8 为 415）；运行详情看输入与产物正文的唯一通道（ADR-0012） |
-| /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
+| /api/runs/[id]/events | GET | SSE：`event: snapshot`（`{ run, nodes, rounds }` 全量，与 GET /api/runs/[id] 同一形状；三者任一变化就重发）、`event: log`（run_events 增量，行带 `sessionId`，据此把事件归到轮）、`event: end`（终态且静默三拍后关闭）；连接即发一次 snapshot，事件从 id=0 起逐条回放再跟增量 |
 | /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
 | /api/uploads | POST | multipart 单文件 → 存 `data/uploads/<uuid>/<原名>`，返回 PortValue(file) |
 | /api/settings | GET, PUT | 全局设置单文档 `SettingsDocument`（`modelApiKeyEnv`、`modelBaseUrl`、`credentialRefs[]`、`mcpServers[]`、`disabledTools[]`、`toggles`（五键全量，只发部分键时其余取默认，非布尔 400）、`defaultInstructions`（≤ 65536 字节，非字符串 400，空串合法））；写入口整份校验 |
@@ -55,10 +55,11 @@ src/
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
 - 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
 - 运行之间并行且互相独立：同一个工作流可同时发起多次运行，跨运行状态一律按 runId 隔离（工作区目录、子进程、globalThis 上的取消/进程/输入表）。唯一的准入闸门在 `startRun`：同时 running 的运行数达 `MAX_CONCURRENT_RUNS`（16）即返回 429 而不排队——每个运行是一整个 node+tsx+dsh 子进程，队列归外部调用方管。仓库内付费批量脚本实行全有或全撤：任一项被拒时取消并等齐同批已经受理的运行后才报错。
-- 多路运行的界面契约：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running&pageSize=100`，一页取完不翻页），点击深链 `/workflows/<id>?runId=<runId>` 精确跟随那一路；画布运行条在同一工作流多路并行时出现切换器，「运行」按钮在运行中仍可再次发起（发起后运行条切到新的一路，旧的经切换器回看）；运行详情的「回画布看动画」同样带 runId 深链。
+- 运行页是看一次运行的唯一地方（ADR-0018）：`/runs/<id>` 只读画受理时冻结进 `runs.graph` 的图（从不回查 `workflow_nodes` / `workflow_edges`，早于该决定的运行拿到空图，同一条渲染路径），底部时间轴一节点一行、一轮一段（段来自 `run_node_rounds`），事件按 `run_events.session_id` 落在所属段上；单一时间光标经纯函数 `visualsAt(t)` 推出任一时刻每个节点处于哪一轮、什么状态、哪些连线已激活，进行中默认钉在「现在」跟 SSE、往回拖即暂停跟随，已结束默认停在 `finishedAt`，事件被清理后退化为轮次级；点节点开抽屉看**光标所在那一轮**的轨迹、输入输出与快照。多路并行的切换在导航与运行列表上：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running&pageSize=100`，一页取完不翻页），每一路深链 `/runs/<runId>`；工作流卡片的「运行中」徽标链到按该工作流筛选的运行列表。编辑器只编排与发起——运行对话框受理成功即跳 `/runs/<runId>`，画布上没有运行条、没有并行切换器、没有 `?runId=` 深链。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。全部输入物化到 `workspace/inputs/<节点id>/`——文件拷原件，文字物化为 `<节点名>.md`、JSON 为 `<节点名>.json`，提示里只给路径不内联（ADR-0012）；Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
-- 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
+- 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`，每条 `run_events` 行带 `session_id`（`events.ts` 的通用落库与 `action.ts` 自插的 `usage` 事件两处都写），事件据此归到轮；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
 - 专用工作流调用入口可注册完成门禁；门禁核对最终产物后，引擎在同一事务内把完成证据写进 run 元数据、把精确 UTF-8 结果写进 `run_results`，随后才把运行标为 success。工作区与事件清理不删除持久业务结果；删除 run 时由外键级联删除。
+- 清理的保留分层（ADR-0018）：轮次行分骨架（轮次、会话、起止、终态、出口、错误）与重载荷（`inputs` / `outputs` / `snapshot`）。events 目标删 `run_events`（按事件自己的 `ts` 够龄），并把**够龄运行**的轮次行与 `run_nodes` 行上那三个重载荷列一起置空（`run_nodes` 上那三列是最新一轮的副本，不一起清就仍会整行经 `/api/runs/[id]` 返回），**保留骨架**——回放退化到轮次级仍要有依据；runs 目标与单条删除才随 `runs` 级联删掉整行。置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不按「该运行有够龄事件行」算：免费的输入→输出运行与首个事件之前就失败的 Action 都没有 `run_events` 行，按事件推运行集合会把它们的重载荷永远留在库里。预览与真做共用同一份统计，两者报出的行数逐字相同。快照被清空后轨迹面板退回显示技能 slug，是这条策略的既定代价。
 
 ## 引擎实现规范（DeepSeek Harness）
 
@@ -78,7 +79,18 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   Tool），`startRun` 与专用入口都把它映射成 422。运行受理、Tool 物化和稍后启动的每个 Action 都
   消费同一对象；共享库的并发保存只影响下一次运行。Skill 正文仍按下条的活链接契约读取，并在各
   Action 会话启动前把当时可读的工作区投影全文写进节点快照；受理边界先验证并持有全部 Skill 投影，
-  库内删除不会在运行与子进程完全收束前拆掉链接目标。
+  库内删除不会在运行与子进程完全收束前拆掉链接目标。图同样在这一刻冻结：`buildRunGraph(resolved)`
+  与 `runs` 行同一事务写进 `runs.graph`（ADR-0018），运行页只画它。
+- **一次执行一行轮次（ADR-0018）**：`run_node_rounds` 的 `(run_id, node_id, round)` 唯一，记这一轮的
+  会话、起止、终态、所走出口、错误与本轮自己的 `inputs` / `outputs` / `snapshot`。Action 的一轮由
+  `runActionNode` 一进门 insert 骨架行（running + startedAt + inputs，排在任何会抛的准备步骤之前，
+  快照渲染完再补），收束时写终态；输入节点、输出节点与被跳过的节点由 `runner.ts` 落成起止同刻的一行。
+  取消、整运行失败、启动对账与 `runActionNode` 抛出这四条路径都要收口——仍 running 的轮次行改写成对应
+  终态，被批量跳过的 pending 节点各补一行零时长 `skipped`。Action 侧的成功收口带条件 `status = 'running'`
+（`settleRoundIfRunning`）：取消可能在它等最后一次 sessionOutput / closeSession 时到达，先到的终态赢。重入把整个环体一起推进，但轮次号按**节点**
+  取自己的下一个未用值（`NodeState.usedRound + 1`）：嵌套或重叠的回边会让内环已经跑过第 N 轮的节点被
+  外环再次重置，一律取「触发重入那个节点的轮次 + 1」就会撞唯一键。`run_nodes` 继续是节点的最新状态行，
+  不再承担轮次历史；重入耗尽不是一轮，只在 `run_nodes` 上留终态、时刻与 error。
 - **三层设置与快照（ADR-0016）**：全局设置是基线，工作流设置声明本工作流有什么，Action 只在其中
   收窄；Action 从不开关插件。合成规则：开关 `effectiveToggles(global.toggles, workflow.settings.toggles)`
   （工作流只写要覆盖的键）；MCP = 全局登记且启用 ∩ 工作流子集（子集里登记表已没有的名字静默忽略）；

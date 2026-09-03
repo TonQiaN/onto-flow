@@ -37,6 +37,7 @@
 - [ ] 没有新增第五种删除保护。四种是：四个可被引用库经 `usedByNames()` 答 409；workflow DELETE 的运行中守卫；folder DELETE 的重名守卫；run DELETE 经 `monitor/cleanup.ts` 的 `deleteRun` 拒绝运行中
 - [ ] 没有手写引用 join：`src/server/references.ts` 是唯一 join 引用关系的模块；Skill / Tool 的引用方是**工作流**（`workflow_skills` / `workflow_tools`，detail「技能集」/「Tool 集」，href 指向工作流设置页），Action 的预载与可见 Tool 不是引用、不进删除保护
 - [ ] 破坏性路径仍只在 `src/server/monitor/cleanup.ts`；没有第二处删 `run_events` / `runs` / `data/runs/<id>`
+- [ ] 清理的保留分层没变（A round row has a skeleton and a payload）：events 目标删 `run_events` 并把 `run_node_rounds` **与 `run_nodes`** 的 `inputs` / `outputs` / `snapshot` 一起置空（后者是最新一轮的副本，漏了就仍整行经 `/api/runs/[id]` 返回），**不删行**；置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不是「该运行有够龄事件行」——免费的输入→输出运行与首个事件前就失败的 Action 没有事件行，同样要被置空并计进预览；runs 目标与 `deleteRun` 才随 `runs` 级联删掉整行；预览与真做用同一份统计（被置空的轮次行数 / 节点行数，以及级联的轮次行数）
 - [ ] 文件夹路径一律用 `isFolderEntityKind` 守门；工作流没有进文件夹（ADR-0005）
 
 ## 4. 路由与客户端边界（Conventions）
@@ -58,12 +59,15 @@
 - [ ] 运行在准入时冻结定义（`resolveWorkflow` 一次事件循环内取完：图、Action、模型、端口、工作流指令与设置、技能集、Tool 集、每个 Action 的预载与可见 Tool），后续节点没有再回查共享库；`runs.settingsSnapshot` 与 runs 行同一事务写入，组合的开关 / MCP / Tool 插件都从冻结对象合成
 - [ ] 预载没有绕过上游手势：`buildPrompt` 在正文前每个预载技能一行 `/<slug>`，没有把 SKILL.md 正文拼进 prompt，也没有在会话创建窗口里注册技能（A Skill is a directory…）
 - [ ] 运行绝不停留在 `running`：新增的终态路径与 `executeRun` / `cancelRun` / `failWholeRun` / `reconcileOrphanRuns` 一致；`cancelled` 与 `failed` 仍是两个终态，前者 `run.error` 为 null
+- [ ] 轮次行也绝不停留在 `running`（A run never stays `running`, and neither does a round）：上面四条路径加 `runner.ts` 对 `runActionNode` 抛出的 catch，都经 `engine/rounds.ts` 把仍 running 的 `run_node_rounds` 行收口成对应终态，并给被批量跳过的 pending 节点各补一行零时长 `skipped`；`runActionNode` 的骨架行 insert 仍是函数第一条语句，排在任何会抛的准备步骤之前，它的成功收口仍走带 `status = 'running'` 条件的 `settleRoundIfRunning`（取消赶在收束前落下时先到的终态赢）
+- [ ] 重入的轮次号按**节点**取自己的下一个未用值（`NodeState.usedRound + 1`），没有回到「触发重入那个节点的轮次 + 1」——嵌套 / 重叠回边会据此撞 `(run_id, node_id, round)` 唯一键；输入 / 输出 / 被跳过的节点同样各占一行轮次（ADR-0018）
 - [ ] 子进程收束失败时运行被隔离（留在 `activeRuns`、保留进程句柄），预览 / 清理 / 删除 / 新运行容量 fail-closed
-- [ ] 会话事件到达即写 `run_events`（两个 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写
+- [ ] 看一次运行只有 `/runs/<id>`（ADR-0018）：它只读受理时冻结的 `runs.graph`，不回查 `workflow_nodes` / `workflow_edges`；编辑器没有运行条、并行切换器与 `?runId=` 深链，发起后跳运行页；导航「运行中」面板每一路深链 `/runs/<id>`
+- [ ] 会话事件到达即写 `run_events`（两个 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写；每条新写入的行都带 `session_id`（`events.ts` 的通用落库与 `action.ts` 自插的 `usage` 事件两处都要写）
 - [ ] 用量按 chunk 求和、`outputTokens` 已含推理，没有把推理另算一桶；费用在写入时按到达时刻定价，未知模型为 0 而不是猜价
 - [ ] 每运行组合没有 stdout logger（stdout 属于协议）；`dshHome` / `agentsHome` 钉在运行目录内；节点步数上限仍在
 - [ ] 声明的产物必须真在盘上；模型说写了不算证据（ADR-0008）
-- [ ] 压缩摘要的用量仍经 `compaction/summary` 记成 `node_usage` 行 `compaction:<seq>`、进 `run_nodes.cost`，Trace 不把它算成 assistant 消息（它有自己的 span）；提交阶段失败那次无法计费是已知例外（Compaction summary usage arrives on `compaction/summary`）
+- [ ] 压缩摘要的用量仍经 `compaction/summary` 记成 `node_usage` 行 `compaction:<seq>`、进 `run_nodes.cost`；提交阶段失败那次无法计费是已知例外（Compaction summary usage arrives on `compaction/summary`）
 - [ ] 搜索三件套只在生效的 `toggles.webSearch` 为真时挂、全局默认关；改了别的开关行也只挂目录标了那个键的行（DeepSeek search is off by default）
 - [ ] `TMPDIR=<run>/tmp` 与 spill root `<run>/home/spill` 仍钉在运行目录内；`spill-policy.maxInlineBytes`、`tool-todo.allowParallelInProgress`、`tool-fs-search.sampleOverCapGlobResults` 三个隐性必填键没被删（`TMPDIR` is pinned / Every composition row is decided in three places）
 - [ ] `agent-instructions.maxBytes` 仍是 `INSTRUCTIONS_BATCH_MAX_BYTES`（两份 64 KiB 指令上限之和 + 帧余量），没有改回上游 base 的 65536——那会让全局默认指令在合计超限时被静默丢掉（Global settings are one JSON document）

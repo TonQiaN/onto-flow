@@ -111,39 +111,92 @@ function cleanWorkspaces(cutoff: number, beforeDays: number, dryRun: boolean): C
 // ---------------- events ----------------
 
 /**
- * 删 N 天前的 run_events 行（进行中的运行不动）。bytes 是 payload 文本长度的估算，
- * 真删之后跑一次 VACUUM 把空间还给文件系统。
+ * 删 N 天前的 run_events 行（进行中的运行不动），并把够龄运行的轮次行与节点行上三个重载荷列
+ *（inputs / outputs / snapshot）置空。
+ *
+ * 行本身不删：轮次行的骨架（轮次、会话、起止、终态、出口、错误）每行几十字节，是事件清理后
+ * 回放退化到轮次级仍要保留的依据；能省下空间的是那三列（ADR-0018）。`run_nodes` 上的同名三列
+ * 是最新一轮的副本，不一起清就仍会整行经 `/api/runs/[id]` 返回，等于没清。
+ *
+ * **置空的资格按运行算**（已终态且 `finished_at` 早于截止），不是按「该运行有够龄事件行」算：
+ * 免费的输入→输出运行没有任何 `run_events` 行，首个事件之前就失败的 Action 也没有，
+ * 按事件推运行集合会把这些运行的重载荷永远留在库里，预览里也永远看不到它们。
+ * bytes 是被删事件 payload 与被置空各列的文本长度估算，真删之后跑一次 VACUUM
+ * 把空间还给文件系统。
  */
 function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): CleanupResult {
   const activeIds = activeRunExecutionIds();
-  const activeFilter =
+  const activeFilter = (column: ReturnType<typeof sql>) =>
     activeIds.length === 0
       ? sql``
-      : sql`and e.run_id not in (${sql.join(
+      : sql`and ${column} not in (${sql.join(
           activeIds.map((id) => sql`${id}`),
           sql`, `,
         )})`;
+  // 够龄且已收束的运行——置空重载荷的唯一资格判据，预览与真做共用这一份。
+  const eligibleRuns = sql`
+      select r.id
+      from runs r
+      where r.status <> 'running' and r.finished_at is not null and r.finished_at < ${cutoff}
+        ${activeFilter(sql`r.id`)}
+    `;
   const stat = db.get<{ count: number; bytes: number }>(sql`
       select count(*) as count,
         coalesce(sum(length(cast(coalesce(e.payload, '') as blob))), 0) as bytes
       from run_events e
       join runs r on r.id = e.run_id
       where e.ts < ${cutoff} and r.status <> 'running'
-        ${activeFilter}
+        ${activeFilter(sql`e.run_id`)}
+    `);
+  // 轮次行只清三列，因此只统计还带着载荷的那些行；重复清理不会把同一行数两次。
+  const roundStat = db.get<{ count: number; bytes: number }>(sql`
+      select count(*) as count,
+        coalesce(sum(
+          length(cast(coalesce(d.inputs, '') as blob))
+          + length(cast(coalesce(d.outputs, '') as blob))
+          + length(cast(coalesce(d.snapshot, '') as blob))
+        ), 0) as bytes
+      from run_node_rounds d
+      where d.run_id in (${eligibleRuns})
+        and (d.inputs is not null or d.outputs is not null or d.snapshot is not null)
+    `);
+  // run_nodes 的三列是最新一轮的副本，同一资格下一起清；同样只数还带着载荷的行。
+  const nodeStat = db.get<{ count: number; bytes: number }>(sql`
+      select count(*) as count,
+        coalesce(sum(
+          length(cast(coalesce(n.inputs, '') as blob))
+          + length(cast(coalesce(n.outputs, '') as blob))
+          + length(cast(coalesce(n.snapshot, '') as blob))
+        ), 0) as bytes
+      from run_nodes n
+      where n.run_id in (${eligibleRuns})
+        and (n.inputs is not null or n.outputs is not null or n.snapshot is not null)
     `);
   const count = stat?.count ?? 0;
-  const bytes = stat?.bytes ?? 0;
+  const rounds = roundStat?.count ?? 0;
+  const nodes = nodeStat?.count ?? 0;
+  const bytes = (stat?.bytes ?? 0) + (roundStat?.bytes ?? 0) + (nodeStat?.bytes ?? 0);
 
   let vacuumNote = "";
-  if (!dryRun && count > 0) {
+  if (!dryRun && count + rounds + nodes > 0) {
     db.run(sql`
       delete from run_events where id in (
         select e.id
         from run_events e
         join runs r on r.id = e.run_id
         where e.ts < ${cutoff} and r.status <> 'running'
-          ${activeFilter}
+          ${activeFilter(sql`e.run_id`)}
       )
+    `);
+    db.run(sql`
+      update run_node_rounds set inputs = null, outputs = null, snapshot = null
+      where run_id in (${eligibleRuns})
+        and (inputs is not null or outputs is not null or snapshot is not null)
+    `);
+    db.run(sql`
+      update run_nodes set inputs = null, outputs = null, snapshot = null
+      where run_id in (${eligibleRuns})
+        and (inputs is not null or outputs is not null or snapshot is not null)
     `);
     try {
       db.run(sql`vacuum`);
@@ -154,8 +207,9 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
   }
 
   const detail =
-    `${beforeDays} 天前的事件明细 ${count} 条（payload 约 ${formatBytes(bytes)}）；` +
-    `运行与节点记录保留，只是不再能回看逐条日志${vacuumNote}`;
+    `${beforeDays} 天前的事件明细 ${count} 条，另清空 ${rounds} 行轮次、${nodes} 个节点的` +
+    `输入输出与快照（合计约 ${formatBytes(bytes)}）；运行、节点与轮次骨架保留，` +
+    `只是不再能回看逐条日志与那几轮的输入输出${vacuumNote}`;
 
   return { target: "events", affected: { count, bytes }, deleted: !dryRun, detail };
 }
@@ -163,8 +217,8 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
 // ---------------- runs ----------------
 
 /**
- * 删 N 天前的运行整条记录：run_nodes / run_events / node_usage / run_results 由外键级联清除
- * （db/index.ts 开了 foreign_keys=ON），另外一并删掉它们的工作区目录。
+ * 删 N 天前的运行整条记录：run_nodes / run_node_rounds / run_events / node_usage / run_results
+ * 由外键级联清除（db/index.ts 开了 foreign_keys=ON），另外一并删掉它们的工作区目录。
  */
 function cleanRuns(cutoff: number, beforeDays: number, dryRun: boolean): CleanupResult {
   const activeIds = activeRunExecutionIds();
@@ -191,6 +245,7 @@ function cleanRuns(cutoff: number, beforeDays: number, dryRun: boolean): Cleanup
   // 影响面按 eligible CTE 一次聚合；不能随历史规模退化成每个 run 三次同步 count。
   const detailStat = db.get<{
     nodes: number;
+    rounds: number;
     events: number;
     usage: number;
     results: number;
@@ -203,10 +258,11 @@ function cleanRuns(cutoff: number, beforeDays: number, dryRun: boolean): Cleanup
     )
     select
       (select count(*) from run_nodes n where n.run_id in (select id from eligible)) as nodes,
+      (select count(*) from run_node_rounds d where d.run_id in (select id from eligible)) as rounds,
       (select count(*) from run_events e where e.run_id in (select id from eligible)) as events,
       (select count(*) from node_usage u where u.run_id in (select id from eligible)) as usage,
       (select count(*) from run_results x where x.run_id in (select id from eligible)) as results
-  `) ?? { nodes: 0, events: 0, usage: 0, results: 0 };
+  `) ?? { nodes: 0, rounds: 0, events: 0, usage: 0, results: 0 };
 
   const bytes = [...targets.values()].reduce(
     (sum, target) => sum + dirStat(target.absolutePath).bytes,
@@ -231,8 +287,8 @@ function cleanRuns(cutoff: number, beforeDays: number, dryRun: boolean): Cleanup
 
   const detail =
     `${beforeDays} 天前的运行 ${count} 次（级联 ${detailStat?.nodes ?? 0} 个节点、` +
-    `${detailStat?.events ?? 0} 条事件、${detailStat?.usage ?? 0} 条用量明细、` +
-    `${detailStat?.results ?? 0} 份持久结果，` +
+    `${detailStat?.rounds ?? 0} 行轮次、${detailStat?.events ?? 0} 条事件、` +
+    `${detailStat?.usage ?? 0} 条用量明细、${detailStat?.results ?? 0} 份持久结果，` +
     `含工作区约 ${formatBytes(bytes)}）；不可恢复，运行历史与成本统计都会少掉这些数据`;
 
   return { target: "runs", affected: { count, bytes }, deleted: !dryRun, detail };
@@ -241,8 +297,8 @@ function cleanRuns(cutoff: number, beforeDays: number, dryRun: boolean): Cleanup
 // ---------------- 单个运行 ----------------
 
 /**
- * 删除单个已结束的运行：runs 行（run_nodes / run_events / node_usage / run_results 外键级联）
- * 加工作区目录。对外暴露运行 API 后，调用方要能清理自己发起的运行，e2e 也靠它
+ * 删除单个已结束的运行：runs 行（run_nodes / run_node_rounds / run_events / node_usage /
+ * run_results 外键级联）加工作区目录。对外暴露运行 API 后，调用方要能清理自己发起的运行，e2e 也靠它
  * 收走测试运行。与 cleanRuns 同属本模块这条破坏性路径，纪律一致：
  * 执行器仍持有的运行永不动、目录先收敛进 data/runs 再删。
  */

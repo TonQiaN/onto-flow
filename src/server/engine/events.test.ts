@@ -8,7 +8,7 @@ import { usageCostCny } from "../pricing";
 const sqlite = new Database(":memory:");
 sqlite.exec(`
 CREATE TABLE run_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT,
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT, session_id TEXT,
   ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
 );
 CREATE TABLE node_usage (
@@ -89,6 +89,30 @@ describe("工具结果事件关联", () => {
       { tool: "read", status: "ok", callId: "call-read" },
       { tool: "read_image", status: "ok", callId: "call-image" },
     ]);
+  });
+});
+
+describe("事件的会话归属", () => {
+  it("每条落库的事件都带 session_id，回放才能把它归到轮", () => {
+    recordSessionEvent(context, {
+      type: "assistant/message",
+      data: { message: { content: [{ type: "text", text: "在读题" }] } },
+    });
+    recordSessionEvent(context, {
+      type: "tool/call",
+      data: { callId: "call-1", name: "read", arguments: "{}" },
+    });
+    recordSessionEvent(context, { type: "turn/end", data: { reason: { kind: "stop" } } });
+    recordSessionEvent(context, {
+      type: "compaction/prune",
+      data: { shadowedSeqs: [1, 2], shadowedTokenCount: 10 },
+    });
+
+    const rows = sqlite
+      .prepare("select type, session_id as sessionId from run_events order by id")
+      .all() as Array<{ type: string; sessionId: string | null }>;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.sessionId === "session-1")).toBe(true);
   });
 });
 

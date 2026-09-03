@@ -8,6 +8,7 @@
  * 卡片点开进画布；「设置」进 /workflows/[id]/settings（指令、开关、MCP 子集、技能集与 Tool 集，
  * ADR-0016）；「信息」抽屉里改名称/描述、看被引用与修订历史。
  */
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 import {
@@ -54,7 +55,7 @@ function WorkflowsLibrary() {
   const [createBusy, setCreateBusy] = useState(false);
   const [detail, setDetail] = useState<WorkflowItem | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
-  /** 有进行中运行的工作流 id 集合（卡片「运行中」徽标；点卡片进画布会自动重连动画） */
+  /** 有进行中运行的工作流 id 集合（卡片「运行中」徽标，点它进筛好的运行列表；看运行只在运行页，ADR-0018） */
   const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
@@ -230,10 +231,15 @@ function WorkflowsLibrary() {
                   {workflow.name}
                 </h2>
                 {runningIds.has(workflow.id) && (
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600">
+                  <Link
+                    href={`/runs?workflowId=${encodeURIComponent(workflow.id)}&status=running`}
+                    onClick={(e) => e.stopPropagation()}
+                    title="查看这个工作流进行中的运行"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-600 hover:bg-emerald-100"
+                  >
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
                     运行中
-                  </span>
+                  </Link>
                 )}
                 <div className="flex shrink-0 gap-1" onClick={(e) => e.stopPropagation()}>
                   <button

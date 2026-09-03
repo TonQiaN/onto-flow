@@ -2,6 +2,7 @@
  * 运行历史 UI 的共享类型与格式化工具。
  * 时间字段经 JSON 序列化后可能是 ISO 字符串或毫秒数，统一用 toMillis 归一。
  */
+import type { RunGraph } from "@/lib/run-graph";
 import type { PortValue } from "@/lib/values";
 
 /** cancelled 是人为终结的独立终态，区别于 failed */
@@ -84,6 +85,8 @@ export interface RunRow {
   runDir: string | null;
   /** 受理时冻结的三层设置（RunSettingsSnapshot，ADR-0016）；早于三层设置的运行为 null */
   settingsSnapshot?: unknown;
+  /** 受理时冻结的图（ADR-0018）；早于本列的运行是空图，走同一条渲染路径 */
+  graph: RunGraph;
   startedAt: string | number;
   finishedAt: string | number | null;
 }
@@ -115,11 +118,48 @@ export interface RunNodeRow extends NodeUsage {
   finishedAt: string | number | null;
 }
 
+/**
+ * run_node_rounds 表行：一个节点的一次执行（ADR-0018）。
+ *
+ * 回放只看它——`run_nodes` 一个节点只有一行，回边重入会覆盖那一行的起止、出口、产物与
+ * 快照。抽屉的「轨迹 / 输入输出 / 快照」三个页签一律读光标所在那一轮的这一行。
+ * 输入 / 输出 / 被跳过的节点没有会话与快照，起止同一时刻。
+ */
+export interface RunNodeRoundRow {
+  id: string;
+  runId: string;
+  nodeId: string;
+  /** 第几轮，0 起；重入把整个环体的轮次一起推进，轮次号按节点单调递增 */
+  round: number;
+  sessionId: string | null;
+  status: "running" | "success" | "failed" | "cancelled" | "skipped";
+  startedAt: string | number;
+  finishedAt: string | number | null;
+  /** 本轮走出的具名出口；无具名出口为 null */
+  exitName: string | null;
+  error: string | null;
+  inputs: Record<string, unknown> | null;
+  outputs: Record<string, unknown> | null;
+  snapshot?: unknown;
+}
+
+/** GET /api/runs/[id] 的响应；SSE 的 snapshot 帧是同一份数据 */
+export interface RunDetailResponse {
+  run: RunRow;
+  nodes: RunNodeRow[];
+  rounds: RunNodeRoundRow[];
+}
+
 /** run_events 表行（SSE event: log 的 data） */
 export interface RunEventRow {
   id: number;
   runId: string;
   nodeId: string | null;
+  /**
+   * 事件所属的会话，据此把事件归到轮（第 0 轮是节点 id，之后是 `<节点id>#<轮次+1>`）。
+   * 早于 ADR-0018 的历史行为 null。
+   */
+  sessionId?: string | null;
   ts: string | number;
   type: string;
   payload: Record<string, unknown> | null;

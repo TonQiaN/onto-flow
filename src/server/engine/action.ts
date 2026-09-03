@@ -32,6 +32,7 @@ import {
   unpersistedUsageForSession,
   type EventSinkContext,
 } from "./events";
+import { attachRoundSnapshot, beginRound, settleRoundIfRunning } from "./rounds";
 // 循环依赖（runner → action → runner）在 ESM 下安全：isRunCancelled 是函数声明，
 // 且只在 runActionNode 执行期调用，那时 runner 模块体早已求值完毕。
 import { isRunCancelled } from "./runner";
@@ -139,6 +140,21 @@ actionUsageStore.ontoflowUnsettledUsageRollups = unsettledUsageRollups;
 export async function runActionNode(ctx: ActionNodeContext): Promise<ActionNodeResult> {
   assertNotCancelled(ctx.runId);
 
+  // 一个 Action 的一轮执行独占一次会话（CONTEXT.md「会话」）。循环的每一轮都是
+  // 全新的会话，不靠会话记忆延续，因此 id 要带上轮次。
+  const sessionId = ctx.round === 0 ? ctx.node.id : `${ctx.node.id}#${ctx.round + 1}`;
+  // 一进门就开出这一轮的骨架行（ADR-0018）：下面校验产物路径、读技能投影都可能抛，
+  // 排在它们之后这一轮在时间轴上就根本不存在，回放里节点永远停在等待。快照要等提示
+  // 渲染完才有，随后补进来。
+  beginRound({
+    runId: ctx.runId,
+    nodeId: ctx.node.id,
+    round: ctx.round,
+    sessionId,
+    startedAt: new Date(),
+    inputs: ctx.inputs as unknown as Record<string, unknown>,
+  });
+
   const { action, model, ports, preloads } = ctx.definition;
 
   const outputPorts = ports.outputs.map((port) => ({
@@ -190,11 +206,10 @@ export async function runActionNode(ctx: ActionNodeContext): Promise<ActionNodeR
     },
     renderedPrompt,
   };
+  // run_nodes 只留最新一轮，回边重入会覆盖它的起止、出口、产物与快照；这一轮自己的
+  // 快照同时补进 run_node_rounds，抽屉才能读到光标所在那一轮（ADR-0018）。
   writeSnapshot(ctx, snapshot);
 
-  // 一个 Action 的一轮执行独占一次会话（CONTEXT.md「会话」）。循环的每一轮都是
-  // 全新的会话，不靠会话记忆延续，因此 id 要带上轮次。
-  const sessionId = ctx.round === 0 ? ctx.node.id : `${ctx.node.id}#${ctx.round + 1}`;
   // 登记要先于 runTurn：事件从第一个 chunk 起就会回调过来。
   ctx.sinks.set(sessionId, {
     runId: ctx.runId,
@@ -274,6 +289,19 @@ export async function runActionNode(ctx: ActionNodeContext): Promise<ActionNodeR
   const outputs = collectArtifacts(action.name, produced, ctx.workspace);
   // 会话用完即关：同一子进程里后续节点各自开自己的会话，互不可见。
   await ctx.proc.closeSession(sessionId);
+  // 这一轮到此为止：收口轮次行，记下本轮真正走出的出口与产物。失败路径的收口在
+  // runner.ts 的 catch 里（超时、缺结构化输出、产物不在盘上、会话关不掉都从这里抛出去）。
+  // 只在这一行仍是 running 时写：取消可能在上面那两次 await 之间到达并先写下 cancelled，
+  // 无条件写成功会把取消覆盖掉。
+  settleRoundIfRunning({
+    runId: ctx.runId,
+    nodeId: ctx.node.id,
+    round: ctx.round,
+    status: "success",
+    finishedAt: new Date(),
+    exitName: selectedExit,
+    outputs: outputs as unknown as Record<string, unknown>,
+  });
   return { outputs, selectedExit };
 }
 
@@ -355,11 +383,19 @@ function toSnapshotPort(port: {
   };
 }
 
+/**
+ * 快照落到两处：run_nodes 的那一列（节点的最新状态）与本轮的 run_node_rounds 行
+ *（抽屉按光标所在轮读的那一行）。同一事务，回放不会看到只有半边的一轮。
+ */
 function writeSnapshot(ctx: ActionNodeContext, snapshot: RunSnapshot): void {
-  db.update(runNodes)
-    .set({ snapshot: snapshot as unknown as Record<string, unknown> })
-    .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
-    .run();
+  const json = snapshot as unknown as Record<string, unknown>;
+  db.transaction((tx) => {
+    tx.update(runNodes)
+      .set({ snapshot: json })
+      .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
+      .run();
+    attachRoundSnapshot({ runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round }, json, tx);
+  });
 }
 
 /**
@@ -689,6 +725,8 @@ function refreshUnsettledUsageRollup(state: UnsettledUsageRollup): void {
         .values({
           runId: state.runId,
           nodeId: state.nodeId,
+          // 事件的会话归属：回放按 session_id 把事件落到所属那一轮的段上（ADR-0018）。
+          sessionId: state.sessionId,
           ts: new Date(),
           type: "usage",
           payload,

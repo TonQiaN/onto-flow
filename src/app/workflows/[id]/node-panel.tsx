@@ -9,7 +9,8 @@
  * - 整个面板可折叠，把宽度让给画布。
  */
 import { useMemo, useState } from "react";
-import { actionPorts, typeColor, type ActionItem, type ObjectTypeRow } from "./types";
+import { typeColor } from "@/components/canvas/node-model";
+import { actionPorts, type ActionItem, type ObjectTypeRow } from "./types";
 
 export const ACTION_DRAG_MIME = "application/ontoflow-action";
 

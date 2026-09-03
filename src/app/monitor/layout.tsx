@@ -1,10 +1,10 @@
 "use client";
 
 /**
- * 监控台外壳：深色控制台顶栏 + 五标签导航。
+ * 监控台外壳：深色控制台顶栏 + 四标签导航。
  *
  * 标签状态走**子路由**（不是 query），因此每个标签都是可直接分享的链接：
- * /monitor（总览）、/monitor/sessions、/monitor/trace、/monitor/logs、/monitor/health。
+ * /monitor（总览）、/monitor/sessions、/monitor/logs、/monitor/health。
  */
 
 import Link from "next/link";
@@ -14,7 +14,6 @@ import type { ReactNode } from "react";
 const TABS: Array<{ href: string; label: string; hint: string }> = [
   { href: "/monitor", label: "总览", hint: "实时指标与 24 小时趋势" },
   { href: "/monitor/sessions", label: "实时会话", hint: "进行中的 Action 会话" },
-  { href: "/monitor/trace", label: "Trace", hint: "单次运行的全链路追踪" },
   { href: "/monitor/logs", label: "日志检索", hint: "跨运行的事件检索" },
   { href: "/monitor/health", label: "系统健康", hint: "引擎与数据清理" },
 ];

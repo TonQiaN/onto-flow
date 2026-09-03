@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from "react";
 import type { PortValue } from "@/lib/values";
-import { KIND_LABEL, type PortKind } from "./types";
+import { KIND_LABEL, type PortKind } from "@/components/canvas/node-model";
 
 export interface RunInputSpec {
   nodeId: string;

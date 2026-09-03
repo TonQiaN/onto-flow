@@ -345,14 +345,8 @@ export default function MonitorOverviewPage() {
                   </div>
                   <div className="flex shrink-0 flex-col items-end gap-0.5 text-[11px]">
                     <Link
-                      href={`/monitor/trace?runId=${encodeURIComponent(run.id)}`}
-                      className="text-sky-400 underline transition-colors hover:text-sky-300"
-                    >
-                      Trace
-                    </Link>
-                    <Link
                       href={`/runs/${run.id}`}
-                      className="text-zinc-500 underline transition-colors hover:text-zinc-300"
+                      className="text-sky-400 underline transition-colors hover:text-sky-300"
                     >
                       运行详情
                     </Link>

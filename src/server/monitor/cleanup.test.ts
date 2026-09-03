@@ -31,7 +31,15 @@ CREATE TABLE run_results (
   run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
   kind TEXT NOT NULL, content TEXT NOT NULL, sha256 TEXT NOT NULL, created_at INTEGER NOT NULL
 );
-CREATE TABLE run_nodes (run_id TEXT NOT NULL);
+CREATE TABLE run_nodes (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, started_at INTEGER,
+  inputs TEXT, outputs TEXT, snapshot TEXT
+);
+CREATE TABLE run_node_rounds (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  node_id TEXT NOT NULL, round INTEGER NOT NULL, started_at INTEGER NOT NULL,
+  inputs TEXT, outputs TEXT, snapshot TEXT
+);
 CREATE TABLE run_events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, ts INTEGER NOT NULL, payload TEXT);
 CREATE TABLE node_usage (run_id TEXT NOT NULL);
 `);
@@ -61,7 +69,7 @@ function storedRunDir(absolutePath: string): string {
 beforeEach(() => {
   activeRuns.clear();
   sqlite.exec(
-    "DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM run_results; DELETE FROM runs",
+    "DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_node_rounds; DELETE FROM run_nodes; DELETE FROM run_results; DELETE FROM runs",
   );
   fs.rmSync(testPaths.dataDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(testPaths.dataDir, "runs"), { recursive: true });
@@ -208,8 +216,15 @@ describe("运行工作区清理", () => {
     }
     activeRuns.add("run-active");
     sqlite.exec(`
-      INSERT INTO run_nodes (run_id) VALUES ('run-a'), ('run-a'), ('run-b'),
-        ('run-active'), ('run-active'), ('run-active'), ('run-active'), ('run-active');
+      INSERT INTO run_nodes (id, run_id) VALUES
+        ('na1', 'run-a'), ('na2', 'run-a'), ('nb1', 'run-b'),
+        ('nc1', 'run-active'), ('nc2', 'run-active'), ('nc3', 'run-active'),
+        ('nc4', 'run-active'), ('nc5', 'run-active');
+      INSERT INTO run_node_rounds (id, run_id, node_id, round, started_at) VALUES
+        ('d1', 'run-a', 'n1', 0, ${old}), ('d2', 'run-a', 'n1', 1, ${old}),
+        ('d3', 'run-a', 'n2', 0, ${old}),
+        ('d4', 'run-b', 'n1', 0, ${old}), ('d5', 'run-b', 'n1', 1, ${old}),
+        ('d6', 'run-active', 'n1', 0, ${old}), ('d7', 'run-active', 'n1', 1, ${old});
       INSERT INTO run_events (run_id, ts, payload) VALUES
         ('run-a', ${old}, '{}'), ('run-b', ${old}, '{}'), ('run-active', ${old}, '{}');
       INSERT INTO node_usage (run_id) VALUES
@@ -223,13 +238,104 @@ describe("运行工作区清理", () => {
 
     const preview = runCleanup({ target: "runs", beforeDays: 1, dryRun: true });
     expect(preview.affected.count).toBe(2);
-    expect(preview.detail).toContain("级联 3 个节点、2 条事件、4 条用量明细、2 份持久结果");
+    expect(preview.detail).toContain(
+      "级联 3 个节点、5 行轮次、2 条事件、4 条用量明细、2 份持久结果",
+    );
 
     const deleted = runCleanup({ target: "runs", beforeDays: 1, dryRun: false });
     expect(deleted.affected).toEqual(preview.affected);
+    // 预览与真删共用同一份影响面统计：文案逐字相同才说明「先看再删」看到的就是删掉的。
+    expect(deleted.detail).toBe(preview.detail);
     expect(sqlite.prepare("select id from runs order by id").all()).toEqual([{ id: "run-active" }]);
     expect(sqlite.prepare("select run_id as runId from run_results").all()).toEqual([
       { runId: "run-active" },
     ]);
+    // 预览报的 5 行轮次正是被级联删掉的那 5 行，只剩活动运行自己的两行。
+    expect(sqlite.prepare("select count(*) as count from run_node_rounds").get()).toEqual({
+      count: 2,
+    });
+  });
+
+  it("没有事件行的运行同样被置空：资格按运行算，不是按「有事件行」算", () => {
+    // 免费的输入→输出运行不产生任何 run_events 行；按事件推运行集合，它的重载荷就永远清不掉。
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, run_dir, started_at, finished_at) values (?, 'workflow-silent', 'success', NULL, ?, ?)",
+      )
+      .run("run-silent", old, old);
+    // 仍在跑的运行不动，够龄判据是 finished_at 而不是 started_at。
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, run_dir, started_at, finished_at) values (?, 'workflow-silent', 'running', NULL, ?, NULL)",
+      )
+      .run("run-live", old);
+    sqlite.exec(`
+      INSERT INTO run_node_rounds (id, run_id, node_id, round, started_at, inputs, outputs, snapshot)
+        VALUES ('s1', 'run-silent', 'in-1', 0, ${old}, '{"value":1}', '{"value":1}', NULL),
+               ('s2', 'run-silent', 'out-1', 0, ${old}, '{"value":1}', '{"value":1}', NULL),
+               ('s3', 'run-live', 'in-1', 0, ${old}, '{"value":9}', NULL, NULL);
+      INSERT INTO run_nodes (id, run_id, started_at, inputs, outputs, snapshot)
+        VALUES ('sn1', 'run-silent', ${old}, '{"value":1}', '{"value":1}', NULL),
+               ('sn2', 'run-live', ${old}, '{"value":9}', NULL, NULL);
+    `);
+
+    const preview = runCleanup({ target: "events", beforeDays: 1, dryRun: true });
+    expect(preview.detail).toContain("事件明细 0 条，另清空 2 行轮次、1 个节点的输入输出与快照");
+
+    const deleted = runCleanup({ target: "events", beforeDays: 1, dryRun: false });
+    expect(deleted.detail.startsWith(preview.detail)).toBe(true);
+    expect(deleted.affected).toEqual(preview.affected);
+    expect(
+      sqlite.prepare("select id, inputs, outputs from run_node_rounds order by id").all(),
+    ).toEqual([
+      { id: "s1", inputs: null, outputs: null },
+      { id: "s2", inputs: null, outputs: null },
+      // 进行中的运行一列没动。
+      { id: "s3", inputs: '{"value":9}', outputs: null },
+    ]);
+    expect(sqlite.prepare("select id, inputs from run_nodes order by id").all()).toEqual([
+      { id: "sn1", inputs: null },
+      { id: "sn2", inputs: '{"value":9}' },
+    ]);
+  });
+
+  it("事件清理只清空轮次行的三个重载荷列，骨架保留，dryRun 与真做一致", () => {
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, run_dir, started_at, finished_at) values (?, 'workflow-events', 'success', NULL, ?, ?)",
+      )
+      .run("run-events", old, old);
+    sqlite.exec(`
+      INSERT INTO run_events (run_id, ts, payload) VALUES ('run-events', ${old}, '{}');
+      INSERT INTO run_node_rounds (id, run_id, node_id, round, started_at, inputs, outputs, snapshot)
+        VALUES ('e1', 'run-events', 'n1', 0, ${old}, '{"a":1}', '{"b":2}', '{"c":3}'),
+               ('e2', 'run-events', 'n1', 1, ${old}, NULL, NULL, NULL);
+      INSERT INTO run_nodes (id, run_id, started_at, inputs, outputs, snapshot)
+        VALUES ('ne1', 'run-events', ${old}, '{"a":1}', '{"b":2}', '{"c":3}');
+    `);
+
+    const preview = runCleanup({ target: "events", beforeDays: 1, dryRun: true });
+    expect(preview.detail).toContain("事件明细 1 条，另清空 1 行轮次、1 个节点的输入输出与快照");
+
+    const deleted = runCleanup({ target: "events", beforeDays: 1, dryRun: false });
+    // 预览与真做共用同一份统计：真做只在末尾多一句 VACUUM 结果，前面必须逐字相同。
+    expect(deleted.detail.startsWith(preview.detail)).toBe(true);
+    expect(deleted.affected).toEqual(preview.affected);
+    expect(sqlite.prepare("select count(*) as count from run_events").get()).toEqual({ count: 0 });
+    // 骨架行数不变，只有三个重载荷列被置空——回放退化到轮次级仍有依据。
+    expect(
+      sqlite.prepare("select id, inputs, outputs, snapshot from run_node_rounds order by id").all(),
+    ).toEqual([
+      { id: "e1", inputs: null, outputs: null, snapshot: null },
+      { id: "e2", inputs: null, outputs: null, snapshot: null },
+    ]);
+    // run_nodes 上的三列是最新一轮的副本，不一起清就仍会整行经 /api/runs/[id] 返回。
+    expect(
+      sqlite.prepare("select inputs, outputs, snapshot from run_nodes where id = 'ne1'").get(),
+    ).toEqual({ inputs: null, outputs: null, snapshot: null });
+    // 再跑一次不会把已经清空的行重复计数。
+    expect(runCleanup({ target: "events", beforeDays: 1, dryRun: true }).detail).toContain(
+      "事件明细 0 条，另清空 0 行轮次、0 个节点",
+    );
   });
 });

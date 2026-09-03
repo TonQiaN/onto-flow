@@ -13,11 +13,12 @@ import { fetchAllPages } from "@/components/library/fetch-all-pages";
  *   收窄到本工作流的技能集与 Tool 集（ADR-0016），集合在 /workflows/[id]/settings 里改
  * - 保存 = PUT 整图（toNodeDto/toEdgeDto 白名单序列化，剥 `_` 瞬态字段）；
  *   只发 name/description/nodes/edges，指令、开关、MCP 子集与两个集合由服务端沿用现值
- * - 运行 = 自动保存 → 收集输入 → POST run → useRunVisuals 订阅 SSE，经 Context 下发运行态
+ * - 运行 = 自动保存 → 收集输入 → POST run → 跳运行页；编辑器只编排与发起，
+ *   看运行只有 /runs/<id> 一个地方（ADR-0018）
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import {
   Background,
   BackgroundVariant,
@@ -44,14 +45,13 @@ import "@xyflow/react/dist/style.css";
 import { readError } from "@/components/library";
 import type { ValidationIssue } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
+import { CanvasStateProvider, type ConnectingState } from "@/components/canvas/canvas-state";
+import { FlowEdgeView } from "@/components/canvas/flow-edge";
+import { FlowNodeView } from "@/components/canvas/flow-node";
+import type { FlowNode } from "@/components/canvas/node-model";
 import { ActionInspector, type InspectorTarget } from "./action-inspector";
-import { CanvasStateProvider, type ConnectingState } from "./canvas-state";
-import { FlowEdgeView } from "./flow-edge";
-import { FlowNodeView } from "./flow-node";
 import { ACTION_DRAG_MIME, NodePanel } from "./node-panel";
-import { RunBar } from "./run-bar";
 import { RunDialog, type RunInputSpec } from "./run-dialog";
-import { RunVisualsProvider, useRunVisuals } from "./use-run-visuals";
 import {
   actionMeta,
   actionPortSnapshots,
@@ -63,7 +63,6 @@ import {
   toNodeDto,
   type ActionDto,
   type ActionItem,
-  type FlowNode,
   type ModelRow,
   type ObjectTypeRow,
   type SkillRow,
@@ -126,16 +125,7 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [runSpecs, setRunSpecs] = useState<RunInputSpec[] | null>(null);
   const [submittingRun, setSubmittingRun] = useState(false);
-  /** 运行态（SSE 订阅、五态视觉、自动跟随、取消）统一由该 hook 提供 */
-  const { visuals, subscribe: subscribeRun, reset: resetRun } = useRunVisuals();
-  const routeRunId = useSearchParams().get("runId");
-  /** 本工作流当前进行中的全部运行：喂给运行条的并行切换器 */
-  const [runsInFlight, setRunsInFlight] = useState<
-    Array<{ id: string; startedAt: string | number }>
-  >([]);
-  /** 轮询闭包读运行态要走 ref，否则依赖会让 interval 每拍重建 */
-  const visualsRef = useRef(visuals);
-  visualsRef.current = visuals;
+  const router = useRouter();
 
   // 画布交互态
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
@@ -641,18 +631,6 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   );
 
   // ---------- 运行 ----------
-  // 运行态由 use-run-visuals 统一订阅并经 Context 下发给节点与连线（边流动动画需要读上下游状态）
-
-  /** 切换要跟随的运行：订阅 + 把 runId 写回 URL（深链可分享、刷新不丢） */
-  const switchRun = useCallback(
-    (runId: string) => {
-      subscribeRun(runId);
-      const url = new URL(window.location.href);
-      url.searchParams.set("runId", runId);
-      window.history.replaceState(null, "", url);
-    },
-    [subscribeRun],
-  );
 
   const handleRun = useCallback(async () => {
     const result = await persist();
@@ -697,100 +675,14 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         }
         setRunSpecs(null);
         setBanner(null);
-        switchRun(body.runId);
+        // 看运行只有运行页一个地方：受理成功即跳走，编辑器不跟随（ADR-0018）
+        router.push(`/runs/${encodeURIComponent(body.runId)}`);
       } finally {
         setSubmittingRun(false);
       }
     },
-    [workflowId, switchRun],
+    [workflowId, router],
   );
-
-  // 进行中运行清单：驱动运行条的并行切换器，也承担挂载时重连——
-  // SSE snapshot 会全量回放状态，动画/跟随/运行条整套恢复。
-  // 没有深链时跟最新一条；此后只在画面上没有活运行时自动补跟，不抢用户选择。
-  useEffect(() => {
-    let disposed = false;
-    const load = async () => {
-      try {
-        // 运行列表是分页信封；并行上限 16 路，pageSize=100 一页取完，切换器不做翻页
-        const res = await fetch(
-          `/api/runs?workflowId=${encodeURIComponent(workflowId)}&status=running&pageSize=100`,
-          { cache: "no-store" },
-        );
-        if (!res.ok || disposed) return;
-        const data = (await res.json()) as {
-          items?: Array<{ id: string; startedAt: string | number }>;
-        };
-        const rows = data.items;
-        if (disposed || !Array.isArray(rows)) return;
-        setRunsInFlight(rows.map((row) => ({ id: row.id, startedAt: row.startedAt })));
-        const current = visualsRef.current;
-        const followedLive =
-          current.runId !== null && (current.runStatus === "running" || current.visible);
-        if (!routeRunId && !followedLive && rows[0]?.id && rows[0].id !== current.runId) {
-          subscribeRun(rows[0].id);
-        }
-      } catch {
-        // 清单拉不到不影响画布本身；下一拍再试
-      }
-    };
-    void load();
-    const timer = setInterval(() => void load(), 5000);
-    return () => {
-      disposed = true;
-      clearInterval(timer);
-    };
-  }, [workflowId, routeRunId, subscribeRun]);
-
-  // 同一个画布内从导航切换运行时只有 query string 变化，组件不会重挂载。
-  // 直接观察 useSearchParams，让每个新的 runId 都重新做归属校验并切换 SSE。
-  useEffect(() => {
-    if (!routeRunId) return;
-    let disposed = false;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
-    const retry = () => {
-      if (disposed) return;
-      retryTimer = setTimeout(() => void followDeepLink(), 2000);
-    };
-    const followDeepLink = async () => {
-      try {
-        const detailRes = await fetch(`/api/runs/${encodeURIComponent(routeRunId)}`, {
-          cache: "no-store",
-        });
-        if (!detailRes.ok && detailRes.status !== 404) {
-          if (disposed) return;
-          setBanner("运行详情暂时无法读取，已保留链接并正在重试");
-          retry();
-          return;
-        }
-        const detail = detailRes.ok
-          ? ((await detailRes.json()) as { run?: { workflowId?: string } })
-          : null;
-        const belongsToWorkflow = detail?.run?.workflowId === workflowId;
-        if (disposed) return;
-        if (belongsToWorkflow) {
-          setBanner(null);
-          subscribeRun(routeRunId);
-          return;
-        }
-        resetRun();
-        const url = new URL(window.location.href);
-        url.searchParams.delete("runId");
-        window.history.replaceState(null, "", url);
-        setBanner("链接中的运行不存在或不属于当前工作流，已停止跟随");
-      } catch {
-        if (disposed) return;
-        // 短暂网络错误保留深链并自动重试；只有 404 或确认属于别的工作流才清 URL。
-        setBanner("运行详情暂时无法读取，已保留链接并正在重试");
-        retry();
-      }
-    };
-    void followDeepLink();
-    return () => {
-      disposed = true;
-      if (retryTimer) clearTimeout(retryTimer);
-    };
-  }, [workflowId, routeRunId, subscribeRun, resetRun]);
 
   // ---------- 键盘 ----------
   useEffect(() => {
@@ -864,324 +756,317 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         onAddIO={addIONode}
       />
 
-      {/* 运行态经 Context 下发：节点读自身状态，连线读上下游状态（边流动动画必需） */}
-      <RunVisualsProvider value={visuals}>
-        <div className="flex min-w-0 flex-1 flex-col">
-          <header className="flex items-center gap-3 border-b border-zinc-200 bg-white px-4 py-2.5">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex items-center gap-3 border-b border-zinc-200 bg-white px-4 py-2.5">
+          <Link
+            href="/workflows"
+            className="shrink-0 text-sm text-zinc-400 hover:text-zinc-700"
+            title="返回工作流列表"
+          >
+            ← 列表
+          </Link>
+          <input
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              markDirty();
+            }}
+            onBlur={() => {
+              if (dirty) void persist();
+            }}
+            placeholder="工作流名称"
+            title="点击直接改名，失焦自动保存"
+            className="w-60 rounded-md border border-transparent px-2 py-1 text-sm font-semibold text-zinc-900 hover:border-zinc-200 focus:border-zinc-400 focus:outline-none"
+          />
+
+          <SaveState saving={saving} dirty={dirty} savedAt={savedAt} />
+
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             <Link
-              href="/workflows"
-              className="shrink-0 text-sm text-zinc-400 hover:text-zinc-700"
-              title="返回工作流列表"
+              href={`/workflows/${encodeURIComponent(workflowId)}/settings`}
+              title="工作流级指令、插件开关、MCP 子集、技能集与 Tool 集"
+              className="rounded-md px-2.5 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
             >
-              ← 列表
+              工作流设置
             </Link>
-            <input
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                markDirty();
+            <button
+              type="button"
+              onClick={() => void persist()}
+              disabled={saving}
+              className="rounded-md border border-zinc-300 bg-white px-3.5 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
+            >
+              {saving ? "保存中…" : "保存"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleRun()}
+              disabled={saving}
+              className="rounded-md bg-zinc-900 px-3.5 py-1.5 text-sm text-white hover:bg-zinc-700 disabled:opacity-50"
+            >
+              {/* 运行彼此独立，随时可以再开一路；发起后跳到那一路自己的运行页 */}
+              运行
+            </button>
+          </div>
+        </header>
+
+        {banner && (
+          <div className="flex items-start justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+            <span>{banner}</span>
+            <button
+              type="button"
+              onClick={() => setBanner(null)}
+              className="text-red-400 hover:text-red-700"
+            >
+              ×
+            </button>
+          </div>
+        )}
+        {issues.length > 0 && (
+          <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
+            <p className="text-xs font-medium text-amber-800">
+              校验问题（{issues.length}）：点击任意一条定位到画布
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {issues.map((issue, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    onClick={() => locateIssue(issue)}
+                    className="w-full rounded px-1 py-0.5 text-left text-xs text-amber-800 underline decoration-amber-300 decoration-dotted underline-offset-2 hover:bg-amber-100 hover:decoration-amber-700"
+                  >
+                    {issue.message}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div ref={wrapperRef} className="relative min-h-0 flex-1">
+          <CanvasStateProvider value={canvasState}>
+            <ReactFlow
+              edgeTypes={edgeTypes}
+              defaultEdgeOptions={defaultEdgeOptions}
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodesChange={handleNodesChange}
+              onEdgesChange={handleEdgesChange}
+              onConnect={onConnect}
+              onConnectStart={onConnectStart}
+              onConnectEnd={onConnectEnd}
+              isValidConnection={isValidConnection}
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onNodeDoubleClick={(_e, node) => openInspector(node.id)}
+              onNodeDrag={(_e, node) => updateGuides(node)}
+              onNodeDragStop={() => setGuides({ v: [], h: [] })}
+              onNodeContextMenu={(e, node) => {
+                e.preventDefault();
+                const rect = wrapperRef.current?.getBoundingClientRect();
+                setMenu({
+                  x: e.clientX - (rect?.left ?? 0),
+                  y: e.clientY - (rect?.top ?? 0),
+                  nodeId: node.id,
+                });
               }}
-              onBlur={() => {
-                if (dirty) void persist();
+              onPaneContextMenu={(e) => {
+                e.preventDefault();
+                const rect = wrapperRef.current?.getBoundingClientRect();
+                const mouse = e as MouseEvent;
+                setMenu({
+                  x: mouse.clientX - (rect?.left ?? 0),
+                  y: mouse.clientY - (rect?.top ?? 0),
+                  nodeId: null,
+                });
               }}
-              placeholder="工作流名称"
-              title="点击直接改名，失焦自动保存"
-              className="w-60 rounded-md border border-transparent px-2 py-1 text-sm font-semibold text-zinc-900 hover:border-zinc-200 focus:border-zinc-400 focus:outline-none"
-            />
+              onPaneClick={() => setMenu(null)}
+              onMoveStart={() => setMenu(null)}
+              deleteKeyCode={["Backspace", "Delete"]}
+              multiSelectionKeyCode={MULTI_SELECT_KEYS}
+              selectionOnDrag={boxSelect}
+              panOnDrag={boxSelect ? [1] : undefined}
+              snapToGrid={snap}
+              snapGrid={[16, 16]}
+              minZoom={0.2}
+              maxZoom={2}
+              fitView
+              className="bg-zinc-100"
+            >
+              <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
+              <Controls showInteractive={false} />
+              <MiniMap
+                pannable
+                zoomable
+                nodeStrokeWidth={2}
+                nodeColor={(n) => MINIMAP_COLOR[(n as FlowNode).data.kind] ?? "#a1a1aa"}
+                maskColor="rgba(244,244,245,0.7)"
+              />
 
-            <SaveState saving={saving} dirty={dirty} savedAt={savedAt} />
+              {/* 画布小工具条 */}
+              <Panel
+                position="top-right"
+                className="flex items-center gap-1 rounded-lg border border-zinc-200 bg-white/90 p-1 text-xs shadow-sm backdrop-blur"
+              >
+                <ToolButton
+                  active={boxSelect}
+                  title="框选模式：左键拖出选框（关闭时按住 Shift 拖也能框选）"
+                  onClick={() => setBoxSelect((v) => !v)}
+                >
+                  框选
+                </ToolButton>
+                <ToolButton
+                  active={snap}
+                  title="拖动时吸附到 16px 网格"
+                  onClick={() => setSnap((v) => !v)}
+                >
+                  网格吸附
+                </ToolButton>
+                <ToolButton
+                  active={false}
+                  title="缩放到适应全部节点"
+                  onClick={() => void fitView({ duration: 300, padding: 0.2 })}
+                >
+                  适应视图
+                </ToolButton>
+              </Panel>
 
-            {/* 运行状态与详情入口由下方 RunBar 承载，顶栏不再重复 */}
+              {/* 对齐辅助线：只做视觉参考，真正的吸附交给「网格吸附」 */}
+              <ViewportPortal>
+                {guides.v.map((x) => (
+                  <div
+                    key={`v${x}`}
+                    style={{
+                      position: "absolute",
+                      left: x,
+                      top: -50000,
+                      width: 1,
+                      height: 100000,
+                      background: "#f43f5e",
+                      pointerEvents: "none",
+                    }}
+                  />
+                ))}
+                {guides.h.map((y) => (
+                  <div
+                    key={`h${y}`}
+                    style={{
+                      position: "absolute",
+                      top: y,
+                      left: -50000,
+                      height: 1,
+                      width: 100000,
+                      background: "#f43f5e",
+                      pointerEvents: "none",
+                    }}
+                  />
+                ))}
+              </ViewportPortal>
+            </ReactFlow>
+          </CanvasStateProvider>
 
-            <div className="ml-auto flex shrink-0 items-center gap-2">
-              <Link
-                href={`/workflows/${encodeURIComponent(workflowId)}/settings`}
-                title="工作流级指令、插件开关、MCP 子集、技能集与 Tool 集"
-                className="rounded-md px-2.5 py-1.5 text-sm text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900"
-              >
-                工作流设置
-              </Link>
-              <button
-                type="button"
-                onClick={() => void persist()}
-                disabled={saving}
-                className="rounded-md border border-zinc-300 bg-white px-3.5 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
-              >
-                {saving ? "保存中…" : "保存"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleRun()}
-                disabled={saving}
-                className="rounded-md bg-zinc-900 px-3.5 py-1.5 text-sm text-white hover:bg-zinc-700 disabled:opacity-50"
-              >
-                {/* 运行彼此独立，随时可以再开一路；发起后运行条切到新的一路，旧的经切换器回看 */}
-                {visuals.runStatus === "running" ? "再次运行" : "运行"}
-              </button>
+          {/* 空画布引导 */}
+          {nodes.length === 0 && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div className="ff-rise-in max-w-md rounded-xl border border-dashed border-zinc-300 bg-white/80 px-6 py-5 text-center backdrop-blur">
+                <p className="text-sm font-medium text-zinc-700">画布还是空的</p>
+                <ol className="mt-2 space-y-1 text-xs leading-5 text-zinc-500">
+                  <li>1. 从左侧面板拖一个「输入节点」进来，选好对象类型</li>
+                  <li>2. 拖入需要的 Action，把同类型的端口连起来</li>
+                  <li>3. 末端接一个「输出节点」，点右上角「运行」</li>
+                </ol>
+                <p className="mt-3 text-[11px] text-zinc-400">
+                  双击 Action 节点可以直接编辑它引用的 Action（改的是共享实体）
+                </p>
+              </div>
             </div>
-          </header>
+          )}
 
-          <RunBar visuals={visuals} runsInFlight={runsInFlight} onSwitch={switchRun} />
+          {/* 右键菜单 */}
+          {menu && (
+            <div
+              className="ff-rise-in absolute z-40 min-w-44 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg"
+              style={{ left: menu.x, top: menu.y }}
+              onMouseLeave={() => setMenu(null)}
+            >
+              {menuNode ? (
+                <>
+                  <p className="truncate px-3 py-1 text-[11px] text-zinc-400">
+                    {menuNode.data.label}
+                  </p>
+                  {menuNode.data.kind === "action" && (
+                    <MenuItem onClick={() => openInspector(menuNode.id)}>编辑 Action…</MenuItem>
+                  )}
+                  <MenuItem
+                    onClick={() => {
+                      duplicateNode(menuNode.id);
+                      setMenu(null);
+                    }}
+                  >
+                    复制节点
+                    <span className="ml-auto text-[11px] text-zinc-300">⌘D</span>
+                  </MenuItem>
+                  <MenuItem
+                    danger
+                    onClick={() => {
+                      removeNodes(
+                        selectedNodeIds.includes(menuNode.id) ? selectedNodeIds : [menuNode.id],
+                      );
+                      setMenu(null);
+                    }}
+                  >
+                    {selectedNodeIds.length > 1 && selectedNodeIds.includes(menuNode.id)
+                      ? `删除选中的 ${selectedNodeIds.length} 个节点`
+                      : "删除节点"}
+                    <span className="ml-auto text-[11px] text-zinc-300">Del</span>
+                  </MenuItem>
+                </>
+              ) : (
+                <>
+                  <MenuItem
+                    onClick={() => {
+                      setNodes((nds) => nds.map((n) => ({ ...n, selected: true })));
+                      setMenu(null);
+                    }}
+                  >
+                    全选节点
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      void fitView({ duration: 300, padding: 0.2 });
+                      setMenu(null);
+                    }}
+                  >
+                    适应视图
+                  </MenuItem>
+                  <MenuItem
+                    onClick={() => {
+                      setBoxSelect((v) => !v);
+                      setMenu(null);
+                    }}
+                  >
+                    {boxSelect ? "关闭框选模式" : "开启框选模式"}
+                  </MenuItem>
+                </>
+              )}
+            </div>
+          )}
 
-          {banner && (
-            <div className="flex items-start justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
-              <span>{banner}</span>
+          {/* 轻提示 */}
+          {toast && (
+            <div className="ff-rise-in absolute bottom-4 left-1/2 z-40 max-w-lg -translate-x-1/2 rounded-lg border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-xs text-white shadow-lg">
+              {toast}
               <button
                 type="button"
-                onClick={() => setBanner(null)}
-                className="text-red-400 hover:text-red-700"
+                onClick={() => setToast(null)}
+                className="ml-3 text-zinc-400 hover:text-white"
               >
                 ×
               </button>
             </div>
           )}
-          {issues.length > 0 && (
-            <div className="border-b border-amber-200 bg-amber-50 px-4 py-2">
-              <p className="text-xs font-medium text-amber-800">
-                校验问题（{issues.length}）：点击任意一条定位到画布
-              </p>
-              <ul className="mt-1 space-y-0.5">
-                {issues.map((issue, i) => (
-                  <li key={i}>
-                    <button
-                      type="button"
-                      onClick={() => locateIssue(issue)}
-                      className="w-full rounded px-1 py-0.5 text-left text-xs text-amber-800 underline decoration-amber-300 decoration-dotted underline-offset-2 hover:bg-amber-100 hover:decoration-amber-700"
-                    >
-                      {issue.message}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div ref={wrapperRef} className="relative min-h-0 flex-1">
-            <CanvasStateProvider value={canvasState}>
-              <ReactFlow
-                edgeTypes={edgeTypes}
-                defaultEdgeOptions={defaultEdgeOptions}
-                nodes={nodes}
-                edges={edges}
-                nodeTypes={nodeTypes}
-                onNodesChange={handleNodesChange}
-                onEdgesChange={handleEdgesChange}
-                onConnect={onConnect}
-                onConnectStart={onConnectStart}
-                onConnectEnd={onConnectEnd}
-                isValidConnection={isValidConnection}
-                onDrop={onDrop}
-                onDragOver={onDragOver}
-                onNodeDoubleClick={(_e, node) => openInspector(node.id)}
-                onNodeDrag={(_e, node) => updateGuides(node)}
-                onNodeDragStop={() => setGuides({ v: [], h: [] })}
-                onNodeContextMenu={(e, node) => {
-                  e.preventDefault();
-                  const rect = wrapperRef.current?.getBoundingClientRect();
-                  setMenu({
-                    x: e.clientX - (rect?.left ?? 0),
-                    y: e.clientY - (rect?.top ?? 0),
-                    nodeId: node.id,
-                  });
-                }}
-                onPaneContextMenu={(e) => {
-                  e.preventDefault();
-                  const rect = wrapperRef.current?.getBoundingClientRect();
-                  const mouse = e as MouseEvent;
-                  setMenu({
-                    x: mouse.clientX - (rect?.left ?? 0),
-                    y: mouse.clientY - (rect?.top ?? 0),
-                    nodeId: null,
-                  });
-                }}
-                onPaneClick={() => setMenu(null)}
-                onMoveStart={() => setMenu(null)}
-                deleteKeyCode={["Backspace", "Delete"]}
-                multiSelectionKeyCode={MULTI_SELECT_KEYS}
-                selectionOnDrag={boxSelect}
-                panOnDrag={boxSelect ? [1] : undefined}
-                snapToGrid={snap}
-                snapGrid={[16, 16]}
-                minZoom={0.2}
-                maxZoom={2}
-                fitView
-                className="bg-zinc-100"
-              >
-                <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-                <Controls showInteractive={false} />
-                <MiniMap
-                  pannable
-                  zoomable
-                  nodeStrokeWidth={2}
-                  nodeColor={(n) => MINIMAP_COLOR[(n as FlowNode).data.kind] ?? "#a1a1aa"}
-                  maskColor="rgba(244,244,245,0.7)"
-                />
-
-                {/* 画布小工具条 */}
-                <Panel
-                  position="top-right"
-                  className="flex items-center gap-1 rounded-lg border border-zinc-200 bg-white/90 p-1 text-xs shadow-sm backdrop-blur"
-                >
-                  <ToolButton
-                    active={boxSelect}
-                    title="框选模式：左键拖出选框（关闭时按住 Shift 拖也能框选）"
-                    onClick={() => setBoxSelect((v) => !v)}
-                  >
-                    框选
-                  </ToolButton>
-                  <ToolButton
-                    active={snap}
-                    title="拖动时吸附到 16px 网格"
-                    onClick={() => setSnap((v) => !v)}
-                  >
-                    网格吸附
-                  </ToolButton>
-                  <ToolButton
-                    active={false}
-                    title="缩放到适应全部节点"
-                    onClick={() => void fitView({ duration: 300, padding: 0.2 })}
-                  >
-                    适应视图
-                  </ToolButton>
-                </Panel>
-
-                {/* 对齐辅助线：只做视觉参考，真正的吸附交给「网格吸附」 */}
-                <ViewportPortal>
-                  {guides.v.map((x) => (
-                    <div
-                      key={`v${x}`}
-                      style={{
-                        position: "absolute",
-                        left: x,
-                        top: -50000,
-                        width: 1,
-                        height: 100000,
-                        background: "#f43f5e",
-                        pointerEvents: "none",
-                      }}
-                    />
-                  ))}
-                  {guides.h.map((y) => (
-                    <div
-                      key={`h${y}`}
-                      style={{
-                        position: "absolute",
-                        top: y,
-                        left: -50000,
-                        height: 1,
-                        width: 100000,
-                        background: "#f43f5e",
-                        pointerEvents: "none",
-                      }}
-                    />
-                  ))}
-                </ViewportPortal>
-              </ReactFlow>
-            </CanvasStateProvider>
-
-            {/* 空画布引导 */}
-            {nodes.length === 0 && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="ff-rise-in max-w-md rounded-xl border border-dashed border-zinc-300 bg-white/80 px-6 py-5 text-center backdrop-blur">
-                  <p className="text-sm font-medium text-zinc-700">画布还是空的</p>
-                  <ol className="mt-2 space-y-1 text-xs leading-5 text-zinc-500">
-                    <li>1. 从左侧面板拖一个「输入节点」进来，选好对象类型</li>
-                    <li>2. 拖入需要的 Action，把同类型的端口连起来</li>
-                    <li>3. 末端接一个「输出节点」，点右上角「运行」</li>
-                  </ol>
-                  <p className="mt-3 text-[11px] text-zinc-400">
-                    双击 Action 节点可以直接编辑它引用的 Action（改的是共享实体）
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* 右键菜单 */}
-            {menu && (
-              <div
-                className="ff-rise-in absolute z-40 min-w-44 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 text-sm shadow-lg"
-                style={{ left: menu.x, top: menu.y }}
-                onMouseLeave={() => setMenu(null)}
-              >
-                {menuNode ? (
-                  <>
-                    <p className="truncate px-3 py-1 text-[11px] text-zinc-400">
-                      {menuNode.data.label}
-                    </p>
-                    {menuNode.data.kind === "action" && (
-                      <MenuItem onClick={() => openInspector(menuNode.id)}>编辑 Action…</MenuItem>
-                    )}
-                    <MenuItem
-                      onClick={() => {
-                        duplicateNode(menuNode.id);
-                        setMenu(null);
-                      }}
-                    >
-                      复制节点
-                      <span className="ml-auto text-[11px] text-zinc-300">⌘D</span>
-                    </MenuItem>
-                    <MenuItem
-                      danger
-                      onClick={() => {
-                        removeNodes(
-                          selectedNodeIds.includes(menuNode.id) ? selectedNodeIds : [menuNode.id],
-                        );
-                        setMenu(null);
-                      }}
-                    >
-                      {selectedNodeIds.length > 1 && selectedNodeIds.includes(menuNode.id)
-                        ? `删除选中的 ${selectedNodeIds.length} 个节点`
-                        : "删除节点"}
-                      <span className="ml-auto text-[11px] text-zinc-300">Del</span>
-                    </MenuItem>
-                  </>
-                ) : (
-                  <>
-                    <MenuItem
-                      onClick={() => {
-                        setNodes((nds) => nds.map((n) => ({ ...n, selected: true })));
-                        setMenu(null);
-                      }}
-                    >
-                      全选节点
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() => {
-                        void fitView({ duration: 300, padding: 0.2 });
-                        setMenu(null);
-                      }}
-                    >
-                      适应视图
-                    </MenuItem>
-                    <MenuItem
-                      onClick={() => {
-                        setBoxSelect((v) => !v);
-                        setMenu(null);
-                      }}
-                    >
-                      {boxSelect ? "关闭框选模式" : "开启框选模式"}
-                    </MenuItem>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* 轻提示 */}
-            {toast && (
-              <div className="ff-rise-in absolute bottom-4 left-1/2 z-40 max-w-lg -translate-x-1/2 rounded-lg border border-zinc-800 bg-zinc-900 px-3.5 py-2 text-xs text-white shadow-lg">
-                {toast}
-                <button
-                  type="button"
-                  onClick={() => setToast(null)}
-                  className="ml-3 text-zinc-400 hover:text-white"
-                >
-                  ×
-                </button>
-              </div>
-            )}
-          </div>
         </div>
-      </RunVisualsProvider>
+      </div>
 
       {runSpecs && (
         <RunDialog

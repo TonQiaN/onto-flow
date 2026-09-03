@@ -1,25 +1,34 @@
 "use client";
 
+/**
+ * 运行页：看一次运行的唯一地方（ADR-0018）。三段式——概要栏、只读画布、时间轴，
+ * 点节点或时间轴行名开右侧抽屉。
+ *
+ * 单一时间光标 `t` 串起全部视觉：`visualsAt(t)` 推出每个节点处于哪一轮、什么状态、
+ * 哪些连线已激活，抽屉的三个页签读光标所在那一轮。进行中的运行把光标钉在「现在」跟着
+ * SSE 走（cursor === null），往回拖即暂停跟随，「跟随」按钮回到现在；已结束的运行光标
+ * 默认停在 finishedAt，沿时间轴拖动回放。
+ */
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  WORKFLOW_RUN_SOURCE,
   durationText,
   formatCost,
   formatDateTime,
   formatTokens,
   toMillis,
-  totalUsage,
   type NodeStatus,
-  type RunEventRow,
-  type RunNodeRow,
-  type RunRow,
 } from "../lib";
 import { StatusBadge } from "../status-badge";
 import { CancelButton } from "./cancel-button";
-import { EventLog } from "./event-log";
-import { NodeCard } from "./node-card";
+import { NodeDrawer } from "./node-drawer";
+import { RunCanvas } from "./run-canvas";
+import { RunTimeline } from "./run-timeline";
 import { SettingsSnapshotView } from "./settings-snapshot-view";
+import { useRunStream, type RunDetail } from "./use-run-stream";
+import { currentRoundOf, visualsAt } from "./visuals-at";
 
 /** 节点状态计数的展示顺序与文案 */
 const NODE_STATUS_LABELS: Array<[NodeStatus, string]> = [
@@ -31,196 +40,135 @@ const NODE_STATUS_LABELS: Array<[NodeStatus, string]> = [
   ["skipped", "已跳过"],
 ];
 
+/** 回放推进的节拍：每 100ms 推进 100ms × 倍速 */
+const PLAYBACK_TICK_MS = 100;
+
+/** 画布通用入口有中文名；调用入口按 `imports.invocation.source` 的原值展示，平台不替它们起名 */
+function sourceLabel(run: RunDetail): string {
+  const source = run.imports?.invocation?.source ?? WORKFLOW_RUN_SOURCE;
+  return source === WORKFLOW_RUN_SOURCE ? "画布发起" : source;
+}
+
+/** 相对项目根目录的工作区路径；受理前还没有运行目录 */
+function workspacePath(runDir: string | null): string {
+  if (!runDir) return "尚未生成";
+  return `${runDir.replaceAll("\\", "/").replace(/\/+$/, "")}/workspace`;
+}
+
 export default function RunDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params?.id;
+  const { run, nodes, rounds, events, loading, error, graphError, connection, now, reload } =
+    useRunStream(id);
 
-  const [run, setRun] = useState<RunRow | null>(null);
-  const [nodes, setNodes] = useState<RunNodeRow[]>([]);
-  const [events, setEvents] = useState<RunEventRow[]>([]);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [connected, setConnected] = useState(false);
-  const seenEventIds = useRef(new Set<number>());
+  /** null = 跟着时间窗右端走：进行中就是「现在」，已结束就是收束时刻 */
+  const [cursor, setCursor] = useState<{ t: number } | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!id) return;
-    let cancelled = false;
-    let es: EventSource | null = null;
-    seenEventIds.current = new Set();
-    setRun(null);
-    setNodes([]);
-    setEvents([]);
-    setLoadError(null);
-    setLoading(true);
-
-    // SSE：snapshot 更新概要与节点，log 去重后追加，end 断开。
-    // 历史 run 同样连一次拿 snapshot + 回放 log 到 end（契约保证回放）。
-    // EventSource 掉线自动重连会重发 snapshot 并回放全部 log，靠 seenEventIds 去重。
-    const openStream = () => {
-      es = new EventSource(`/api/runs/${id}/events`);
-      es.onopen = () => {
-        if (!cancelled) setConnected(true);
-      };
-      es.addEventListener("snapshot", (e) => {
-        if (cancelled) return;
-        try {
-          const data = JSON.parse((e as MessageEvent).data) as {
-            run: RunRow;
-            nodes: RunNodeRow[];
-          };
-          setRun(data.run);
-          setNodes(data.nodes ?? []);
-        } catch {
-          // 忽略坏帧
-        }
-      });
-      es.addEventListener("log", (e) => {
-        if (cancelled) return;
-        try {
-          const row = JSON.parse((e as MessageEvent).data) as RunEventRow;
-          if (seenEventIds.current.has(row.id)) return;
-          seenEventIds.current.add(row.id);
-          setEvents((prev) => [...prev, row]);
-        } catch {
-          // 忽略坏帧
-        }
-      });
-      es.addEventListener("end", () => {
-        setConnected(false);
-        es?.close();
-      });
-      es.onerror = () => {
-        // 交给 EventSource 自动重连；重复回放已由 seenEventIds 去重
-        if (!cancelled) setConnected(false);
-      };
-    };
-
-    void (async () => {
-      try {
-        const res = await fetch(`/api/runs/${id}`, { cache: "no-store" });
-        const data = await res.json();
-        if (cancelled) return;
-        if (!res.ok) {
-          setLoadError(typeof data?.error === "string" ? data.error : "加载运行详情失败");
-          return;
-        }
-        setRun(data.run as RunRow);
-        setNodes((data.nodes ?? []) as RunNodeRow[]);
-        openStream();
-      } catch {
-        if (!cancelled) setLoadError("网络错误，加载运行详情失败");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      es?.close();
-    };
+    setCursor(null);
+    setPlaying(false);
+    setSelectedNodeId(null);
   }, [id]);
 
-  // 取消成功后立刻拉一次，不等 SSE 下一轮轮询
-  const reload = useCallback(async () => {
-    if (!id) return;
-    try {
-      const res = await fetch(`/api/runs/${id}`, { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) return;
-      setRun(data.run as RunRow);
-      setNodes((data.nodes ?? []) as RunNodeRow[]);
-    } catch {
-      // 忽略：SSE 仍会推最新 snapshot
-    }
-  }, [id]);
+  const windowStart = run ? (toMillis(run.startedAt) ?? 0) : 0;
+  const finishedAt = run ? toMillis(run.finishedAt) : null;
+  const windowEnd = Math.max(finishedAt ?? now, windowStart);
+  const t = cursor?.t ?? windowEnd;
+  const running = run?.status === "running";
+  const following = cursor === null && running === true;
 
-  // 运行中每秒重渲染一次，让“已耗时”走动
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (run?.status !== "running") return;
-    const timer = setInterval(() => setTick((n) => n + 1), 1000);
-    return () => clearInterval(timer);
-  }, [run?.status]);
+  const visuals = useMemo(
+    () => visualsAt({ run, nodes, rounds, events, t }),
+    [run, nodes, rounds, events, t],
+  );
 
-  const sortedNodes = useMemo(() => {
-    return [...nodes].sort((a, b) => {
-      const ta = toMillis(a.startedAt);
-      const tb = toMillis(b.startedAt);
-      if (ta == null && tb == null) return 0;
-      if (ta == null) return 1;
-      if (tb == null) return -1;
-      return ta - tb;
+  const seek = useCallback(
+    (next: number) => {
+      setCursor({ t: Math.min(Math.max(next, windowStart), windowEnd) });
+    },
+    [windowStart, windowEnd],
+  );
+
+  const follow = useCallback(() => {
+    setCursor(null);
+    setPlaying(false);
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    setPlaying((prev) => {
+      if (prev) return false;
+      // 从头播：光标本来钉在右端时，先把它放到起点，否则第一拍就到头
+      setCursor((current) => current ?? { t: windowStart });
+      return true;
     });
-  }, [nodes]);
+  }, [windowStart]);
 
-  const nodeLabels = useMemo(() => new Map(nodes.map((n) => [n.nodeId, n.label])), [nodes]);
+  useEffect(() => {
+    if (!playing) return;
+    const timer = setInterval(() => {
+      setCursor((prev) => {
+        const next = (prev?.t ?? windowStart) + PLAYBACK_TICK_MS * speed;
+        // 播到时间窗右端就把光标还给「跟随」，进行中的运行随即接上直播
+        return next >= windowEnd ? null : { t: next };
+      });
+    }, PLAYBACK_TICK_MS);
+    return () => clearInterval(timer);
+  }, [playing, speed, windowStart, windowEnd]);
 
-  const usage = useMemo(() => totalUsage(nodes), [nodes]);
+  // 光标回到右端即停止播放（上面的 setCursor(null) 是唯一入口）
+  useEffect(() => {
+    if (playing && cursor === null) setPlaying(false);
+  }, [playing, cursor]);
 
-  const statusCounts = useMemo(() => {
-    const counts = new Map<NodeStatus, number>();
-    for (const n of nodes) counts.set(n.status, (counts.get(n.status) ?? 0) + 1);
-    return NODE_STATUS_LABELS.filter(([s]) => (counts.get(s) ?? 0) > 0).map(([s, label]) => ({
-      status: s,
-      label,
-      count: counts.get(s) ?? 0,
-    }));
-  }, [nodes]);
+  const selectedRound = useMemo(
+    () => (selectedNodeId ? currentRoundOf(rounds, selectedNodeId, t) : null),
+    [rounds, selectedNodeId, t],
+  );
 
-  const started = run ? toMillis(run.startedAt) : null;
-  const finished = run ? toMillis(run.finishedAt) : null;
+  const selectedLabel = useMemo(() => {
+    if (!selectedNodeId) return "";
+    const row = nodes.find((node) => node.nodeId === selectedNodeId);
+    if (row) return row.label;
+    const graphNode = run?.graph.nodes.find((node) => node.id === selectedNodeId);
+    return graphNode?.label ?? selectedNodeId;
+  }, [nodes, run, selectedNodeId]);
+
+  const statusCounts = NODE_STATUS_LABELS.filter(
+    ([status]) => visuals.totals.byStatus[status] > 0,
+  ).map(([status, label]) => ({ status, label, count: visuals.totals.byStatus[status] }));
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-6">
-      <div className="mb-6">
+    // 抽屉是右侧浮层：宽屏时给正文让出等宽的右内边距，时间轴与画布在抽屉开着时仍可操作
+    <div className={`mx-auto max-w-[1600px] px-6 py-5 ${selectedNodeId ? "xl:pr-[35rem]" : ""}`}>
+      <div className="mb-4">
         <Link href="/runs" className="text-sm text-zinc-500 transition-colors hover:text-zinc-900">
           ← 返回运行历史
         </Link>
-        <h1 className="mt-2 text-xl font-semibold text-zinc-900">运行详情</h1>
       </div>
 
-      {loadError ? (
+      {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {loadError}
+          {error}
         </div>
       ) : loading && !run ? (
         <div className="text-sm text-zinc-500">加载中…</div>
       ) : run ? (
-        <div className="space-y-6">
-          {/* 概要 */}
-          <div className="rounded-lg border border-zinc-200 bg-white p-5">
-            <div className="flex flex-wrap items-center gap-3">
+        <div className="space-y-4">
+          <div data-testid="run-summary-bar" className="rounded-lg border border-zinc-200 bg-white">
+            <div className="flex flex-wrap items-center gap-3 px-5 py-4">
               <StatusBadge status={run.status} />
               {run.workflowName && (
                 <span className="font-medium text-zinc-900">{run.workflowName}</span>
               )}
               <span className="font-mono text-xs text-zinc-400">{run.id}</span>
-              <span className="flex min-w-0 items-center gap-1 text-xs text-zinc-400">
-                <span className="shrink-0">工作区</span>
-                <code
-                  data-testid="run-workspace-path"
-                  title="相对 OntoFlow 项目根目录"
-                  className="break-all font-mono text-zinc-500"
-                >
-                  {run.runDir
-                    ? `${run.runDir.replaceAll("\\", "/").replace(/\/+$/, "")}/workspace`
-                    : "尚未生成"}
-                </code>
-              </span>
+              {running && connection === "error" && (
+                <span className="text-xs text-amber-700">实时连接已断开，刷新页面重连</span>
+              )}
               <div className="ml-auto flex items-center gap-4">
-                {run.status === "running" && id && (
-                  <CancelButton runId={id} onCancelled={() => void reload()} />
-                )}
-                {/* 带 runId 深链：多路并行时画布要精确跟到这一条，而不是最新一条 */}
-                {run.status === "running" && (
-                  <Link
-                    href={`/workflows/${encodeURIComponent(run.workflowId)}?runId=${encodeURIComponent(run.id)}`}
-                    className="text-sm text-zinc-500 underline transition-colors hover:text-zinc-900"
-                  >
-                    回画布看动画
-                  </Link>
-                )}
+                {running && id && <CancelButton runId={id} onCancelled={reload} />}
                 <Link
                   href={`/runs?workflowId=${encodeURIComponent(run.workflowId)}`}
                   className="text-sm text-zinc-500 underline transition-colors hover:text-zinc-900"
@@ -229,17 +177,11 @@ export default function RunDetailPage() {
                 </Link>
               </div>
             </div>
-            <dl className="mt-4 grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-3">
+            <dl className="grid grid-cols-2 gap-x-8 gap-y-3 px-5 pb-4 text-sm sm:grid-cols-3 lg:grid-cols-6">
               <div>
                 <dt className="text-xs text-zinc-400">开始时间</dt>
                 <dd className="mt-0.5 text-zinc-700">
-                  {started == null ? "—" : formatDateTime(started)}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-zinc-400">结束时间</dt>
-                <dd className="mt-0.5 text-zinc-700">
-                  {finished == null ? "—" : formatDateTime(finished)}
+                  {windowStart === 0 ? "—" : formatDateTime(windowStart)}
                 </dd>
               </div>
               <div>
@@ -250,28 +192,48 @@ export default function RunDetailPage() {
               </div>
               <div>
                 <dt className="text-xs text-zinc-400">总 token</dt>
-                <dd className="mt-0.5 font-mono text-zinc-700">{formatTokens(usage.tokens)}</dd>
+                <dd className="mt-0.5 font-mono text-zinc-700">
+                  {formatTokens(visuals.totals.tokens)}
+                </dd>
               </div>
               <div>
                 <dt className="text-xs text-zinc-400">总费用</dt>
-                <dd className="mt-0.5 font-mono text-zinc-700">{formatCost(usage.cost)}</dd>
+                <dd className="mt-0.5 font-mono text-zinc-700">
+                  {formatCost(visuals.totals.cost)}
+                </dd>
               </div>
               <div>
-                <dt className="text-xs text-zinc-400">节点（共 {nodes.length}）</dt>
+                <dt className="text-xs text-zinc-400">来源</dt>
+                <dd className="mt-0.5 text-zinc-700">{sourceLabel(run)}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-zinc-400">工作区</dt>
+                <dd
+                  data-testid="run-workspace-path"
+                  title="相对 OntoFlow 项目根目录"
+                  className="mt-0.5 font-mono text-xs break-all text-zinc-500"
+                >
+                  {workspacePath(run.runDir)}
+                </dd>
+              </div>
+              <div className="col-span-2 sm:col-span-3 lg:col-span-6">
+                <dt className="text-xs text-zinc-400">
+                  节点（共 {visuals.totals.nodes}，按光标时刻）
+                </dt>
                 <dd className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-zinc-700">
                   {statusCounts.length === 0
                     ? "—"
-                    : statusCounts.map((s) => (
-                        <span key={s.status} className="whitespace-nowrap">
-                          {s.label}
-                          <span className="ml-1 font-mono">{s.count}</span>
+                    : statusCounts.map((item) => (
+                        <span key={item.status} className="whitespace-nowrap">
+                          {item.label}
+                          <span className="ml-1 font-mono">{item.count}</span>
                         </span>
                       ))}
                 </dd>
               </div>
             </dl>
             {run.error && (
-              <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm break-words whitespace-pre-wrap text-red-700">
+              <div className="mx-5 mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm break-words whitespace-pre-wrap text-red-700">
                 {run.error}
               </div>
             )}
@@ -280,33 +242,58 @@ export default function RunDetailPage() {
           {/* 设置快照：受理时冻结的三层设置（ADR-0016） */}
           <SettingsSnapshotView snapshot={run.settingsSnapshot} />
 
-          {/* 节点时间线 */}
-          <section>
-            <h2 className="mb-3 text-sm font-medium text-zinc-900">节点时间线</h2>
-            {sortedNodes.length === 0 ? (
-              <div className="rounded-lg border border-zinc-200 bg-white px-4 py-8 text-center text-sm text-zinc-500">
-                暂无节点记录
-              </div>
-            ) : (
-              <div className="relative">
-                <div className="absolute top-2 bottom-2 left-[4px] w-px bg-zinc-200" />
-                <div className="space-y-4">
-                  {sortedNodes.map((node) => (
-                    <NodeCard key={node.id} node={node} runStatus={run.status} />
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
+          {graphError && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+              这次运行的冻结图读不出形状（{graphError}），画布留空；时间轴与抽屉不受影响。
+            </div>
+          )}
 
-          {/* 事件日志 */}
-          <section>
-            <EventLog
-              events={events}
-              nodeLabels={nodeLabels}
-              live={connected && run.status === "running"}
+          <div
+            data-testid="run-canvas"
+            className="h-[56vh] min-h-80 overflow-hidden rounded-lg border border-zinc-200"
+          >
+            <RunCanvas
+              graph={run.graph}
+              visuals={visuals}
+              onSelectNode={setSelectedNodeId}
+              onClearSelection={() => setSelectedNodeId(null)}
             />
-          </section>
+          </div>
+
+          <RunTimeline
+            nodes={nodes}
+            rounds={rounds}
+            events={events}
+            windowStart={windowStart}
+            windowEnd={windowEnd}
+            t={t}
+            playing={playing}
+            speed={speed}
+            following={following}
+            canFollow={running === true}
+            selectedNodeId={selectedNodeId}
+            onSeek={seek}
+            onTogglePlay={togglePlay}
+            onSpeed={setSpeed}
+            onFollow={follow}
+            onSelectNode={setSelectedNodeId}
+          />
+
+          {selectedNodeId && (
+            <NodeDrawer
+              key={selectedNodeId}
+              runId={run.id}
+              nodeId={selectedNodeId}
+              label={selectedLabel}
+              status={visuals.nodes[selectedNodeId]?.status ?? "pending"}
+              error={visuals.nodes[selectedNodeId]?.error ?? null}
+              round={selectedRound}
+              live={running === true && selectedRound?.status === "running"}
+              cursorMs={t}
+              onSeek={seek}
+              onClose={() => setSelectedNodeId(null)}
+            />
+          )}
         </div>
       ) : null}
     </div>

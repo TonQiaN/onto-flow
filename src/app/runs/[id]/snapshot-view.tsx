@@ -64,8 +64,15 @@ function PortLine({ ports }: { ports: RunSnapshotPortView[] }) {
  * model / effort），等宽字体、可折叠。Tool 的定义在受理时冻结进 run_results 之外的
  * 运行目录 plugins/，快照只记公名与可见性。
  */
-export function SnapshotView({ snapshot }: { snapshot: unknown }) {
-  const [open, setOpen] = useState(false);
+export function SnapshotView({
+  snapshot,
+  defaultOpen = false,
+}: {
+  snapshot: unknown;
+  /** 抽屉的快照页签本身就是「展开」，进来即铺开；页面内嵌时默认折叠 */
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   const snap = asRunSnapshot(snapshot);
   if (!snap) return null;
 
@@ -73,7 +80,7 @@ export function SnapshotView({ snapshot }: { snapshot: unknown }) {
   const visible = snap.tools.filter((t) => t.visible).length;
 
   return (
-    <div className="mt-3 border-t border-zinc-100 pt-3">
+    <div className={defaultOpen ? "" : "mt-3 border-t border-zinc-100 pt-3"}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
