@@ -227,7 +227,10 @@
 
 **schema（三处）**
 
-1. `runs.graph: text("graph", { mode: "json" })`（可空；早于本批的运行为 null）。形状定义在
+1. `runs.graph: text("graph", { mode: "json" }).notNull().default(<空图>)`，空图即
+   `{ "version": 1, "nodes": [], "edges": [] }`：`db:push` 给早于本批的运行填空图，它们在运行页就是
+   一张没有节点的画布——同一条渲染路径，**没有**「旧运行」分支（AGENTS.md「Stance」）。要看旧运行的
+   过程只能靠抽屉的轨迹与节点列表；不想留就用系统健康页的清理删掉。形状定义在
    `src/lib/run-graph.ts`（纯类型 + 校验函数），见下。
 2. 新表 `run_node_rounds`：一轮执行一行——`{ id, runId, nodeId, round（0 起）, sessionId, status
    （running / success / failed / cancelled）, startedAt, finishedAt, exitName（本轮所走出口；无具名
@@ -236,9 +239,20 @@
    `run_nodes` 一个节点只有一行，回边重入会覆盖它的 `startedAt` / `finishedAt` / `outputs` /
    `sessionId` / `snapshot`，只看 `run_nodes` 回放不出「第 1 轮走了打回、第 2 轮走了通过」。
    `run_nodes` 继续作为节点的**最新状态**行（列表、汇总、快照页签都读它），不再承担轮次历史。
-3. `run_events.session_id: text`（可空）：`events.ts` 落库时从 `ctx.sessionId` 写入，事件从此能归到
-   轮（会话 id 在第 0 轮是节点 id，之后是 `<节点id>#<轮次+1>`，见 `engine/action.ts`）。
-   早于本批的事件为 null，按节点归到最后一轮。
+   早于本批的运行没有轮次行，时间轴为空、画布节点全部按等待画——同样不加「把 `run_nodes` 当一轮」的
+   回退分支。**每条终态路径都要收口轮次行**：一轮正常结束由 `action.ts` 写终态；`cancelRun`、
+   `failWholeRun`、`reconcileOrphanRuns` 今天直接改 `run_nodes`，本批同时把该运行里仍为 running 的轮次
+   行写成对应终态（cancelled / failed）并补 `finishedAt`，否则回放里会有一段永远在跑的会话；
+   `runner.test.ts` 为四条路径各补一条断言。**重入耗尽**（`onExhausted: "fail"`）不是一轮：`reenter()`
+   把 `run_nodes` 写成 failed 时必须同时把 `run_nodes.finishedAt` 写成耗尽时刻并留下 error，回放据此
+   在最后一轮成功之后的那个时刻把节点翻成失败（见下面的推导规则）。
+3. `run_events.session_id: text`（可空：引擎自己发的 `usage` 等运行级事件没有会话）：`events.ts`
+   落库时从 `ctx.sessionId` 写入，事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
+   `<节点id>#<轮次+1>`，见 `engine/action.ts`）。没有会话 id 的事件不参与节点活动推导。
+
+**数据路径**：`GET /api/runs/[id]` 返回 `{ run, nodes, rounds }`；SSE `/api/runs/[id]/events` 的
+`snapshot` 帧同样带 `rounds`（轮次行有变化就重发 snapshot，与 `nodes` 同一指纹），`log` 帧就是带
+`sessionId` 的 `run_events` 行。运行页只从这两处取数，没有第三个接口。
 
 事件清理（`cleanup.ts` 的 events 目标）不删 `run_node_rounds`——它每行几十字节，是回放退化后仍要
 保留的骨架。
@@ -262,18 +276,20 @@ interface RunGraph {
   （running 时）、错误摘要；「设置快照」折叠面板（复用 `settings-snapshot-view.tsx`）；链接
   `/runs?workflowId=`。
 - **画布**：只读 React Flow（不可拖、不可连线、可点选、初始 fitView），节点与连线来自 `runs.graph`；
-  `graph` 为 null 的旧运行显示「此运行早于图冻结，无画布」，时间轴与抽屉照常。
+  空图就是空画布，不另写提示分支。
   `flow-node.tsx`、`flow-edge.tsx` 与 `types.ts` 里它们依赖的端口 / 配色工具移到
   `src/components/canvas/`，编辑器与运行页共用；节点视觉仍从 Context 读。
 - **时间模型**：`src/app/runs/[id]/visuals-at.ts` 纯函数
   `visualsAt({ run, nodes, rounds, events, t })` → 每节点 `{ status, round, activity }`、每连线
   `{ state }`、总计。节点在 `t` 时刻的状态取**该节点在 `t` 之前最后开始的那一轮**：
-  `startedAt > t` 等待、`startedAt ≤ t < finishedAt` 运行中、`finishedAt ≤ t` 取该轮终态；连线在
-  上游那一轮 `finishedAt ≤ t`、终态成功且该轮 `exitName` 等于连线源端口的出口（无具名出口时全部
-  输出端口生效）时激活；活动取 `session_id` 属于当前轮且 `ts ≤ t` 的最后一条 tool 与累计 text 字数。
-  没有轮次行的旧运行退化为「`run_nodes` 一行当一轮」，事件被清理后只剩轮次级。单测
-  `visuals-at.test.ts` 覆盖等待 / 运行中 / 终态 / 出口未走 / 两轮回边（第 1 轮打回、第 2 轮通过，
-  `t` 落在两轮之间时连线与状态取第 1 轮）/ 事件缺失 / 无轮次行。
+  `startedAt > t` 等待、`startedAt ≤ t < finishedAt` 运行中、`finishedAt ≤ t` 取该轮终态；在此之上
+  叠加**节点终态覆盖**：`run_nodes.status` 为 failed / cancelled 且 `run_nodes.finishedAt ≤ t` 时节点
+  按该终态画（重入耗尽、整运行失败、取消都落在这条规则上）。连线在上游那一轮 `finishedAt ≤ t`、
+  终态成功且该轮 `exitName` 等于连线源端口的出口（无具名出口时全部输出端口生效）时激活；活动取
+  `session_id` 属于当前轮且 `ts ≤ t` 的最后一条 tool 与累计 text 字数。没有轮次行的节点恒为等待；
+  事件被清理后只剩轮次级。单测 `visuals-at.test.ts` 覆盖等待 / 运行中 / 终态 / 出口未走 / 两轮回边
+  （第 1 轮打回、第 2 轮通过，`t` 落在两轮之间时连线与状态取第 1 轮）/ 重入耗尽（最后一轮成功、
+  节点在耗尽时刻翻成失败）/ 取消中途的轮次已收口 / 事件缺失 / 无轮次行。
 - **数据源**：现 `use-run-visuals.ts` 搬到 `src/app/runs/[id]/use-run-stream.ts`，只负责 SSE
   订阅（snapshot / log 去重 / 一次重连）与 1Hz `now`；视觉一律经 `visualsAt(t)`。进行中默认
   `t = now` 跟随，往回拖即暂停跟随，「跟随」按钮回到现在；已结束默认 `t = finishedAt`。
@@ -300,8 +316,7 @@ interface RunGraph {
 - `npm run check`、`npm run build`；单测 `visuals-at.test.ts`、`run-graph.test.ts`（构造与校验）、
   `runner.test.ts` 补「回边重入写出两行轮次、事件带会话 id」。
 - e2e：`runs.spec.ts` 夹具行带 `graph`，断言画布节点数与 `graph.nodes` 一致、点节点开抽屉且轨迹
-  面板可检索（沿用现有轨迹用例）、时间轴行数与节点数一致、旧运行（`graph` 为 null）显示无画布
-  提示；`parallel-ui.spec.ts` 改为：导航面板两路各深链 `/runs/<id>`，运行页概要栏状态为运行中、
+  面板可检索（沿用现有轨迹用例）、时间轴行数与轮次行数一致；`parallel-ui.spec.ts` 改为：导航面板两路各深链 `/runs/<id>`，运行页概要栏状态为运行中、
   取消按钮指向正确的 run；`parallel-runs.spec.ts` 免费真跑后运行页画布节点全部成功、光标在末尾。
   `workflow-editor.spec.ts` 补一条：编辑器不再出现 `run-switcher` / 运行条元素。
 - 付费：停掉 dev server 后跑一次 `npx tsx scripts/smoke-engine.ts`，确认真实运行的 `runs.graph`
