@@ -13,10 +13,10 @@ const items = [
   { href: "/runs", label: "运行历史" },
 ];
 
-/** 设置与监控台一样属于开发者面，与主导航分区放在底部。 */
+/** 设置与系统健康一样属于开发者面，与主导航分区放在底部。 */
 const SETTINGS_HREF = "/settings";
 
-/** 「运行中」面板与监控台状态点共用一次轮询（轻量，不占用 SSE 连接） */
+/** 「运行中」面板与系统健康入口的状态点共用一次轮询（轻量，不额外开连接） */
 const LIVE_POLL_MS = 5000;
 
 /** 面板逐条列出的上限；超出的经「全部 N 路」跳运行历史 */
@@ -75,7 +75,7 @@ function elapsedText(startedAt: string | number): string {
 export function Nav() {
   const pathname = usePathname();
   const liveRuns = useLiveRuns();
-  const monitorActive = pathname.startsWith("/monitor");
+  const healthActive = pathname.startsWith("/monitor");
   const live = liveRuns != null && liveRuns.length > 0;
 
   return (
@@ -131,7 +131,7 @@ export function Nav() {
         </div>
       )}
 
-      {/* 设置与监控台属于开发者面，与主导航分区：底部独立一块 */}
+      {/* 设置与系统健康属于开发者面，与主导航分区：底部独立一块 */}
       <div className="mt-auto pt-3">
         <div className="mb-3 border-t border-zinc-800" />
         <Link
@@ -148,13 +148,13 @@ export function Nav() {
           href="/monitor"
           title={
             liveRuns == null
-              ? "监控台"
+              ? "系统健康"
               : live
-                ? `监控台 · ${liveRuns.length} 个运行进行中`
-                : "监控台 · 引擎空闲"
+                ? `系统健康 · ${liveRuns.length} 个运行进行中`
+                : "系统健康 · 引擎空闲"
           }
           className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
-            monitorActive
+            healthActive
               ? "bg-zinc-700 text-white"
               : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
           }`}
@@ -169,7 +169,7 @@ export function Nav() {
                   : "bg-zinc-500"
             }`}
           />
-          监控台
+          系统健康
           {live && (
             <span className="ml-auto font-mono text-[11px] text-emerald-400">
               {liveRuns.length}
