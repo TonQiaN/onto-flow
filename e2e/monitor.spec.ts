@@ -418,7 +418,17 @@ async function captureJson<T>(
   await action();
   const res = await responded;
   expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
-  return (await res.json()) as T;
+  try {
+    return (await res.json()) as T;
+  } catch (error) {
+    // 页面紧接着又发了一次同样的请求（进行中的自动刷新）或已经离开时，浏览器会丢掉上一份响应体，
+    // Playwright 报 `Network.getResponseBody: No resource with given identifier found`。此时载荷本身
+    // 没有变化，直接再取一次同一个 URL；其他错误照常抛出。
+    if (!(error instanceof Error) || !error.message.includes("getResponseBody")) throw error;
+    const again = await page.request.get(res.url());
+    expect(again.ok(), `接口 ${res.url()} 重取应成功（HTTP ${again.status()}）`).toBe(true);
+    return (await again.json()) as T;
+  }
 }
 
 const isLogs = (url: URL) => url.pathname === "/api/monitor/logs";
