@@ -307,14 +307,20 @@
 `snapshot` 帧同样带 `rounds`（轮次行有变化就重发 snapshot，与 `nodes` 同一指纹），`log` 帧就是带
 `sessionId` 的 `run_events` 行——但两处的 `rounds` 都**只带骨架列**（轮次、会话、起止、终态、出口、
 错误），不带 `inputs` / `outputs` / `snapshot`：快照含技能集全文，循环运行每轮一份，SSE 每 500 ms
-的轮询一有变化就整份重发，会把页面与服务端一起拖慢。抽屉打开某一轮时另行
+的轮询一有变化就整份重发，会把页面与服务端一起拖慢。`nodes` 同理只带骨架列（`run_nodes` 去掉
+`inputs` / `outputs` / `snapshot`，`select` 时不取）——最新一轮那份重载荷同样不该随每帧 snapshot
+走；trajectory 路由在服务端读 `node.snapshot` 取技能名映射，不受影响。抽屉打开某一轮时另行
 `GET /api/runs/[id]/nodes/[nodeId]/rounds/[round]` 取这一轮的重载荷（`handle()` 里，404 为无此轮，
 置空过的列返回 null）。运行状态只从这两处取；抽屉的轨迹页签仍按需调用现有的
 `GET /api/runs/[id]/nodes/[nodeId]/trajectory`（会话 JSONL 是轨迹的权威源，事件表里没有它），
 这条接口保留不动。`readAgentTrajectory` 最多读 128 个会话目录（`MAX_SESSION_FILES`），超过即抛，
 而 `maxReentries` 今天没有上限——写边界收口：`parseActionPayload` 把 `maxReentries` 限在 `0..100`
-（`MAX_REENTRIES` 常量，`src/app/actions/` 的编辑器同值校验），超出 400，与读侧的上限保持
-「读得下所有轮」的余量；DESIGN.md 的 Action 载荷行同步。
+（`MAX_REENTRIES` 常量，`src/app/actions/` 的编辑器同值校验），超出 400；但嵌套 / 重叠的回边可以
+让一个下游 Action 被多个环体反复重置，单个目标的上限管不住它的总轮次，所以引擎再设**每节点每次
+运行的总轮次上限** `MAX_NODE_ROUNDS = 100`（与 `MAX_REENTRIES` 同源，`src/lib/graph.ts`）：给某节点
+分配的下一轮次号超过它时不再重入，`failWholeRun` 以「节点重入总轮次超过上限」收束整条运行，
+`runner.test.ts` 加一条嵌套回边把同一节点推过上限的用例；读侧 128 的上限因此永远读得下。
+DESIGN.md 的 Action 载荷行与引擎 spec 同步。
 
 **保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
 重载荷（`inputs` / `outputs` / `snapshot`；快照含 prompt、rule、渲染后的提示与技能集全文，循环运行
@@ -356,8 +362,10 @@ interface RunGraph {
   `{ state }`、总计。节点在 `t` 时刻的状态取**该节点在 `t` 之前最后开始的那一轮**（`startedAt`
   相同——零时长的 skipped 行与紧接着的重入行可能落在同一毫秒——按 `round` 大者为准）：
   `startedAt > t` 等待、`startedAt ≤ t < finishedAt` 运行中、`finishedAt ≤ t` 取该轮终态；没有任何
-  轮次行的节点恒为等待。在此之上叠加**节点终态覆盖**：`run_nodes.status` 为 failed / cancelled 且
-  `run_nodes.finishedAt ≤ t` 时节点按该终态画（重入耗尽、整运行失败、取消都落在这条规则上）。
+  轮次行的节点恒为等待。在此之上叠加**节点终态覆盖**——**只对有轮次行的节点生效**：`run_nodes.status`
+  为 failed / cancelled 且 `run_nodes.finishedAt ≤ t` 时节点按该终态画（重入耗尽、整运行失败、取消
+  都落在这条规则上）；没有轮次行的节点（早于轮次表的运行，无论它当时成功还是失败）一律等待，
+  不让旧的失败运行画成失败、旧的成功运行却画成等待。
   连线在上游节点于 `t` 之前最后开始的那一轮已成功、且该轮 `exitName` 等于连线源端口的出口
   （无具名出口、以及输入节点，全部输出端口生效）时激活；活动取 `session_id` 属于当前轮且 `ts ≤ t` 的最后一条 tool 与累计 text 字数。
   事件被清理后只剩轮次级。单测 `visuals-at.test.ts` 覆盖等待 / 运行中 / 终态 / 出口未走 /
