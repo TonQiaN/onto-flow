@@ -148,8 +148,8 @@
   `DELETE FROM purchase_plans`；`src/server/writers/tool.test.ts` 的夹具改成中性名字。
 - 种子：`scripts/seed.ts` 只保留 ① 内置对象类型（text / file / json）与 ③ 模型表；②④⑤⑥⑦⑧⑨⑩
   （案例对象类型、Skill、Tool、Action、工作流、文件夹、v1 修订、示例需求文件）与
-  `SAVE_PURCHASE_PLAN_*` 全部删除；`scripts/run-procurement.ts`、`scripts/purchase-plan-path.test.ts`
-  删除；`data/samples/采购需求示例.txt` 不再写出。`seed-resume.ts` / `seed-leetcode.ts` 不动
+  `SAVE_PURCHASE_PLAN_*` 全部删除；`scripts/run-procurement.ts`、`scripts/purchase-plan-path.ts`（只被
+  种子的 Tool 源码与它的测试引用）、`scripts/purchase-plan-path.test.ts` 删除；`data/samples/采购需求示例.txt` 不再写出。`seed-resume.ts` / `seed-leetcode.ts` 不动
   （它们只依赖模型表与内置类型），跑两遍仍幂等、pin 不变。
 - 系统健康页磁盘行里 `data/documents` 一行删除（`src/app/monitor/health/`、`src/server/monitor/disk.ts`
   以实际出现处为准）。
@@ -217,7 +217,8 @@
 - 工作流卡片「历史」与运行页「该工作流全部运行」都只是带 `workflowId` 的链接。
 
 **监控台成本页随之删除**：`src/app/monitor/cost/`、`src/app/api/monitor/cost/`、`getCost` 与其单测，
-监控台 layout 标签去掉「成本分析」，`monitor.spec.ts` 的成本用例删除。
+监控台 layout 标签去掉「成本分析」，`monitor.spec.ts` 的成本用例删除；`docs/DESIGN-V2.md` 「阶段三」
+的六标签改五标签（每个 stacked PR 都是当时为真的状态，监控台文档随每批递减，第 4 批收成一页）。
 
 **文档同步**：DESIGN.md `/api/runs` 行改信封与参数；AGENTS.md「All five library list GETs return…」
 改为「五个库与 `/api/runs`…」并保持 `rules.test.ts` 的信封 import 断言覆盖；监控台描述里去掉成本
@@ -282,6 +283,8 @@
    把 `run_nodes` 写成 failed 时必须同时把 `run_nodes.finishedAt` 写成耗尽时刻并留下 error，回放据此
    在最后一轮成功之后的那个时刻把节点翻成失败（见下面的推导规则）。
 3. `run_events.session_id: text`：`events.ts` 的通用落库从 `ctx.sessionId` 写入；`action.ts` 里
+   （`events.test.ts` 与 `action.test.ts` 手写的内存库 DDL 同步加这一列，否则它们调用被测模块时会撞
+   `no column named session_id`；`runner.test.ts` 的 DDL 若也建了 `run_events`，同样加）；`action.ts` 里
    `refreshUnsettledUsageRollup()` 自己插的 `usage` 事件（`usageEventPayload()` 已带该会话 id）也
    必须写这一列——两处插入点都改，别只改一处。事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
    `<节点id>#<轮次+1>`，见 `engine/action.ts`）。列保持可空只是为了早于本批的历史行；新写入的事件
@@ -361,7 +364,8 @@ interface RunGraph {
   运行对话框成功后 `router.push('/runs/<runId>')`。导航「运行中」面板与工作流卡片深链改
   `/runs/<id>`；运行页不再有「回画布看动画」。
 - **监控台 Trace 删除**：`src/app/monitor/trace/`、`src/app/api/monitor/trace/`、`getTrace` 与其
-  单测；layout 标签去掉 Trace。它按节点只画最后一轮，轮次表落地后没有它能画而运行页画不了的东西。
+  单测；layout 标签去掉 Trace；`docs/DESIGN-V2.md` 「阶段三」五标签改四标签。它按节点只画最后一轮，
+  轮次表落地后没有它能画而运行页画不了的东西。
 
 **文档同步**：DESIGN.md「多路运行的界面契约」段整段替换为运行页契约，`/api/runs/[id]` 行加
 `graph`；AGENTS.md Repository layout 里 `workflows/[id]/`、`runs/[id]/`、`monitor/` 三行改写，
