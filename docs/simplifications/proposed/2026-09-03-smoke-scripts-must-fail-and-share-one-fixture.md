@@ -50,11 +50,17 @@ real model call」——这条理由成立的前提是**冒烟会在真实调用
 
 不删任何一个冒烟脚本（它们是付费门，删一个要更强的理由）。做三件事：
 
-1. **抽出 `scripts/smoke-fixture.ts`**（新文件，约 90 行）：`upsertObjectType` / `upsertAction`（取
-   graph 的超集版）/ `upsertWorkflow` / `awaitTerminal(runId, { timeoutMs })`（返回终态行，
-   `status !== "success"` 直接抛）/ `printNodes(runId)`。`smoke-engine` / `smoke-graph` /
+1. **抽出 `scripts/smoke-fixture.ts`**（新文件，约 100 行）：`upsertObjectType` / `upsertAction` /
+   `upsertWorkflow` 一律**走写入器**（`createAction` / `writeAction` 与同族，也就是 `smoke-parallel.ts:53-73`
+   今天的做法），载荷形状取 graph 版的超集（`maxReentries` / `onExhausted` / `exitName`）——不能反过来把
+   engine / graph / capabilities 直插 `db.insert(actions)`、不留修订的捷径推广到唯一合规的那份
+   （`AGENTS.md`「Every entity write records a revision」；Codex 对 #28 的复审指出）。等待与打印分两档：
+   `awaitTerminal(runId, { timeoutMs })` 给单运行脚本，返回终态行、`status !== "success"` 直接抛；
+   `awaitTerminals(runIds, { timeoutMs, onTimeout })` 给 `smoke-parallel`，超时时先调 `onTimeout`
+   （即今天的 `abortRunBatch()`：取消每一次已受理的运行并等执行器退出，`smoke-parallel.ts:340-371`）再抛，
+   一次等待失败也不能把其余付费子进程晾着；`printNodes(runId)` 共用。`smoke-engine` / `smoke-graph` /
    `smoke-capabilities` / `smoke-parallel` 四个脚本共用；四份 `upsertObjectType`、两份 `upsertAction`、
-   四份轮询与打印随之删除。
+   四份轮询与打印随之删除，`smoke-parallel` 的批量取消语义原样保留在 `onTimeout` 里。
 2. **把 `✓/✗` 打印改成失败即抛**：`smoke-capabilities.ts:262/265/271/272/307/308` 六项、
    `smoke-engine` / `smoke-graph` 的终态判定、`smoke-harness.ts:69` 的产物内容（三行、首行 `# 你好`）与
    结构化输出形状。`smoke-parallel.ts:340-371` 已经是这个写法，照抄它。
@@ -82,4 +88,4 @@ real model call」——这条理由成立的前提是**冒烟会在真实调用
 改的是付费门本身，改错会让定时任务从「永远绿」变成「永远红」。断言宽度是唯一的调参点：建议只断言「运行
 终态为 success」「声明的产物存在」「关键子串出现」，不断言字数、行数、模型措辞。
 
-预估净删约 150 行（新增 `smoke-fixture.ts` 约 90 行，删除四份重复约 240 行）；风险等级：中。
+预估净删约 140 行（新增 `smoke-fixture.ts` 约 100 行，删除四份重复约 240 行）；风险等级：中。
