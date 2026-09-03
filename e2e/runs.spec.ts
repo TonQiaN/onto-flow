@@ -703,14 +703,15 @@ function createListFixture(): ListFixture {
         .run(workflowId, workflowName, canvasStartedAt, apiStartedAt);
 
       const insertRun = database.prepare(
-        "insert into runs (id, workflow_id, status, workflow_name, source, started_at, finished_at) values (?, ?, ?, ?, ?, ?, ?)",
+        "insert into runs (id, workflow_id, status, workflow_name, imports, started_at, finished_at) values (?, ?, ?, ?, ?, ?, ?)",
       );
       insertRun.run(
         canvasRunId,
         workflowId,
         "success",
         workflowName,
-        "workflow",
+        // 来源不是列：运行列表从 imports.invocation.source 读时推导
+        JSON.stringify({ invocation: { source: "workflow" } }),
         canvasStartedAt,
         canvasStartedAt + 12_000,
       );
@@ -719,7 +720,7 @@ function createListFixture(): ListFixture {
         workflowId,
         "failed",
         workflowName,
-        "resume-match-api",
+        JSON.stringify({ invocation: { source: "resume-match-api", contractVersion: 1 } }),
         apiStartedAt,
         apiStartedAt + 3_000,
       );
