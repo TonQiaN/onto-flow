@@ -12,7 +12,7 @@ beforeEach(() => {
     INSERT INTO skills (id, name, description, content, created_at, updated_at)
       VALUES ('skill-a', '范本技能', '', '正文', 0, 0), ('skill-b', '备用技能', '', '正文', 0, 0);
     INSERT INTO tools (id, name, public_name, description, parameters, output, timeout_ms, code, created_at, updated_at)
-      VALUES ('tool-1', '归档', 'archive', '', '{"type":"object"}', NULL, NULL, 'export default async () => ({})', 0, 0);
+      VALUES ('tool-1', '盖章', 'stamp', '', '{"type":"object"}', NULL, NULL, 'export default async () => ({})', 0, 0);
   `);
 });
 

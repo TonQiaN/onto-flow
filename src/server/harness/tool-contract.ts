@@ -78,9 +78,9 @@ export interface ToolContext {
   runDir: string;
   /** 本次运行独占的临时目录（TMPDIR） */
   tmpDir: string;
-  /** 工作台数据根（data/）；归档类 Tool 用它落备份文件 */
+  /** 工作台数据根（data/）；Tool 要落备份文件时用它 */
   dataDir: string;
-  /** 工作台数据库文件路径；归档类 Tool 用 node:sqlite 打开 */
+  /** 工作台数据库文件路径；Tool 要读写工作台库时用 node:sqlite 打开它 */
   dbPath: string;
   /** 调用这次工具的会话的 cwd */
   cwd: string;

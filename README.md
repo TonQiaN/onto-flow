@@ -76,18 +76,13 @@ Action 只在其中选预载技能与可见 Tool；越出集合的选择在保�
 ```bash
 npm install
 npm run db:push     # 建表（./data/ontoflow.db）
-npm run db:seed     # 灌入采购集采计划案例（幂等）
+npm run db:seed     # 平台基线：内置对象类型与模型（幂等）
 npm run dev
 ```
 
-打开 http://localhost:3592 ，进入「工作流 → 采购集采计划生成」，点「运行」并上传
-`data/samples/采购需求示例.txt`，即可看到四个 Action 依次真实执行：
-需求整理 → 集采计划生成 → 集采计划审核（结构化 JSON 评价）→ 集采计划归档
-（经 `save_purchase_plan` 工具写入 `purchase_plans` 表 + 备份 Markdown 到 `data/documents/`；
-同一计划编号再次归档会替换数据库行并清理上一份备份）。
-
-第二个案例先执行 `npx tsx scripts/seed-resume.ts`，再进入「工作流 → 简历匹配评分」。岗位与
-简历都可上传 PDF、Markdown 或纯文本；文件以原件进入工作区，「简历评分·解析」使用
+案例内容不在平台基线里：先执行 `npx tsx scripts/seed-resume.ts` 装入「简历匹配评分」工作流，
+再打开 http://localhost:3592 进入「工作流 → 简历匹配评分」。岗位与简历都可上传 PDF、Markdown
+或纯文本；文件以原件进入工作区，「简历评分·解析」使用
 DeepSeek V4 Flash Vision，自己用 bash 调 Poppler 抽取文本层、逐页栅格化并对每页执行视觉核对，
 六个评委与汇总继续使用文本模型。最终汇总会回看岗位与简历原文，自动裁决评委分歧、证据缺口和分数不自洽，并把明确的
 推荐判断、依据、证据充分度及所有改分记录写进严格的 `match-result.json`。汇总必须调用

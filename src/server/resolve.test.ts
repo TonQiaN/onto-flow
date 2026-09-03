@@ -88,7 +88,7 @@ function seed(): void {
     INSERT INTO workflow_skills VALUES ('workflow-1', 'skill-1', 0);
     INSERT INTO action_preloads VALUES ('action-1', 'skill-1', 0);
     INSERT INTO tools VALUES ('tool-1', '校验结果', 'validate_result', '', '{"type":"object"}', NULL, NULL, 'original tool code', 0, 0);
-    INSERT INTO tools VALUES ('tool-2', '归档', 'archive_result', '', '{"type":"object"}', NULL, 5000, 'archive code', 0, 0);
+    INSERT INTO tools VALUES ('tool-2', '盖章', 'stamp_result', '', '{"type":"object"}', NULL, 5000, 'stamp code', 0, 0);
     INSERT INTO tools VALUES ('tool-3', '外部工具', 'outside_tool', '', '{"type":"object"}', NULL, NULL, 'outside', 0, 0);
     INSERT INTO workflow_tools VALUES ('workflow-1', 'tool-1', 0);
     INSERT INTO workflow_tools VALUES ('workflow-1', 'tool-2', 1);
@@ -136,7 +136,7 @@ describe("工作流执行定义快照", () => {
     // Tool 集全量行都冻结，可见关系按公名给出。
     expect(resolved.capabilities.tools.map((tool) => [tool.publicName, tool.code])).toEqual([
       ["validate_result", "original tool code"],
-      ["archive_result", "archive code"],
+      ["stamp_result", "stamp code"],
     ]);
     expect(resolved.capabilities.tools[1]).toMatchObject({
       timeoutMs: 5000,

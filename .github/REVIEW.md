@@ -41,7 +41,7 @@
 
 ## 4. 路由与客户端边界（Conventions）
 
-- [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/monitor/stream`、`api/runs/[id]/events`（原生 SSE）与 `api/models`、`api/documents`（早于规则的单语句 GET）是仅有的四个例外，没有被复制
+- [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/monitor/stream`、`api/runs/[id]/events`（原生 SSE）与 `api/models`（早于规则的单语句 GET）是仅有的三个例外，没有被复制
 - [ ] 每个 route `export const dynamic = "force-dynamic"`
 - [ ] 客户端代码（含 `"use client"` 文件与 `src/app`（`api/` 除外）、`src/components` 下没有指令的共享模块）没有从 `@/server` 或 `@/db` 导入运行时值；`import type` 只从 `@/server/monitor/types`。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
 - [ ] 能到达修订还原的 route 带 `import "@/server/writers";`，否则 restore 静默答 501
@@ -85,6 +85,7 @@
 ## 8. 测试（Checks / Test fixtures）
 
 - [ ] e2e **没有**断言会随真实使用增长的东西：计数、首页包含、某一行恰好是种子 / 最新一次运行。正确写法是在用例里取 API 载荷、断言 DOM 与载荷一致。这个 bug 已经修过三次
+- [ ] e2e 不依赖任何种子实体：`db:seed` 只种平台基线（内置对象类型与模型表），夹具由本 spec 在 `beforeAll` 自建、`afterAll` 收走；断言只对自建夹具或 API 载荷
 - [ ] e2e 没有发起含 Action 节点的运行，没有点「执行清理 / 确认删除 / 中止该运行」；自建实体用本 spec 的 `e2e-` 中文前缀并在 teardown 经 `cleanupByPrefix` 收走
 - [ ] 新单元测试是 `src/**` 或 `scripts/**` 下的 `*.test.ts`；服务层测试先把内存库挂到 `globalThis.ontoflowDb` 再 `await import()`，静态导入会碰到真实 `data/ontoflow.db`
 - [ ] 改动的不变量若是纯逻辑（图、文件夹、定价、解析）→ 有单元测试；用户可见的 → 有 e2e

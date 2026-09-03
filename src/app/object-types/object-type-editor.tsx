@@ -188,7 +188,7 @@ export function ObjectTypeEditor({
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="如：需求文件、集采计划"
+                  placeholder="如：岗位JD文件、简历Markdown"
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                 />
               </label>

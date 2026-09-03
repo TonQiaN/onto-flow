@@ -32,6 +32,6 @@ export function resetTestDb(sqlite: Database.Database): void {
     DELETE FROM action_ports; DELETE FROM action_preloads; DELETE FROM action_tools; DELETE FROM actions;
     DELETE FROM skill_files; DELETE FROM skills; DELETE FROM tools; DELETE FROM models;
     DELETE FROM entity_folders; DELETE FROM folders; DELETE FROM object_types;
-    DELETE FROM revisions; DELETE FROM settings; DELETE FROM purchase_plans;
+    DELETE FROM revisions; DELETE FROM settings;
   `);
 }

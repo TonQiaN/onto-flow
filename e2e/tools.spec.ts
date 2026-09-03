@@ -1,22 +1,27 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
-import { cleanupByPrefix, cleanupRevisions, type RevisionOwnerKind } from "./helpers";
+import {
+  cleanupByPrefix,
+  cleanupRevisions,
+  createTool,
+  createWorkflow,
+  type RevisionOwner,
+  TOOL_EXECUTE_MODULE,
+  uniqueSuffix,
+} from "./helpers";
 
 /**
  * Tool 库：Tool 是 OntoFlow 契约（ADR-0017）——展示名、公名、描述、参数 schema、可选返回值
  * schema 与超时、一个 execute 模块；cordis 包装归平台，编辑器与 API 都不再出现
  * name / inject / apply。引用方是工作流的 Tool 集（ADR-0016）。
+ *
+ * `db:seed` 只种平台基线：用例自建 `e2e-` 前缀 Tool，afterEach 收走。
  */
 const PREFIX = "e2e-Tool-";
 
-/** 公名也要唯一，且只能是小写字母数字下划线；用时间戳保证与库里任何现有 Tool 不撞 */
+/** 公名也要唯一，且只能是小写字母数字下划线；带随机尾巴保证与库里任何现有 Tool 不撞 */
 function uniquePublicName(): string {
-  return `e2e_tool_${Date.now()}`;
+  return `e2e_tool_${uniqueSuffix()}`;
 }
-
-const EXECUTE_MODULE = `export default async function execute(args: { input: string }) {
-  return { echo: args.input };
-}
-`;
 
 interface ToolRow {
   id: string;
@@ -37,7 +42,7 @@ async function findTool(request: APIRequestContext, name: string): Promise<ToolR
 }
 
 test.describe("Tool 库", () => {
-  const owners: Array<{ kind: RevisionOwnerKind; id: string }> = [];
+  const owners: RevisionOwner[] = [];
 
   test.afterEach(async ({ request }) => {
     // 先删工作流：Tool 被工作流的 Tool 集引用时 DELETE 会 409
@@ -47,13 +52,20 @@ test.describe("Tool 库", () => {
     owners.length = 0;
   });
 
-  test("列表显示种子 Tool「集采计划归档入库」及其公名徽章 save_purchase_plan", async ({ page }) => {
+  test("自建 Tool 出现在列表，并显示描述与公名徽章", async ({ page, request }) => {
+    const name = `${PREFIX}列表-${uniqueSuffix()}`;
+    const publicName = uniquePublicName();
+    const description = `e2e 列表描述 ${name}`;
+    owners.push({
+      kind: "tool",
+      id: await createTool(request, { name, publicName, description }),
+    });
+
     await page.goto("/tools");
-    const card = page
-      .locator("li")
-      .filter({ has: page.getByText("集采计划归档入库", { exact: true }) });
+    const card = page.locator("li").filter({ has: page.getByText(name, { exact: true }) });
     await expect(card).toHaveCount(1);
-    await expect(card.getByText("save_purchase_plan", { exact: true })).toBeVisible();
+    await expect(card.getByText(publicName, { exact: true })).toBeVisible();
+    await expect(card.getByText(description)).toBeVisible();
     // 契约形态下 Tool 不再是裸插件，列表页与副标题不能再这么介绍它
     await expect(page.getByText("cordis 插件")).toHaveCount(0);
   });
@@ -62,14 +74,14 @@ test.describe("Tool 库", () => {
     page,
     request,
   }) => {
-    const name = `${PREFIX}${Date.now()}`;
+    const name = `${PREFIX}${uniqueSuffix()}`;
     const publicName = uniquePublicName();
     await page.goto("/tools");
 
     await page.getByRole("button", { name: "新建 Tool" }).click();
     await expect(page.getByRole("heading", { name: "新建 Tool" })).toBeVisible();
-    await page.getByPlaceholder("如：保存集采计划").fill(name);
-    await page.getByPlaceholder("如：save_purchase_plan").fill("Bad-Name");
+    await page.getByPlaceholder("如：校验评分结果").fill(name);
+    await page.getByPlaceholder("如：validate_resume_match_result").fill("Bad-Name");
     await page
       .getByPlaceholder("一句话说明这个 Tool 的用途（模型据此决定何时调用）")
       .fill("e2e 契约 Tool");
@@ -80,7 +92,7 @@ test.describe("Tool 库", () => {
     await expect(page.getByText("模型可见的工具名「Bad-Name」非法")).toBeVisible();
     await expect(page.getByRole("heading", { name: "新建 Tool" })).toBeVisible();
 
-    await page.getByPlaceholder("如：save_purchase_plan").fill(publicName);
+    await page.getByPlaceholder("如：validate_resume_match_result").fill(publicName);
     const post = page.waitForResponse(
       (r) => r.url().endsWith("/api/tools") && r.request().method() === "POST",
     );
@@ -108,7 +120,7 @@ test.describe("Tool 库", () => {
     // 编辑：重开时各字段回填；改描述后保存
     await card.getByRole("button", { name: "编辑" }).click();
     await expect(page.getByRole("heading", { name: "编辑 Tool" })).toBeVisible();
-    await expect(page.getByPlaceholder("如：save_purchase_plan")).toHaveValue(publicName);
+    await expect(page.getByPlaceholder("如：validate_resume_match_result")).toHaveValue(publicName);
     await expect(page.getByPlaceholder("留空即不限")).toHaveValue("30000");
     await page
       .getByPlaceholder("一句话说明这个 Tool 的用途（模型据此决定何时调用）")
@@ -126,7 +138,7 @@ test.describe("Tool 库", () => {
   test("写入口校验：type 数组、@deepseek-ai 引用与非法超时都 400，公名重复 409", async ({
     request,
   }) => {
-    const name = `${PREFIX}校验-${Date.now()}`;
+    const name = `${PREFIX}校验-${uniqueSuffix()}`;
     const publicName = uniquePublicName();
     const base = {
       name,
@@ -135,7 +147,7 @@ test.describe("Tool 库", () => {
       parameters: { type: "object", properties: { input: { type: "string" } } },
       output: null,
       timeoutMs: null,
-      code: EXECUTE_MODULE,
+      code: TOOL_EXECUTE_MODULE,
     };
 
     const typeArray = await request.post("/api/tools", {
@@ -151,7 +163,7 @@ test.describe("Tool 库", () => {
     expect(await typeArray.text()).toContain("parameters.properties.count.type 不能是数组");
 
     const upstreamImport = await request.post("/api/tools", {
-      data: { ...base, code: `import { x } from "@deepseek-ai/dsh-core";\n${EXECUTE_MODULE}` },
+      data: { ...base, code: `import { x } from "@deepseek-ai/dsh-core";\n${TOOL_EXECUTE_MODULE}` },
     });
     expect(upstreamImport.status()).toBe(400);
     expect(await upstreamImport.text()).toContain("@deepseek-ai/");
@@ -183,36 +195,32 @@ test.describe("Tool 库", () => {
     page,
     request,
   }) => {
-    const suffix = Date.now();
+    const suffix = uniqueSuffix();
     const toolName = `${PREFIX}引用-${suffix}`;
     const workflowName = `${PREFIX}工作流-${suffix}`;
 
-    const toolRes = await request.post("/api/tools", {
-      data: {
+    const toolId = await createTool(
+      request,
+      {
         name: toolName,
         publicName: uniquePublicName(),
         description: "被工作流引用",
         parameters: { type: "object", properties: {} },
-        code: EXECUTE_MODULE,
       },
-    });
-    expect(toolRes.ok()).toBeTruthy();
-    const tool = (await toolRes.json()) as { id: string };
-    owners.push({ kind: "tool", id: tool.id });
+      owners,
+    );
+    const workflowId = await createWorkflow(
+      request,
+      { name: workflowName, description: "Tool 集引用验收", toolIds: [toolId] },
+      owners,
+    );
 
-    const wfRes = await request.post("/api/workflows", {
-      data: { name: workflowName, description: "Tool 集引用验收", toolIds: [tool.id] },
-    });
-    expect(wfRes.ok()).toBeTruthy();
-    const workflow = (await wfRes.json()) as { id: string };
-    owners.push({ kind: "workflow", id: workflow.id });
-
-    const detail = (await (await request.get(`/api/workflows/${workflow.id}`)).json()) as {
+    const detail = (await (await request.get(`/api/workflows/${workflowId}`)).json()) as {
       workflow: { toolIds: string[] };
     };
-    expect(detail.workflow.toolIds).toEqual([tool.id]);
+    expect(detail.workflow.toolIds).toEqual([toolId]);
 
-    const blocked = await request.delete(`/api/tools/${tool.id}`);
+    const blocked = await request.delete(`/api/tools/${toolId}`);
     expect(blocked.status()).toBe(409);
     const body = (await blocked.json()) as { error: string; usedBy: string[] };
     expect(body.error).toBe("该 Tool 正被工作流引用，无法删除");
@@ -229,11 +237,11 @@ test.describe("Tool 库", () => {
       .filter({ has: page.getByRole("heading", { name: "被引用" }) });
     await expect(panel.getByText("工作流（1）")).toBeVisible();
     const ref = panel.getByRole("link", { name: new RegExp(workflowName) });
-    await expect(ref).toHaveAttribute("href", `/workflows/${workflow.id}/settings`);
+    await expect(ref).toHaveAttribute("href", `/workflows/${workflowId}/settings`);
     await expect(ref).toContainText("Tool 集");
 
     // 工作流删掉之后 Tool 才能删
-    expect((await request.delete(`/api/workflows/${workflow.id}`)).ok()).toBeTruthy();
-    expect((await request.delete(`/api/tools/${tool.id}`)).ok()).toBeTruthy();
+    expect((await request.delete(`/api/workflows/${workflowId}`)).ok()).toBeTruthy();
+    expect((await request.delete(`/api/tools/${toolId}`)).ok()).toBeTruthy();
   });
 });

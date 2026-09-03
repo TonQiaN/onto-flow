@@ -1,6 +1,6 @@
 # 简化：删除采购演示工作流与归档链条
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -37,3 +37,24 @@ Commands / Repository layout、REVIEW.md 同步。连带决定见
 `seed-resume.ts` / `seed-leetcode.ts` 只依赖模型表与内置对象类型，不受影响，验收时各跑两遍确认
 幂等且 pin 不变。删表走 `db:push` 原地应用，本地历史库里的 `purchase_plans` 行随之消失——它们是
 演示数据，无人读。
+
+## 落地
+
+PR：https://github.com/TonQiaN/onto-flow/pull/21（分支 `cleanup/1-remove-procurement`，[DESIGN-V3 第 1 批](../../DESIGN-V3.md)）。
+
+与提议的差异：
+
+- 提议只点名 `scripts/purchase-plan-path.test.ts`，实际连同它测的 `scripts/purchase-plan-path.ts`
+  一起删——除种子里那份已删的 Tool 源码外没有第二个消费者。
+- 提议没提 `src/rules.test.ts`：`handle()` 例外白名单点名了 `api/documents/route.ts`，删路由必须
+  同步把「四个例外」缩成三个（AGENTS.md、REVIEW.md 第 4 节、`rules.test.ts` 三处一起改），
+  否则「白名单已过期」那条断言直接红。
+- 提议只说删磁盘行，实际连 `HealthDisk.documents` / `DiskHealth.documents` 字段与健康页的第三段
+  配色一起删；`data/documents/` 目录本身是运行期产物，不由代码删除。
+- 以采购 / 集采 / 归档为例子的注释、编辑器占位与单测夹具一并改成简历案例或中性说法
+  （`tool.test.ts` 的 `save_purchase_plan` → `stamp_result` 等）。
+
+验收实际跑了：`npx drizzle-kit push --force`（本地库掉 `purchase_plans` 表）、
+`npx tsx scripts/seed.ts` / `seed-resume.ts` / `seed-leetcode.ts` 各两遍（幂等、pin 不变）、
+`npm run check`（typecheck + lint + fmt:check + vitest）、`npm run build`。
+全量 e2e 与本记录同批次的 e2e 夹具改写一起验收。

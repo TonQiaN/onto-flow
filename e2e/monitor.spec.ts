@@ -14,7 +14,7 @@ import { cleanupByPrefix, DATA_DIR, openDb } from "./helpers";
  * beforeAll 用与 runs.spec.ts 相同的模式合成一份本 spec 自己的运行历史——e2e- 前缀的
  * 工作流、一条已结束的运行、两个 Action 节点、十条 run_events、三条 node_usage，
  * 外加一个真实落盘的运行目录。断言只针对这份夹具，其余一律取页面自己消费的 API 载荷、
- * 断言 DOM 与之一致（含空态）；从不假设「最近一次运行是采购」这类会随真实使用漂移的事。
+ * 断言 DOM 与之一致（含空态）；从不假设「最近一次运行是哪一条」这类会随真实使用漂移的事。
  * afterAll 经 DELETE /api/runs/[id] 与 cleanupByPrefix 收走，运行目录一并删除。
  */
 
@@ -888,10 +888,9 @@ test.describe("监控台 · 系统健康", () => {
     await expect(runsRow).toContainText(formatBytes(bytes));
     await expect(runsRow).not.toContainText(/\b0 个目录/);
 
-    // 合计与另外两个目录也在
+    // 合计与另一个目录也在
     await expect(panel).toContainText("合计");
     await expect(panel).toContainText("data/uploads 上传");
-    await expect(panel).toContainText("data/documents 归档");
   });
 
   test("清理面板三项「预览影响」都返回成功并显示影响面（不点执行清理）", async ({ page }) => {

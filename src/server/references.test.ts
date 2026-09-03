@@ -14,7 +14,7 @@ beforeEach(() => {
     INSERT INTO skills (id, name, description, content, created_at, updated_at)
       VALUES ('skill-a', '范本技能', '', '正文', 0, 0), ('skill-b', '备用技能', '', '正文', 0, 0);
     INSERT INTO tools (id, name, public_name, description, parameters, output, timeout_ms, code, created_at, updated_at)
-      VALUES ('tool-1', '归档', 'archive', '', '{"type":"object"}', NULL, NULL, 'export default async () => ({})', 0, 0),
+      VALUES ('tool-1', '盖章', 'stamp', '', '{"type":"object"}', NULL, NULL, 'export default async () => ({})', 0, 0),
              ('tool-2', '检查', 'check', '', '{"type":"object"}', NULL, NULL, 'export default async () => ({})', 0, 0);
   `);
 });
@@ -27,10 +27,10 @@ function seedWorkflow(name: string, skillIds: string[], toolIds: string[]): stri
 
 describe("Skill 与 Tool 的引用方", () => {
   it("技能集里的技能被工作流引用，跳转到工作流设置页", () => {
-    const wfA = seedWorkflow("采购", ["skill-a"], []);
+    const wfA = seedWorkflow("质检", ["skill-a"], []);
     const wfB = seedWorkflow("简历", ["skill-a", "skill-b"], ["tool-1"]);
 
-    // 按工作流名排序（SQLite 二进制序：简 < 采）
+    // 按工作流名排序（SQLite 二进制序：简 < 质）
     expect(referencesOf("skill", "skill-a")).toEqual([
       {
         kind: "workflow",
@@ -42,7 +42,7 @@ describe("Skill 与 Tool 的引用方", () => {
       {
         kind: "workflow",
         id: wfA,
-        name: "采购",
+        name: "质检",
         detail: "技能集",
         href: `/workflows/${wfA}/settings`,
       },

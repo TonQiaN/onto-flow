@@ -55,7 +55,7 @@ export interface DatabaseHealth {
 }
 
 /**
- * 磁盘目录统计：count 为目录数（runs）或文件数（uploads/documents）。
+ * 磁盘目录统计：count 为目录数（runs）或文件数（uploads）。
  * 服务端 DiskDirStat 只有 { bytes, dirs?, files? }，不带路径，所以这里没有 path 字段
  * ——曾经声明过一个永远是空串的 path，纯属对着不存在的契约写字段。
  */
@@ -67,7 +67,6 @@ export interface DiskEntry {
 export interface DiskHealth {
   runs: DiskEntry;
   uploads: DiskEntry;
-  documents: DiskEntry;
 }
 
 /** 孤儿运行：状态仍为 running，但进程内已无对应会话/事件泵（多为进程重启遗留） */
@@ -142,7 +141,7 @@ function asDiskEntry(value: unknown): DiskEntry {
   return {
     sizeBytes: num(o.bytes),
     // 同一个 DiskDirStat 的两种口径：runs 目录只有 dirs 有意义（一次运行一个工作区），
-    // uploads/documents 只带 files。不是同义键猜测，是服务端明确的两种统计维度。
+    // uploads 只带 files。不是同义键猜测，是服务端明确的两种统计维度。
     count: num(o.dirs ?? o.files),
   };
 }
@@ -205,7 +204,6 @@ export function asHealth(value: unknown): HealthPayload {
     disk: {
       runs: asDiskEntry(disk.runsDir),
       uploads: asDiskEntry(disk.uploads),
-      documents: asDiskEntry(disk.documents),
     },
     orphanRuns: asOrphanRuns(o.orphanRuns),
     counts: {

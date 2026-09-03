@@ -85,7 +85,7 @@ describe("其余字段", () => {
   });
 
   it("公名必须小写字母开头、只含小写字母数字下划线、最长 64 位", () => {
-    expect(publicNameProblem("save_purchase_plan")).toBeNull();
+    expect(publicNameProblem("validate_resume_match_result")).toBeNull();
     expect(publicNameProblem("a".repeat(64))).toBeNull();
     expect(publicNameProblem("Save")).toMatch(/非法/);
     expect(publicNameProblem("1abc")).toMatch(/非法/);

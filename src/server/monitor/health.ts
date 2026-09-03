@@ -112,11 +112,9 @@ function readDisk(): HealthDisk {
   // 运行目录布局是 data/runs/<workflowId>/<runId>，健康页要数第二层叶子而不是工作流。
   const runsDir = dirStat(path.join(DATA_DIR, "runs"), 2);
   const uploads = dirStat(path.join(DATA_DIR, "uploads"));
-  const documents = dirStat(path.join(DATA_DIR, "documents"));
   return {
     runsDir: { bytes: runsDir.bytes, dirs: runsDir.topDirs, files: runsDir.files },
     uploads: { bytes: uploads.bytes, files: uploads.files },
-    documents: { bytes: documents.bytes, files: documents.files },
   };
 }
 

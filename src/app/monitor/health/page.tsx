@@ -323,20 +323,14 @@ function DatabaseCard({ health }: { health: HealthPayload }) {
   );
 }
 
-/** 三个数据目录的配色，取自 ui.tsx 的图表色板 */
-const DISK_COLORS = [CHART_COLORS.tokens, CHART_COLORS.cancelled, CHART_COLORS.success];
+/** 两个数据目录的配色，取自 ui.tsx 的图表色板 */
+const DISK_COLORS = [CHART_COLORS.tokens, CHART_COLORS.cancelled];
 
 function DiskCard({ health }: { health: HealthPayload }) {
   const { disk } = health;
   const segments = [
     { key: "runs", label: "data/runs 运行工作区", entry: disk.runs, unit: "个目录" },
     { key: "uploads", label: "data/uploads 上传", entry: disk.uploads, unit: "个文件" },
-    {
-      key: "documents",
-      label: "data/documents 归档",
-      entry: disk.documents,
-      unit: "个文件",
-    },
   ];
   const total = segments.reduce((s, x) => s + x.entry.sizeBytes, 0);
   const over = disk.runs.sizeBytes > WORKSPACE_WARN_BYTES;

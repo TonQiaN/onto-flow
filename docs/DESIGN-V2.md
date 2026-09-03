@@ -88,7 +88,7 @@ refCount: number   // 被引用次数，见第三节
   refs: Array<{
     kind: "workflow" | "action";     // 引用方的种类
     id: string; name: string;
-    detail: string;                   // 如「节点：集采计划审核」「输入端口：集采计划」「技能集」「Tool 集」
+    detail: string;                   // 如「节点：简历汇总评分」「输入端口：岗位JD」「技能集」「Tool 集」
     href: string;                     // 可跳转的前端路径；技能集 / Tool 集指向 /workflows/<id>/settings
   }>
 }

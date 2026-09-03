@@ -90,7 +90,7 @@ export async function launchRun(
       // 下面四个不是凭据而是运行上下文，因此排在白名单之后、不可被它覆盖：
       // DSH_HOME 把 harness 的用户级根钉进运行目录（隔离）；TMPDIR 把 agent 的
       // 临时文件与上游沙箱围栏的临时根一起钉进运行目录（docs/harness/02）；
-      // 另两个让 Tool 插件够得着工作台自己的数据——归档类工具正是靠它写库与落备份文件。
+      // 另两个让 Tool 插件够得着工作台自己的数据——落库类 Tool 正是靠它写库与落备份文件。
       DSH_HOME: workspace.homeDir,
       TMPDIR: workspace.tmpDir,
       ONTOFLOW_DB_PATH: path.join(DATA_DIR, "ontoflow.db"),

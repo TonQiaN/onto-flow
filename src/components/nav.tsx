@@ -11,7 +11,6 @@ const items = [
   { href: "/tools", label: "Tool 库" },
   { href: "/object-types", label: "对象类型" },
   { href: "/runs", label: "运行历史" },
-  { href: "/documents", label: "归档文档" },
 ];
 
 /** 设置与监控台一样属于开发者面，与主导航分区放在底部。 */
