@@ -18,7 +18,7 @@
 | 4 监控台收口为系统健康一页 | `cleanup/4-monitor-health-only` | #24 | 已合并——提交随 #25 进 main（GitHub 在 #23 合并删基分支时把 #24 关闭未 retarget，见 #24 留言） |
 | 3b 回边重入等待环体收束（第 3 批附加） | `cleanup/3b-reentry-waits-for-loop-body` | #25 | 已合并（9032beb） |
 | 3c 轮次重载荷按轮另取、maxReentries 上限（第 3 批附加） | `cleanup/3c-round-payload-on-demand` | #26 | 已合并（4bae66a） |
-| 5 `find-simplifications` 第一轮 | `cleanup/5-simplifications-round-1` | #28 | 27 份记录已提出，待逐条拍板 |
+| 5 `find-simplifications` 第一轮 | `cleanup/5-simplifications-round-1` | #28 | 26 份记录已提出，待逐条拍板 |
 
 顺序 0 → 0a → 0b → 1 → 2 → 3 → 4 → 5；1 与 2 互不依赖，可并行开发、按序合并；3 依赖 2；
 4 依赖 2 与 3；5 依赖全部合并。每批一个 stacked PR，PR 正文按 `.github/pull_request_template.md`

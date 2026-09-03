@@ -46,11 +46,15 @@ both values」），审阅者更新 pin 时短语被删掉也不会红。
 - 第三个 `it()`（拓扑，`:31-49`）**换写法、不删**：把 `scripts/seed-resume.ts` 里模块级的 `CRITICS`
   （`:513`）、`desiredNodes`（`:738`）、`desiredEdges`（`:764`）连同 `nodeId` / `edgeId` / `edge` 这些纯
   函数拆到无副作用的 `scripts/seed-resume-graph.ts`（不 import `@/db`，不读写 `data/`），`seed-resume.ts`
-  从它 import；测试改 import 同一个模块，对**数据**而不是源码文本断言：`CRITICS` 六个 key 各对应一个
-  Action 节点；每个评委节点都有来自解析节点两个端口（`RESUME_MATCH_PARSED_JOB_PORT` /
-  `RESUME_MATCH_PARSED_RESUME_PORT`）的入边；汇总节点在 `RESUME_MATCH_REPORT_CRITICS_PORT` 上恰有六条入边、
-  来源两两不同且覆盖全部评委；再跑一遍 `validateGraph`（`src/lib/graph.ts`）要求零问题。换变量名、换行、
-  改布局坐标都不会红，接错一条边会。
+  从它 import；测试改 import 同一个模块，对**数据**做**精确集合**比较，而不是子集检查：
+  `validateWorkflowContract`（`src/server/resume-match.ts:400-438`）内部就有 `expectedEdges` /
+  `expectedEdgeKeys`，受理时要求边集合与各 Action 端口集合**完全一致**——多一条类型匹配的合法边、多接一个
+  汇总端口都会 422，而「六评委各有入边、汇总恰六条评委入边」这种子集断言与 `validateGraph` 都拦不住
+  （Codex 对 #28 的复审指出）。所以把期望的边四元组集合与各 Action 的端口集合从 `resume-match.ts` 抽到
+  纯模块 `src/lib/resume-match.ts`（三类 pin 与 `RESUME_MATCH_*` 端口常量已经住在那里），
+  `validateWorkflowContract` 改从它 import，测试也 import 它：种子图的边键排序后 `toEqual` 期望集合，每个
+  Action 节点的端口集合 `toEqual` 期望端口集合，节点集合按 key 精确相等。同一份期望喂两处，种子与契约
+  不可能漂移；换变量名、换行、改布局坐标都不会红，多一条边或少一条边都会。
 - 保留文件并补一句头注释：它钉两类 sha256 re-pin 管不到的东西——裁决语义短语，与种子实际接线；Tool 实现归
   `RESUME_MATCH_VALIDATOR_TOOL_SHA256`。文件仍在 `scripts/`（`vitest.config.ts` 的 `include` 已含
   `scripts/**/*.test.ts`）。
@@ -69,11 +73,11 @@ both values」），审阅者更新 pin 时短语被删掉也不会红。
 **不需要**跑 `seed-resume.ts`（它写 `data/`），也不需要付费冒烟——三类 digest 的 pin 值一字未动，
 `resume-match-validator-integrity.ts` 的受理校验路径不变；拆模块后 `npx tsx scripts/seed-resume.ts` 在本地
 跑一次确认仍 idempotent（不花钱，只写库与 `data/samples/`）。故意在 `seed-resume-graph.ts` 里删掉一条
-评委→汇总的边，新断言必须红。
+评委→汇总的边、再多接一条类型匹配的合法边，新断言两次都必须红。
 
 ## 风险
 
 低。`seed-resume-graph.ts` 必须保持无副作用（不 import `@/db`、不碰文件系统），否则测试一 import 就会去种
 真库——用「文件顶部不出现 `@/db` / `node:fs`」这一条肉眼核对即可，不值一条 rules 断言。
 
-预估净删约 10 行（删 Tool 源码正则与拓扑正则约 −25，语义断言与模块拆分的 import 约 +15）；风险等级：低。
+预估净删约 5 行（删 Tool 源码正则与拓扑正则约 −25，精确集合断言、期望集合抽出与 import 约 +20）；风险等级：低。
