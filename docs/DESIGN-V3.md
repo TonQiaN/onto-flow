@@ -249,7 +249,10 @@
    否则光标停在第 1 轮时看到的是最后一轮的东西。引擎在 `runActionNode` **一进门**就 insert 骨架行
    （running + `startedAt` + `inputs`；此时还没有快照），在校验产物路径、读技能投影这些会抛出的
    准备步骤之前——否则准备阶段抛出时 catch 没有行可收口；快照生成后 update `snapshot`，结束时
-   update 终态、`finishedAt`、`exitName`、`outputs`、`error`。`runner.test.ts` 覆盖一条会话开始前
+   update 终态、`finishedAt`、`exitName`、`outputs`、`error`。**Action 侧的收口一律带条件
+   `where status = 'running'`**：取消可能在 Action 正等待最后一次 `sessionOutput` / `closeSession`
+   时到达，`cancelRun` 先把这一行写成 cancelled，Action 侧随后无条件写 success 就把取消覆盖掉了；
+   条件更新让先到的终态赢，`runner.test.ts` 加一条「Action 完成前一刻被取消」的用例。`runner.test.ts` 覆盖一条会话开始前
    就失败的 Action（产物路径非法），断言它也有一行 failed 轮次。**必须有它的原因**：
    `run_nodes` 一个节点只有一行，回边重入会覆盖它的 `startedAt` / `finishedAt` / `outputs` /
    `sessionId` / `snapshot`，只看 `run_nodes` 回放不出「第 1 轮走了打回、第 2 轮走了通过」。
@@ -292,10 +295,12 @@
 
 **保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
 重载荷（`inputs` / `outputs` / `snapshot`；快照含 prompt、rule、渲染后的提示与技能集全文，循环运行
-会成倍复制）。事件清理（`cleanup.ts` 的 events 目标）与 `run_events` 同一刀：把该运行轮次行的三个
-重载荷列置空、骨架保留，回放退化为轮次级、抽屉的输入输出与快照页签显示「已清理」；运行清理才
-删整行。`detailStat` 与预览文案把「置空的轮次行数」一并报出，`cleanup.test.ts` 断言 dryRun 与真做
-一致。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
+会成倍复制）。事件清理（`cleanup.ts` 的 events 目标）与 `run_events` 同一刀：把该运行轮次行**与
+`run_nodes`**的 `inputs` / `outputs` / `snapshot` 一并置空（`run_nodes` 上那份是最新轮的副本，不清
+就仍经 `/api/runs/[id]` 整行返回），骨架保留，回放退化为轮次级、抽屉的输入输出与快照页签显示
+「已清理」；运行清理才删整行。`detailStat` 与预览文案把「置空的轮次行数 / 节点行数」一并报出，
+`cleanup.test.ts` 断言 dryRun 与真做一致。`run_nodes` 上的这三列与轮次行是同一事实的两份表示，
+留给第 5 批作为简化候选（trajectory 接口的技能名映射改读轮次行后即可删）。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
 `detailStat` 影响面统计与预览文案要加上 `run_node_rounds` 的行数（今天只报 `run_nodes` /
 `run_events` / `node_usage` / `run_results`），`cleanup.test.ts` 补断言：dryRun 报出的行数与真删一致。
 
