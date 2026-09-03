@@ -46,6 +46,11 @@ export interface RunListItem {
 /** 画布通用入口的来源名；其余取值都是调用入口 */
 export const WORKFLOW_RUN_SOURCE = "workflow";
 
+/** 画布通用入口有中文名；调用入口按来源原值展示（`imports.invocation.source` 的读时投影），平台不替它们起名 */
+export function sourceLabel(source: string): string {
+  return source === WORKFLOW_RUN_SOURCE ? "画布发起" : source;
+}
+
 /** summary.byModel 的一行：同一组筛选下某条模型路由的用量 */
 export interface RunSummaryByModel {
   providerId: string;

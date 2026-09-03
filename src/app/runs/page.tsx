@@ -20,6 +20,7 @@ import {
   type RunListEnvelope,
   toMillis,
   WORKFLOW_RUN_SOURCE,
+  sourceLabel,
 } from "./lib";
 import { StatusBadge } from "./status-badge";
 import {
@@ -33,11 +34,6 @@ import {
 interface WorkflowOption {
   id: string;
   name: string;
-}
-
-/** 画布通用入口有中文名；调用入口按载荷 `source`（`imports.invocation.source` 的读时投影）的原值各成一项，平台不替它们起名 */
-function sourceLabel(source: string): string {
-  return source === WORKFLOW_RUN_SOURCE ? "画布发起" : source;
 }
 
 const SELECT_CLASS =

@@ -20,6 +20,7 @@ import {
   formatTokens,
   toMillis,
   type NodeStatus,
+  sourceLabel,
 } from "../lib";
 import { StatusBadge } from "../status-badge";
 import { CancelButton } from "./cancel-button";
@@ -43,10 +44,9 @@ const NODE_STATUS_LABELS: Array<[NodeStatus, string]> = [
 /** 回放推进的节拍：每 100ms 推进 100ms × 倍速 */
 const PLAYBACK_TICK_MS = 100;
 
-/** 画布通用入口有中文名；调用入口按 `imports.invocation.source` 的原值展示，平台不替它们起名 */
-function sourceLabel(run: RunDetail): string {
-  const source = run.imports?.invocation?.source ?? WORKFLOW_RUN_SOURCE;
-  return source === WORKFLOW_RUN_SOURCE ? "画布发起" : source;
+/** 受理来源是 `imports.invocation.source` 的读时投影；没有 invocation 的运行只能是画布发起 */
+function runSource(run: RunDetail): string {
+  return run.imports?.invocation?.source ?? WORKFLOW_RUN_SOURCE;
 }
 
 /** 相对项目根目录的工作区路径；受理前还没有运行目录 */
@@ -204,7 +204,7 @@ export default function RunDetailPage() {
               </div>
               <div>
                 <dt className="text-xs text-zinc-400">来源</dt>
-                <dd className="mt-0.5 text-zinc-700">{sourceLabel(run)}</dd>
+                <dd className="mt-0.5 text-zinc-700">{sourceLabel(runSource(run))}</dd>
               </div>
               <div className="min-w-0">
                 <dt className="text-xs text-zinc-400">工作区</dt>
