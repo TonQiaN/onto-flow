@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page, type Route } from "@playwright/test";
 import { cleanupByPrefix, DATA_DIR, openDb } from "./helpers";
 
 /**
@@ -452,20 +452,58 @@ async function expectMetricHasValue(page: Page, label: string): Promise<string> 
 /**
  * 执行 action 并截获页面自己发出的那次 GET 响应，把它的 JSON 交给断言——
  * DOM 与「页面实际拿到的载荷」比对，而不是测试另拉一份可能已经变化的数据。
+ *
+ * 用请求拦截而不是 waitForResponse + json()：进行中的自动刷新紧接着再发一次同样的请求时，
+ * 浏览器会丢掉上一份响应体，Playwright 报 `Network.getResponseBody` 协议错误。这里由测试
+ * 自己取回响应、留下正文、再交给页面，页面渲染的就是断言拿到的那一份。dev 模式下页面会对
+ * 同一接口连发两次（strict mode），两次各自用自己取回的响应 fulfill；捕获之后不 unroute——
+ * 请求还在 fetch 时 unroute 会被 Playwright 按 fallback 放行，随后的 fulfill 就撞上「已处理」。
  */
 async function captureJson<T>(
   page: Page,
   matches: (url: URL) => boolean,
   action: () => Promise<unknown>,
 ): Promise<T> {
-  const responded = page.waitForResponse(
-    (res) => res.request().method() === "GET" && matches(new URL(res.url())),
-    { timeout: 15_000 },
+  let captured = null as { value: T; body: string } | null;
+  let settle!: () => void;
+  const first = new Promise<void>((resolve) => {
+    settle = resolve;
+  });
+  await page.route(
+    (url) => matches(url),
+    async (route: Route) => {
+      if (route.request().method() !== "GET") {
+        await route.continue();
+        return;
+      }
+      // 捕获之后的每一次匹配请求（strict mode 的第二次、自动刷新）都回同一份正文：页面无论哪次
+      // 请求的状态更新胜出，渲染的都是断言拿到的那一份，不会被中途变化的真实数据替换。
+      if (!captured) {
+        const res = await route.fetch();
+        const body = await res.text();
+        if (!captured) {
+          expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
+          captured = { value: JSON.parse(body) as T, body };
+          settle();
+        }
+      }
+      // 只回传状态与内容类型：原响应头里的 content-encoding 与已解码的正文对不上
+      await route.fulfill({ status: 200, contentType: "application/json", body: captured.body });
+    },
   );
-  await action();
-  const res = await responded;
-  expect(res.ok(), `接口 ${res.url()} 应成功（HTTP ${res.status()}）`).toBe(true);
-  return (await res.json()) as T;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await action();
+    await Promise.race([
+      first,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("15s 内没有截获到匹配的 GET 请求")), 15_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  return captured!.value;
 }
 
 const isLogs = (url: URL) => url.pathname === "/api/monitor/logs";
