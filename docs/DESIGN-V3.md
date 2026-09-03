@@ -298,8 +298,10 @@
 会成倍复制）。事件清理（`cleanup.ts` 的 events 目标）与 `run_events` 同一刀：把该运行轮次行**与
 `run_nodes`**的 `inputs` / `outputs` / `snapshot` 一并置空（`run_nodes` 上那份是最新轮的副本，不清
 就仍经 `/api/runs/[id]` 整行返回），骨架保留，回放退化为轮次级、抽屉的输入输出与快照页签显示
-「已清理」；运行清理才删整行。`detailStat` 与预览文案把「置空的轮次行数 / 节点行数」一并报出，
-`cleanup.test.ts` 断言 dryRun 与真做一致。`run_nodes` 上的这三列与轮次行是同一事实的两份表示，
+「已清理」；运行清理才删整行。清理的**资格按运行算**（`runs.finishedAt` 早于截止且已终态），
+不按「有事件行」算——免费的输入→输出运行、首个事件前就失败的 Action 没有事件行，它们的轮次行与
+`run_nodes` 重载荷同样要置空并计入预览。`detailStat` 与预览文案把「置空的轮次行数 / 节点行数」
+一并报出，`cleanup.test.ts` 断言 dryRun 与真做一致，并含一条「没有事件行的运行也被置空」。`run_nodes` 上的这三列与轮次行是同一事实的两份表示，
 留给第 5 批作为简化候选（trajectory 接口的技能名映射改读轮次行后即可删）。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
 `detailStat` 影响面统计与预览文案要加上 `run_node_rounds` 的行数（今天只报 `run_nodes` /
 `run_events` / `node_usage` / `run_results`），`cleanup.test.ts` 补断言：dryRun 报出的行数与真删一致。
@@ -328,7 +330,8 @@ interface RunGraph {
   `src/components/canvas/`，编辑器与运行页共用；节点视觉仍从 Context 读。
 - **时间模型**：`src/app/runs/[id]/visuals-at.ts` 纯函数
   `visualsAt({ run, nodes, rounds, events, t })` → 每节点 `{ status, round, activity }`、每连线
-  `{ state }`、总计。节点在 `t` 时刻的状态取**该节点在 `t` 之前最后开始的那一轮**：
+  `{ state }`、总计。节点在 `t` 时刻的状态取**该节点在 `t` 之前最后开始的那一轮**（`startedAt`
+  相同——零时长的 skipped 行与紧接着的重入行可能落在同一毫秒——按 `round` 大者为准）：
   `startedAt > t` 等待、`startedAt ≤ t < finishedAt` 运行中、`finishedAt ≤ t` 取该轮终态；没有任何
   轮次行的节点恒为等待。在此之上叠加**节点终态覆盖**：`run_nodes.status` 为 failed / cancelled 且
   `run_nodes.finishedAt ≤ t` 时节点按该终态画（重入耗尽、整运行失败、取消都落在这条规则上）。
@@ -338,7 +341,7 @@ interface RunGraph {
   两轮回边（第 1 轮打回、第 2 轮通过，`t` 落在两轮之间时连线与状态取第 1 轮）/ 重入耗尽（最后一轮
   成功、节点在耗尽时刻翻成失败）/ 取消中途的轮次已收口 / 输入→输出免费运行（两个节点各一行轮次、
   都成功、连线激活）/ 评审循环里输出节点先跳过后成功（两行轮次，`t` 在两轮之间时为已跳过）/
-  事件缺失 / 早于轮次表的运行全部等待。`runner.test.ts` 断言回边重入让输出节点得到两行轮次。
+  两行轮次时间戳相同时按 `round` 大者 / 事件缺失 / 早于轮次表的运行全部等待。`runner.test.ts` 断言回边重入让输出节点得到两行轮次。
 - **数据源**：现 `use-run-visuals.ts` 搬到 `src/app/runs/[id]/use-run-stream.ts`，只负责 SSE
   订阅（snapshot / log 去重 / 一次重连）与 1Hz `now`；视觉一律经 `visualsAt(t)`。进行中默认
   `t = now` 跟随，往回拖即暂停跟随，「跟随」按钮回到现在；已结束默认 `t = finishedAt`。
