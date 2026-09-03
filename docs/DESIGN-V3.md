@@ -212,7 +212,8 @@
 
 **页面 `/runs`**（`src/app/runs/page.tsx` 重写）
 
-- 顶部筛选：工作流选择器（`GET /api/workflows` 列表，默认全部）、状态、来源（全部 / 画布发起
+- 顶部筛选：工作流选择器（消费 `GET /api/workflows` 的信封并按 `total` / `pageSize` 取齐**每一页**，
+  默认页长只有 30；默认全部）、状态、来源（全部 / 画布发起
   `workflow` / 调用入口 = 其余值，按值分组显示）、时间范围（起止日期，转 epoch 毫秒）。
 - 全部筛选与页码住 URL（`?workflowId=&status=&source=&from=&to=&page=`），与库页面
   `use-library-query` 同一习惯（可抽公共 hook，不复制）。
@@ -250,8 +251,14 @@
    级联删除。`inputs` / `outputs` / `snapshot` 是这一轮自己的 PortValue 映射与运行快照（`runOne` /
    `action.ts` 今天写进 `run_nodes` 的同一份内容，快照里含本轮真实生效的产物路径与出口归属）——
    重入会覆盖 `run_nodes` 上的这三列，抽屉的「输入输出」「快照」页签必须读光标所在那一轮的行，
-   否则光标停在第 1 轮时看到的是最后一轮的东西。引擎在一轮开始时 insert（running + `inputs` +
-   `snapshot`）、结束时 update 终态、`finishedAt`、`exitName`、`outputs`、`error`。**必须有它的原因**：
+   否则光标停在第 1 轮时看到的是最后一轮的东西。引擎在 `runActionNode` **一进门**就 insert 骨架行
+   （running + `startedAt` + `inputs`；此时还没有快照），在校验产物路径、读技能投影这些会抛出的
+   准备步骤之前——否则准备阶段抛出时 catch 没有行可收口；快照生成后 update `snapshot`，结束时
+   update 终态、`finishedAt`、`exitName`、`outputs`、`error`。**Action 侧的收口一律带条件
+   `where status = 'running'`**：取消可能在 Action 正等待最后一次 `sessionOutput` / `closeSession`
+   时到达，`cancelRun` 先把这一行写成 cancelled，Action 侧随后无条件写 success 就把取消覆盖掉了；
+   条件更新让先到的终态赢，`runner.test.ts` 加一条「Action 完成前一刻被取消」的用例。`runner.test.ts` 覆盖一条会话开始前
+   就失败的 Action（产物路径非法），断言它也有一行 failed 轮次。**必须有它的原因**：
    `run_nodes` 一个节点只有一行，回边重入会覆盖它的 `startedAt` / `finishedAt` / `outputs` /
    `sessionId` / `snapshot`，只看 `run_nodes` 回放不出「第 1 轮走了打回、第 2 轮走了通过」。
    `run_nodes` 继续作为节点的**最新状态**行（运行列表与汇总读它；抽屉的三个页签一律读光标所在轮的
@@ -259,9 +266,15 @@
    **每个节点的每一次执行都是一行，不只 Action**：输入节点、输出节点在 `runner.ts` 里直接落成
    success，被跳过的节点落成 skipped，它们从不进 `action.ts`，但 `reenter()` 重置的是回边下游的
    **所有**节点——评审循环里输出节点会在打回的那轮被跳过、在通过的那轮成功，同一节点两次转换。
-   所以 `runner.ts` 在给任何节点写 success / skipped 时同样 insert 一行轮次（`sessionId` /
-   `inputs` / `outputs` / `snapshot` 为 null，`startedAt` = `finishedAt` = 落态时刻，`round` 随重置递增），
-   Action 节点的轮次行由 `action.ts` 写。回放只看轮次行，`run_nodes` 只提供终态覆盖；早于本批的运行
+   所以 `runner.ts` 在给任何节点写 success / skipped 时同样 insert 一行轮次（`sessionId` 与
+   `snapshot` 为 null；`inputs` / `outputs` 写 `runOne()` 手里的 PortValue 映射——输入节点是发起时提交
+   的值、输出节点是汇集到的值，抽屉的「输入输出」页签靠它，不读 `run_nodes`；`startedAt` =
+   `finishedAt` = 落态时刻），Action 节点的轮次行由 `action.ts` 写。**轮次号按节点单调递增**：
+   `reenter()` 今天把受影响的每个节点都设成 `target.round + 1`，嵌套或重叠的回边会让内环已经跑过
+   第 1 轮的节点被外环再次重置成第 1 轮，`(run_id, node_id, round)` 唯一键就会撞 `UNIQUE constraint
+   failed`；本批改为每个受影响节点取**自己**的下一个未用轮次号（该节点已有轮次行的最大值 + 1，
+   首轮为 0），`rounds/N/` 产物目录随之按节点计数；`runner.test.ts` 加一条嵌套回边（内环先重入、
+   外环再重入同一下游节点）的用例，断言轮次号不重复、运行不因唯一键失败。回放只看轮次行，`run_nodes` 只提供终态覆盖；早于本批的运行
    没有轮次行，节点恒为等待——同一条规则，没有旧数据分支。**每条终态路径都要收口轮次行**：一轮正常结束由 `action.ts` 写终态；`runActionNode` 抛出（超时、
    缺结构化输出、声明的产物不在盘上、会话关闭失败）时 `runner.ts` 的 catch 把 `run_nodes` 写成 failed，
    同一处也要把这一轮的轮次行写成 failed 并补 `finishedAt` 与 error；`cancelRun`、
@@ -285,8 +298,16 @@
 `GET /api/runs/[id]/nodes/[nodeId]/trajectory`（会话 JSONL 是轨迹的权威源，事件表里没有它），
 这条接口保留不动。
 
-事件清理（`cleanup.ts` 的 events 目标）不删 `run_node_rounds`——它每行几十字节，是回放退化后仍要
-保留的骨架。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
+**保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
+重载荷（`inputs` / `outputs` / `snapshot`；快照含 prompt、rule、渲染后的提示与技能集全文，循环运行
+会成倍复制）。事件清理（`cleanup.ts` 的 events 目标）与 `run_events` 同一刀：把该运行轮次行**与
+`run_nodes`**的 `inputs` / `outputs` / `snapshot` 一并置空（`run_nodes` 上那份是最新轮的副本，不清
+就仍经 `/api/runs/[id]` 整行返回），骨架保留，回放退化为轮次级、抽屉的输入输出与快照页签显示
+「已清理」；运行清理才删整行。清理的**资格按运行算**（`runs.finishedAt` 早于截止且已终态），
+不按「有事件行」算——免费的输入→输出运行、首个事件前就失败的 Action 没有事件行，它们的轮次行与
+`run_nodes` 重载荷同样要置空并计入预览。`detailStat` 与预览文案把「置空的轮次行数 / 节点行数」
+一并报出，`cleanup.test.ts` 断言 dryRun 与真做一致，并含一条「没有事件行的运行也被置空」。`run_nodes` 上的这三列与轮次行是同一事实的两份表示，
+留给第 5 批作为简化候选（trajectory 接口的技能名映射改读轮次行后即可删）。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
 `detailStat` 影响面统计与预览文案要加上 `run_node_rounds` 的行数（今天只报 `run_nodes` /
 `run_events` / `node_usage` / `run_results`），`cleanup.test.ts` 补断言：dryRun 报出的行数与真删一致。
 
@@ -314,7 +335,8 @@ interface RunGraph {
   `src/components/canvas/`，编辑器与运行页共用；节点视觉仍从 Context 读。
 - **时间模型**：`src/app/runs/[id]/visuals-at.ts` 纯函数
   `visualsAt({ run, nodes, rounds, events, t })` → 每节点 `{ status, round, activity }`、每连线
-  `{ state }`、总计。节点在 `t` 时刻的状态取**该节点在 `t` 之前最后开始的那一轮**：
+  `{ state }`、总计。节点在 `t` 时刻的状态取**该节点在 `t` 之前最后开始的那一轮**（`startedAt`
+  相同——零时长的 skipped 行与紧接着的重入行可能落在同一毫秒——按 `round` 大者为准）：
   `startedAt > t` 等待、`startedAt ≤ t < finishedAt` 运行中、`finishedAt ≤ t` 取该轮终态；没有任何
   轮次行的节点恒为等待。在此之上叠加**节点终态覆盖**：`run_nodes.status` 为 failed / cancelled 且
   `run_nodes.finishedAt ≤ t` 时节点按该终态画（重入耗尽、整运行失败、取消都落在这条规则上）。
@@ -324,7 +346,7 @@ interface RunGraph {
   两轮回边（第 1 轮打回、第 2 轮通过，`t` 落在两轮之间时连线与状态取第 1 轮）/ 重入耗尽（最后一轮
   成功、节点在耗尽时刻翻成失败）/ 取消中途的轮次已收口 / 输入→输出免费运行（两个节点各一行轮次、
   都成功、连线激活）/ 评审循环里输出节点先跳过后成功（两行轮次，`t` 在两轮之间时为已跳过）/
-  事件缺失 / 早于轮次表的运行全部等待。`runner.test.ts` 断言回边重入让输出节点得到两行轮次。
+  两行轮次时间戳相同时按 `round` 大者 / 事件缺失 / 早于轮次表的运行全部等待。`runner.test.ts` 断言回边重入让输出节点得到两行轮次。
 - **数据源**：现 `use-run-visuals.ts` 搬到 `src/app/runs/[id]/use-run-stream.ts`，只负责 SSE
   订阅（snapshot / log 去重 / 一次重连）与 1Hz `now`；视觉一律经 `visualsAt(t)`。进行中默认
   `t = now` 跟随，往回拖即暂停跟随，「跟随」按钮回到现在；已结束默认 `t = finishedAt`。
@@ -332,8 +354,10 @@ interface RunGraph {
   该节点的抽屉——这也是早于本批、画布为空的运行进入抽屉的入口），一轮一段（段来自
   `run_node_rounds`；左 = 相对 `startedAt` 偏移，宽 = 时长；没有轮次行的节点这一行没有段），事件按
   `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
-- **抽屉**（点节点打开，右侧）：错误置顶；三页签「轨迹 / 输入输出 / 快照」读**光标所在那一轮**的
-  `run_node_rounds` 行（轨迹页签按该轮会话 id 定位到对应会话），复用
+- **抽屉**（点节点打开，右侧）：错误置顶；「输入输出」「快照」两页签读**光标所在那一轮**的
+  `run_node_rounds` 行；「轨迹」页签对任何运行都一样——调 trajectory 接口拿该节点**全部**会话的轨迹
+  （接口本就按节点读各轮 JSONL，不依赖轮次表），光标所在轮的会话 id 只用来定位到对应会话并高亮，
+  没有轮次行就不定位、整份可检索地展示。复用
   `agent-trajectory.tsx`、`port-value-view.tsx`、`snapshot-view.tsx`；轨迹组件加 `cursorMs`
   （高亮并滚到 `t` 所在记录，不过滤）与 `onSeek`（点记录设 `t`）。`node-card.tsx`、
   `event-log.tsx` 删除。
@@ -379,12 +403,15 @@ interface RunGraph {
 
 **文档同步**：AGENTS.md Repository layout 的 `monitor/` 两行、raw-sql 允许名单去掉 `metrics`、
 「The plugin panel…」等处提到监控台标签的句子、「The eight `/api/monitor/*` routes」改两条；
-`rules.test.ts` 允许名单同步；DESIGN.md 相关句；REVIEW.md；
+`rules.test.ts` 允许名单同步；DESIGN.md 相关句；`docs/DESIGN-V2.md` 「阶段三」里六标签监控台与
+全局 SSE stream 的规定整段改写为「系统健康一页 + health / cleanup 两条路由」；README 监控台段；
+REVIEW.md；
 `docs/simplifications/proposed/2026-09-03-dismantle-monitor-console.md` 移 `done/`。
 
 **验收**：`npm run check`、`npm run build`；`monitor.spec.ts` 只剩导航（入口进 `/monitor`，无标签）
-与系统健康用例，全绿；`rg -n "monitor/(overview|sessions|stream|logs|trace|cost)" src e2e docs`
-无结果。Chrome：系统健康页三块卡片渲染、清理面板三项 dryRun 预览成功。
+与系统健康用例，全绿；`rg -an "monitor/(overview|sessions|stream|logs|trace|cost)" src e2e docs README.md AGENTS.md .github --glob '!docs/DESIGN-V3.md' --glob '!docs/simplifications/**' --glob '!docs/adr/**'`
+无结果（本文与记录树、ADR 是历史陈述，排除；`-a` 是因为 `metrics.ts` 含字面 NUL 字节，默认会被
+当二进制跳过）。Chrome：系统健康页三块卡片渲染、清理面板三项 dryRun 预览成功。
 
 ## 第 5 批：`find-simplifications` 第一轮
 
