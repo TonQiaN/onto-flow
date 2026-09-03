@@ -680,6 +680,131 @@ function nestedLoopWorkflow(): ResolvedWorkflow {
   };
 }
 
+/**
+ * 扇出环体：写码 W 同时喂快评委 F 与慢评委 S，F 的「不通过」出口经回边打回 W。
+ * F 先收束触发回边时 S 还在跑——重入必须等 S 收束再重置，否则调度器会用同一个节点 id
+ * 启动 S 的下一轮、顶掉 running 里正在跟踪的 promise，S 那次完成写进的就是下一轮的状态。
+ */
+function fanOutLoopWorkflow(): ResolvedWorkflow {
+  const workflow = workflowRow("workflow-fanout-loop", "扇出环体测试");
+  const port = (name: string) => ({
+    name,
+    objectTypeId: "text-type",
+    objectTypeName: "文本",
+    kind: "text" as const,
+  });
+  const actionRow = (id: string, actionId: string, label: string) => ({
+    id,
+    workflowId: workflow.id,
+    kind: "action" as const,
+    actionId,
+    objectTypeId: null,
+    label,
+    x: 0,
+    y: 0,
+  });
+  return {
+    workflow,
+    settings: { toggles: {}, mcpServers: [] },
+    subsetIssues: [],
+    nodes: [
+      { id: "input-node", kind: "input", label: "题目", inputs: [], outputs: [port("value")] },
+      {
+        id: "writer-node",
+        kind: "action",
+        label: "写码",
+        inputs: [port("题目"), port("意见")],
+        outputs: [port("稿件")],
+        maxReentries: 2,
+        onExhausted: "fail",
+      },
+      {
+        id: "fast-node",
+        kind: "action",
+        label: "快评委",
+        inputs: [port("稿件")],
+        outputs: [
+          { ...port("定稿"), exitName: "通过" },
+          { ...port("意见"), exitName: "不通过" },
+        ],
+      },
+      {
+        id: "slow-node",
+        kind: "action",
+        label: "慢评委",
+        inputs: [port("稿件")],
+        outputs: [port("报告")],
+      },
+      {
+        id: "merge-node",
+        kind: "action",
+        label: "汇总",
+        inputs: [port("定稿"), port("报告")],
+        outputs: [port("结论")],
+      },
+      { id: "output-node", kind: "output", label: "产出", inputs: [port("value")], outputs: [] },
+    ],
+    edges: [
+      {
+        id: "g1-题目",
+        sourceNodeId: "input-node",
+        sourcePort: "value",
+        targetNodeId: "writer-node",
+        targetPort: "题目",
+      },
+      {
+        id: "g2-稿件到快",
+        sourceNodeId: "writer-node",
+        sourcePort: "稿件",
+        targetNodeId: "fast-node",
+        targetPort: "稿件",
+      },
+      {
+        id: "g3-稿件到慢",
+        sourceNodeId: "writer-node",
+        sourcePort: "稿件",
+        targetNodeId: "slow-node",
+        targetPort: "稿件",
+      },
+      {
+        id: "g4-定稿",
+        sourceNodeId: "fast-node",
+        sourcePort: "定稿",
+        targetNodeId: "merge-node",
+        targetPort: "定稿",
+      },
+      {
+        id: "g5-报告",
+        sourceNodeId: "slow-node",
+        sourcePort: "报告",
+        targetNodeId: "merge-node",
+        targetPort: "报告",
+      },
+      {
+        id: "g6-结论",
+        sourceNodeId: "merge-node",
+        sourcePort: "结论",
+        targetNodeId: "output-node",
+        targetPort: "value",
+      },
+      {
+        id: "g7-回边意见",
+        sourceNodeId: "fast-node",
+        sourcePort: "意见",
+        targetNodeId: "writer-node",
+        targetPort: "意见",
+      },
+    ],
+    nodeRows: new Map([
+      ["writer-node", actionRow("writer-node", "action-writer", "写码")],
+      ["fast-node", actionRow("fast-node", "action-fast", "快评委")],
+      ["slow-node", actionRow("slow-node", "action-slow", "慢评委")],
+      ["merge-node", actionRow("merge-node", "action-merge", "汇总")],
+    ]),
+    ...executionSnapshot(["action-writer", "action-fast", "action-slow", "action-merge"]),
+  };
+}
+
 interface RoundRow {
   nodeId: string;
   round: number;
@@ -1788,6 +1913,202 @@ describe("冻结图与轮次行", () => {
     const closed = roundRows("orphan-run")[0];
     expect(closed.finishedAt).not.toBeNull();
     expect(closed.error).toBe("进程重启，运行被中断");
+  });
+});
+
+describe("回边重入等待环体收束", () => {
+  interface RoundCtx {
+    runId: string;
+    node: { id: string };
+    round: number;
+  }
+
+  /** 复刻 action.ts 的落库次序：一进门开骨架行，收束时按本轮条件写终态。 */
+  const openRound = (ctx: RoundCtx): void => {
+    beginRound({
+      runId: ctx.runId,
+      nodeId: ctx.node.id,
+      round: ctx.round,
+      sessionId: ctx.round === 0 ? ctx.node.id : `${ctx.node.id}#${ctx.round + 1}`,
+      startedAt: new Date(),
+    });
+  };
+  const closeRound = (
+    ctx: RoundCtx,
+    outputs: Record<string, PortValue>,
+    selectedExit: string | null,
+  ): { outputs: Record<string, PortValue>; selectedExit: string | null } => {
+    settleRoundIfRunning({
+      runId: ctx.runId,
+      nodeId: ctx.node.id,
+      round: ctx.round,
+      status: "success",
+      finishedAt: new Date(),
+      exitName: selectedExit,
+      outputs: outputs as unknown as Record<string, unknown>,
+    });
+    return { outputs, selectedExit };
+  };
+
+  const nodeStatus = (runId: string, nodeId: string): string =>
+    (
+      sqlite
+        .prepare("select status from run_nodes where run_id = ? and node_id = ?")
+        .get(runId, nodeId) as { status: string }
+    ).status;
+
+  /**
+   * 快评委第一轮打回、慢评委阻塞在闸门上：回边在慢评委仍在跑时触发。
+   * `release` 放行慢评委，`rejected` 在快评委那次「不通过」写完轮次行后兑现。
+   */
+  function fanOutControls() {
+    let release: (() => void) | undefined;
+    let markRejected: (() => void) | undefined;
+    const rejected = new Promise<void>((resolve) => {
+      markRejected = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls = new Map<string, number>();
+    controls.resolveWorkflow.mockResolvedValue(fanOutLoopWorkflow());
+    controls.runActionNode.mockImplementation(async (ctx: RoundCtx) => {
+      const times = (calls.get(ctx.node.id) ?? 0) + 1;
+      calls.set(ctx.node.id, times);
+      openRound(ctx);
+      if (ctx.node.id === "writer-node") {
+        return closeRound(ctx, { 稿件: { kind: "text", text: `第${times}版稿件` } }, null);
+      }
+      if (ctx.node.id === "fast-node") {
+        if (times === 1) {
+          const result = closeRound(ctx, { 意见: { kind: "text", text: "打回" } }, "不通过");
+          markRejected?.();
+          return result;
+        }
+        return closeRound(ctx, { 定稿: { kind: "text", text: "定稿" } }, "通过");
+      }
+      if (ctx.node.id === "slow-node") {
+        // 只有第一次慢：回边就在这段等待里触发。
+        if (times === 1) await gate;
+        return closeRound(ctx, { 报告: { kind: "text", text: `报告-第${times}次` } }, null);
+      }
+      return closeRound(ctx, { 结论: { kind: "text", text: "结论" } }, null);
+    });
+    return { rejected, release: () => release?.(), calls };
+  }
+
+  it("环体里还有节点在跑时，回边重入挂起到它收束之后", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const fan = fanOutControls();
+
+    const startedRun = await startRun("workflow-fanout-loop", {
+      "input-node": { kind: "text", text: "两数之和" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    const runId = startedRun.runId;
+
+    // 快评委已经打回并落库，回边此刻已满足；慢评委仍卡在闸门上。
+    await fan.rejected;
+    await vi.waitFor(() => {
+      expect(nodeStatus(runId, "fast-node")).toBe("success");
+    });
+    // 重入被挂起：环体一个节点都没被重置，也没有任何第 2 轮开工。
+    expect(nodeStatus(runId, "writer-node")).toBe("success");
+    expect(roundRows(runId).find((r) => r.nodeId === "slow-node" && r.round === 0)?.status).toBe(
+      "running",
+    );
+    expect(roundRows(runId).filter((r) => r.round > 0)).toEqual([]);
+
+    fan.release();
+    await vi.waitFor(() => {
+      const run = sqlite.prepare("select status, error from runs where id = ?").get(runId) as {
+        status: string;
+        error: string | null;
+      };
+      expect(run.status).toBe("success");
+      expect(run.error).toBeNull();
+    });
+
+    const rows = roundRows(runId);
+    // 慢评委两轮各一行，产物各归各轮——串轮的话第 0 轮会顶着第 2 次的报告。
+    const slow = rows.filter((r) => r.nodeId === "slow-node");
+    expect(slow.map((r) => [r.round, r.status])).toEqual([
+      [0, "success"],
+      [1, "success"],
+    ]);
+    expect(slow[0].outputs).toContain("报告-第1次");
+    expect(slow[1].outputs).toContain("报告-第2次");
+    // 第 2 轮的任何一段都不早于慢评委第 1 轮的收束时刻。
+    const slowFinished = slow[0].finishedAt!;
+    expect(slowFinished).not.toBeNull();
+    for (const row of rows.filter((r) => r.round > 0)) {
+      expect(row.startedAt).toBeGreaterThanOrEqual(slowFinished);
+    }
+    // 评审循环里输出节点第 1 轮被跳过、第 2 轮成功；每个 (节点, 轮次) 只有一行。
+    expect(rows.filter((r) => r.nodeId === "output-node").map((r) => [r.round, r.status])).toEqual([
+      [0, "skipped"],
+      [1, "success"],
+    ]);
+    expect(new Set(rows.map((r) => `${r.nodeId}#${r.round}`)).size).toBe(rows.length);
+    expect(rows.every((r) => r.status !== "running")).toBe(true);
+    for (const nodeId of [
+      "input-node",
+      "writer-node",
+      "fast-node",
+      "slow-node",
+      "merge-node",
+      "output-node",
+    ]) {
+      expect([nodeId, nodeStatus(runId, nodeId)]).toEqual([nodeId, "success"]);
+    }
+    // 环体只推进了一轮：每个 Action 各跑两次。
+    expect([...fan.calls.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))).toEqual([
+      ["fast-node", 2],
+      ["merge-node", 1],
+      ["slow-node", 2],
+      ["writer-node", 2],
+    ]);
+  });
+
+  it("挂起期间被取消：这次重入作废，没有任何第 2 轮", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const fan = fanOutControls();
+
+    const startedRun = await startRun("workflow-fanout-loop", {
+      "input-node": { kind: "text", text: "两数之和" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    const runId = startedRun.runId;
+
+    await fan.rejected;
+    await vi.waitFor(() => {
+      expect(nodeStatus(runId, "fast-node")).toBe("success");
+    });
+    await expect(cancelRun(runId)).resolves.toEqual({ ok: true });
+    fan.release();
+
+    await vi.waitFor(() => {
+      expect(isRunExecutionActive(runId)).toBe(false);
+    });
+
+    const run = sqlite.prepare("select status, error from runs where id = ?").get(runId) as {
+      status: string;
+      error: string | null;
+    };
+    expect(run.status).toBe("cancelled");
+    expect(run.error).toBeNull();
+    const rows = roundRows(runId);
+    // 挂起的重入随取消作废：环体一个节点都没有第 2 轮。
+    expect(rows.filter((r) => r.round > 0)).toEqual([]);
+    const slow = rows.find((r) => r.nodeId === "slow-node")!;
+    expect(slow.status).toBe("cancelled");
+    expect(slow.finishedAt).not.toBeNull();
+    expect(rows.every((r) => r.status !== "running")).toBe(true);
+    expect(nodeStatus(runId, "slow-node")).toBe("cancelled");
+    expect(nodeStatus(runId, "writer-node")).toBe("success");
+    expect(fan.calls.get("merge-node")).toBeUndefined();
   });
 });
 

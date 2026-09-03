@@ -53,7 +53,7 @@ src/
 - 前端数据获取：凡是要数据的页面都是 client component（`"use client"` 起手），一律 `fetch` 打 `/api/*` 后在 `useEffect` 里取数。没有 Server Action，也没有任何 Server Component 读 DB——只有根 `app/page.tsx`（仅 redirect）与 `app/layout.tsx`（静态外壳）不带 `"use client"`。
 - UI 文案全部中文；Tailwind 工具类直接写，不引组件库；整体风格与既有外壳（zinc 系工作台）一致。
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
-- 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
+- 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话，且要等环体里全部在跑的节点收束后才重置（ADR-0009）。
 - 运行之间并行且互相独立：同一个工作流可同时发起多次运行，跨运行状态一律按 runId 隔离（工作区目录、子进程、globalThis 上的取消/进程/输入表）。唯一的准入闸门在 `startRun`：同时 running 的运行数达 `MAX_CONCURRENT_RUNS`（16）即返回 429 而不排队——每个运行是一整个 node+tsx+dsh 子进程，队列归外部调用方管。仓库内付费批量脚本实行全有或全撤：任一项被拒时取消并等齐同批已经受理的运行后才报错。
 - 运行页是看一次运行的唯一地方（ADR-0018）：`/runs/<id>` 只读画受理时冻结进 `runs.graph` 的图（从不回查 `workflow_nodes` / `workflow_edges`，早于该决定的运行拿到空图，同一条渲染路径），底部时间轴一节点一行、一轮一段（段来自 `run_node_rounds`），事件按 `run_events.session_id` 落在所属段上；单一时间光标经纯函数 `visualsAt(t)` 推出任一时刻每个节点处于哪一轮、什么状态、哪些连线已激活，进行中默认钉在「现在」跟 SSE、往回拖即暂停跟随，已结束默认停在 `finishedAt`，事件被清理后退化为轮次级；点节点开抽屉看**光标所在那一轮**的轨迹、输入输出与快照。多路并行的切换在导航与运行列表上：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running&pageSize=100`，一页取完不翻页），每一路深链 `/runs/<runId>`；工作流卡片的「运行中」徽标链到按该工作流筛选的运行列表。编辑器只编排与发起——运行对话框受理成功即跳 `/runs/<runId>`，画布上没有运行条、没有并行切换器、没有 `?runId=` 深链。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。全部输入物化到 `workspace/inputs/<节点id>/`——文件拷原件，文字物化为 `<节点名>.md`、JSON 为 `<节点名>.json`，提示里只给路径不内联（ADR-0012）；Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
@@ -89,7 +89,12 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   终态，被批量跳过的 pending 节点各补一行零时长 `skipped`。Action 侧的成功收口带条件 `status = 'running'`
 （`settleRoundIfRunning`）：取消可能在它等最后一次 sessionOutput / closeSession 时到达，先到的终态赢。重入把整个环体一起推进，但轮次号按**节点**
   取自己的下一个未用值（`NodeState.usedRound + 1`）：嵌套或重叠的回边会让内环已经跑过第 N 轮的节点被
-  外环再次重置，一律取「触发重入那个节点的轮次 + 1」就会撞唯一键。`run_nodes` 继续是节点的最新状态行，
+  外环再次重置，一律取「触发重入那个节点的轮次 + 1」就会撞唯一键。**重入还要等受影响的节点全部收束**：
+  回边满足时先排队（`pendingReentries`），受影响节点里一个都不在跑了才执行重置，挂起期间它们也不许被调度。
+  环体扇出时一条快分支满足回边、另一条慢分支还在跑，直接重置会让调度器用同一个节点 id 启动慢分支的下一轮、
+  顶掉正在跟踪的 promise：那次执行完成时写进的是已经代表下一轮的状态（outputs 与出口结算到新一轮头上），
+  `finally` 又把新一轮摘出跟踪表，运行可能在会话仍在飞时就被判成结束。重入次数在真正重置时才计，
+  取消或整运行失败会让排队中的重入作废。`run_nodes` 继续是节点的最新状态行，
   不再承担轮次历史；重入耗尽不是一轮，只在 `run_nodes` 上留终态、时刻与 error。
 - **三层设置与快照（ADR-0016）**：全局设置是基线，工作流设置声明本工作流有什么，Action 只在其中
   收窄；Action 从不开关插件。合成规则：开关 `effectiveToggles(global.toggles, workflow.settings.toggles)`

@@ -508,6 +508,22 @@ interface NodeState {
 type EdgeStatus = "pending" | "satisfied" | "dead";
 
 /**
+ * 一次排队中的回边重入。
+ *
+ * 回边满足时环体里可能还有节点在跑（扇出的慢分支）。直接重置它们，调度器就会用同一个
+ * 节点 id 启动下一轮、顶掉 running 里正在跟踪的 promise：先前那次执行完成时写进的是
+ * 已经代表下一轮的内存状态，它的 outputs 与出口被结算到新一轮头上（串轮），
+ * `.finally` 里的 running.delete 还会把新一轮的 promise 摘掉，executeRun 可能在会话
+ * 仍在飞的时候就去收束子进程。轮次号按节点递增只避免了唯一键冲突，避免不了这些。
+ * 所以重入先挂起，等受影响的节点全部收束再执行。
+ */
+interface PendingReentry {
+  target: NodeState;
+  /** 这次重入会重置的全部节点：挂起期间它们一个都不许再被调度。 */
+  affected: Set<string>;
+}
+
+/**
  * 图执行：就绪驱动、并行、按出口激活、按回边重入（ADR-0009）。
  *
  * 就绪判定只看**前向边**：环里的节点若同时等前驱和回边，第一轮永远等不齐。
@@ -530,6 +546,16 @@ async function executeRun(
     ]),
   );
   const edgeStatus = new Map<string, EdgeStatus>(edges.map((e) => [e.id, "pending"]));
+  /**
+   * 此刻正在执行的节点（节点 id → 它那次执行的 promise）。回边重入要看它：
+   * 环体里还有节点在跑就不能重置，见 reenter。
+   */
+  const running = new Map<string, Promise<void>>();
+  /**
+   * 已排队、尚未执行的重入。回边满足时环体里还有节点在跑，就把这次重入挂起，
+   * 等那些执行各自按本轮收束后再重置（applyPendingReentries）。
+   */
+  const pendingReentries: PendingReentry[] = [];
   let firstError: string | null = null;
   let cancelled = false;
 
@@ -713,9 +739,32 @@ async function executeRun(
     }
   };
 
-  /** 回边被满足：把目标节点连同它的前向下游重置，进入下一轮。 */
-  const reenter = (target: NodeState): boolean => {
+  const anyRunning = (ids: ReadonlySet<string>): boolean => {
+    for (const id of ids) {
+      if (running.has(id)) return true;
+    }
+    return false;
+  };
+
+  /**
+   * 回边被满足：排队一次重入。环体收束之前不重置任何节点——触发回边的那个节点自己
+   * 也还在 running 里，所以正常的单分支循环同样走这条排队路径，只是下一次调度轮转就执行。
+   *
+   * 同一目标只排一队：一轮里两条回边都指向它（两个评委都打回）时，环体只该往前推一轮，
+   * 不该按重入次数记两次。
+   */
+  const reenter = (target: NodeState): void => {
+    if (pendingReentries.some((entry) => entry.target === target)) return;
+    const affected = downstreamOf(target.node.id, edges, backEdgeIds);
+    affected.add(target.node.id);
+    pendingReentries.push({ target, affected });
+  };
+
+  /** 真正执行一次重入：重置环体、推进轮次。次数上限在这里判，不在排队时判。 */
+  const applyReentry = (entry: PendingReentry): void => {
+    const { target, affected } = entry;
     const limit = target.node.maxReentries ?? 0;
+    // 计数在真正执行重入时才判：挂起期间环体还在跑，那一轮还没收束，不该提前宣告耗尽。
     if (target.round >= limit) {
       if ((target.node.onExhausted ?? "fail") === "fail") {
         target.status = "failed";
@@ -728,10 +777,8 @@ async function executeRun(
         firstError ??= message;
       }
       // accept：保留最后一轮的成功结果，回边不再跟进，循环自然收束。
-      return false;
+      return;
     }
-    const affected = downstreamOf(target.node.id, edges, backEdgeIds);
-    affected.add(target.node.id);
     // 整个环体一起进下一轮：只给被回流的节点加轮次的话，环里其他节点会用
     // 同一个产物路径把上一轮的东西覆盖掉，逐轮回看就没了依据。
     // 轮次号按**节点**取自己的下一个未用值，不是一律 target.round + 1：嵌套 / 重叠回边
@@ -757,7 +804,22 @@ async function executeRun(
         }
       }
     }
-    return true;
+  };
+
+  /**
+   * 排队中的重入里，受影响节点已全部收束的那些，现在执行。
+   * 调度循环每转一圈在挑就绪节点之前调用；取消与整运行失败时不调用，挂起的重入随之作废。
+   */
+  const applyPendingReentries = (): void => {
+    for (let index = 0; index < pendingReentries.length;) {
+      const entry = pendingReentries[index];
+      if (anyRunning(entry.affected)) {
+        index += 1;
+        continue;
+      }
+      pendingReentries.splice(index, 1);
+      applyReentry(entry);
+    }
   };
 
   /**
@@ -806,6 +868,8 @@ async function executeRun(
     const ready: NodeState[] = [];
     for (const state of states.values()) {
       if (state.status !== "pending") continue;
+      // 挂起的重入马上要重置这些节点：现在放它们跑，跑完立刻被重置，白烧一次会话。
+      if (pendingReentries.some((entry) => entry.affected.has(state.node.id))) continue;
       if (state.node.kind === "input") {
         ready.push(state);
         continue;
@@ -880,7 +944,6 @@ async function executeRun(
   };
 
   try {
-    const running = new Map<string, Promise<void>>();
     for (;;) {
       if (isRunCancelled(runId)) {
         cancelled = true;
@@ -888,6 +951,9 @@ async function executeRun(
       }
       // 有节点失败后不再启动新节点，但已在跑的等它们自己收束。
       if (firstError === null) {
+        // 先兑现已经等到环体收束的重入，再挑就绪节点——顺序反了，这一圈会漏掉刚解冻的节点，
+        // 而且下面的 running.size === 0 会在还有重入待执行时把整个运行判成结束。
+        applyPendingReentries();
         for (const state of pickReady()) {
           if (running.size >= MAX_CONCURRENT_NODES) break;
           state.status = "running";
