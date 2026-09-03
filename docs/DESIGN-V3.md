@@ -11,8 +11,8 @@
 |---|---|---|---|
 | 0 共识文档（CONTEXT 术语、ADR-0018/0019、本文） | `cleanup/0-consensus-docs` | #18 | 待合并 |
 | 0a 格式化基线 | `cleanup/0a-format-baseline` | #19 | 待合并（stacked 于 #18） |
-| 0b lint / knip / CI / 记录树 / skill / proposed 记录 | `cleanup/0b-toolchain-and-notes` | — | 进行中（stacked 于 #19） |
-| 1 删采购演示与归档链条；seed 只种平台级；e2e 自建夹具 | `cleanup/1-remove-procurement` | — | 进行中 |
+| 0b lint / knip / CI / 记录树 / skill / proposed 记录 | `cleanup/0b-toolchain-and-notes` | #20 | 待合并（stacked 于 #19） |
+| 1 删采购演示与归档链条；seed 只种平台级；e2e 自建夹具 | `cleanup/1-remove-procurement` | #21 | 待合并（stacked 于 #20） |
 | 2 运行列表：信封、`source` 列、筛选与用量汇总 | `cleanup/2-runs-list` | — | 未开始 |
 | 3 运行页：`graph` 列、只读画布、回放、抽屉；编辑器剥离跟随 | `cleanup/3-run-page` | — | 未开始 |
 | 4 监控台收口为系统健康一页 | `cleanup/4-monitor-health-only` | — | 未开始 |

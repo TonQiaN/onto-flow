@@ -40,7 +40,7 @@ Commands / Repository layout、REVIEW.md 同步。连带决定见
 
 ## 落地
 
-PR：待补（分支 `cleanup/1-remove-procurement`，[DESIGN-V3 第 1 批](../../DESIGN-V3.md)）。
+PR：https://github.com/TonQiaN/onto-flow/pull/21（分支 `cleanup/1-remove-procurement`，[DESIGN-V3 第 1 批](../../DESIGN-V3.md)）。
 
 与提议的差异：
 
