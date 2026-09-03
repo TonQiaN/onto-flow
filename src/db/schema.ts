@@ -9,6 +9,8 @@ import {
   type AnySQLiteColumn,
   blob,
 } from "drizzle-orm/sqlite-core";
+// 相对路径而非 @/ 别名：drizzle-kit 打包 schema.ts 时不认 tsconfig 的路径映射。
+import { EMPTY_RUN_GRAPH, type RunGraph } from "../lib/run-graph";
 
 const id = () =>
   text("id")
@@ -376,6 +378,12 @@ export const runs = sqliteTable("runs", {
     string,
     unknown
   > | null>(),
+  /**
+   * 受理时与 runs 行同一事务冻结的图（ADR-0018）：节点、坐标、端口与出口名、连线。
+   * 运行页只读它，从不回查 workflow_nodes / workflow_edges——运行会活过图的下一次编辑。
+   * 早于 ADR-0018 的运行由列默认值拿到空图，同一条渲染路径，不留旧数据分支。
+   */
+  graph: text("graph", { mode: "json" }).$type<RunGraph>().notNull().default(EMPTY_RUN_GRAPH),
   startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
   finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
 });
@@ -434,6 +442,44 @@ export const runNodes = sqliteTable(
   (t) => [uniqueIndex("run_nodes_unique").on(t.runId, t.nodeId)],
 );
 
+/**
+ * 一个节点的一次执行一行（ADR-0018）。`run_nodes` 一个节点只有一行，回边重入会覆盖它的
+ * 起止、出口、产物与快照，只看它回放不出「第 1 轮打回、第 2 轮通过」；轮次历史归这里，
+ * `run_nodes` 只继续作为节点的最新状态行。
+ *
+ * 每一次执行都算一轮，不只 Action：输入 / 输出节点与被跳过的节点由 runner.ts 直接落成
+ * 零时长的 success / skipped 行——回边重置的是下游全部节点，评审循环里输出节点会在打回
+ * 那轮被跳过、在通过那轮成功。取消、整运行失败与启动对账不属于任何一轮，它们把仍在 running
+ * 的行收口成对应终态，并给仍 pending 的节点补一行零时长 skipped。
+ */
+export const runNodeRounds = sqliteTable(
+  "run_node_rounds",
+  {
+    id: id(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    nodeId: text("node_id").notNull(),
+    /** 第几轮，0 起；重入把整个环体的轮次一起推进（ADR-0009） */
+    round: integer("round").notNull(),
+    /** 本轮的会话 id；输入 / 输出 / 被跳过的节点没有会话 */
+    sessionId: text("session_id"),
+    status: text("status", {
+      enum: ["running", "success", "failed", "cancelled", "skipped"],
+    }).notNull(),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
+    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+    /** 本轮走出的具名出口；无具名出口为 null */
+    exitName: text("exit_name"),
+    error: text("error"),
+    /** 这一轮自己的 PortValue 映射与运行快照，抽屉按光标所在轮读它们而不是 run_nodes */
+    inputs: text("inputs", { mode: "json" }).$type<Record<string, unknown> | null>(),
+    outputs: text("outputs", { mode: "json" }).$type<Record<string, unknown> | null>(),
+    snapshot: text("snapshot", { mode: "json" }).$type<Record<string, unknown> | null>(),
+  },
+  (t) => [uniqueIndex("run_node_rounds_unique").on(t.runId, t.nodeId, t.round)],
+);
+
 export const runEvents = sqliteTable(
   "run_events",
   {
@@ -442,6 +488,11 @@ export const runEvents = sqliteTable(
       .notNull()
       .references(() => runs.id, { onDelete: "cascade" }),
     nodeId: text("node_id"),
+    /**
+     * 事件所属的会话，据此把事件归到轮（第 0 轮是节点 id，之后是 `<节点id>#<轮次+1>`）。
+     * 可空只为早于 ADR-0018 的历史行；新写入的事件没有一条为 null。
+     */
+    sessionId: text("session_id"),
     ts: integer("ts", { mode: "timestamp_ms" }).notNull(),
     type: text("type").notNull(),
     payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>(),

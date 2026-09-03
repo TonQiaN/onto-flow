@@ -24,7 +24,6 @@ const LIVE_LIST_MAX = 6;
 
 interface LiveRun {
   id: string;
-  workflowId: string;
   workflowName: string;
   startedAt: string | number;
   nodesTotal: number;
@@ -33,7 +32,7 @@ interface LiveRun {
 
 /**
  * 进行中的运行清单。运行彼此并行独立，看过程必须能各跳各的，
- * 一个总数徽章不够——这里把每一路都列出来，点击深链到对应画布。
+ * 一个总数徽章不够——这里把每一路都列出来，点击深链到它自己的运行页（ADR-0018）。
  */
 function useLiveRuns(): LiveRun[] | null {
   const [runs, setRuns] = useState<LiveRun[] | null>(null);
@@ -108,7 +107,7 @@ export function Nav() {
             <Link
               key={run.id}
               data-testid="nav-running-run"
-              href={`/workflows/${encodeURIComponent(run.workflowId)}?runId=${encodeURIComponent(run.id)}`}
+              href={`/runs/${encodeURIComponent(run.id)}`}
               title={`${run.workflowName} · ${run.id}`}
               className="block rounded-md px-3 py-1.5 transition-colors hover:bg-zinc-800"
             >

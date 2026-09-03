@@ -7,14 +7,13 @@ import {
   pickBySet,
   pruneToggles,
   skillTokenEstimate,
-  sourceExitName,
   toggleChoice,
   toggleId,
   toolTokenEstimate,
   type ActionDto,
-  type FlowNodeData,
   type NodeDto,
 } from "./types";
+import { sourceExitName, type FlowNodeData } from "@/components/canvas/node-model";
 
 const action: ActionDto = {
   id: "decision",

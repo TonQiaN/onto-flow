@@ -317,7 +317,10 @@ function insert(
   payload: Record<string, unknown>,
 ): void {
   try {
-    db.insert(runEvents).values({ runId: ctx.runId, nodeId: ctx.nodeId, ts, type, payload }).run();
+    db.insert(runEvents)
+      // sessionId 把事件归到轮：回放据此把刻度落在时间轴上正确的那一段（ADR-0018）。
+      .values({ runId: ctx.runId, nodeId: ctx.nodeId, sessionId: ctx.sessionId, ts, type, payload })
+      .run();
   } catch (err) {
     // 日志写不进去不该让运行失败：运行本身的权威记录是 runs/run_nodes。
     console.error("[engine] 事件落库失败", ctx.runId, ctx.nodeId, err);

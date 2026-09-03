@@ -104,7 +104,9 @@ sqlite.exec(`
 CREATE TABLE runs (
   id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
   workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
-  settings_snapshot TEXT, started_at INTEGER NOT NULL, finished_at INTEGER
+  settings_snapshot TEXT,
+  graph TEXT NOT NULL DEFAULT '{"version":1,"nodes":[],"edges":[]}',
+  started_at INTEGER NOT NULL, finished_at INTEGER
 );
 CREATE TABLE run_results (
   run_id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
@@ -117,6 +119,16 @@ CREATE TABLE run_nodes (
   cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
   cost REAL NOT NULL DEFAULT 0, inputs TEXT, outputs TEXT, session_id TEXT, error TEXT,
   started_at INTEGER, finished_at INTEGER, UNIQUE(run_id, node_id)
+);
+CREATE TABLE run_node_rounds (
+  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, round INTEGER NOT NULL,
+  session_id TEXT, status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER,
+  exit_name TEXT, error TEXT, inputs TEXT, outputs TEXT, snapshot TEXT,
+  UNIQUE(run_id, node_id, round)
+);
+CREATE TABLE run_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT, session_id TEXT,
+  ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
 );
 `);
 (
@@ -148,6 +160,9 @@ const pendingUsageSettlements = new Map<string, Promise<void>>();
 ).ontoflowPendingUsageSettlements = pendingUsageSettlements;
 
 let startRun: typeof import("./runner").startRun;
+let beginRound: typeof import("./rounds").beginRound;
+let settleRoundIfRunning: typeof import("./rounds").settleRoundIfRunning;
+let reconcileOrphanRuns: typeof import("./reconcile").reconcileOrphanRuns;
 let startResolvedRun: typeof import("./runner").startResolvedRun;
 let cancelRun: typeof import("./runner").cancelRun;
 let isRunExecutionActive: typeof import("./runner").isRunExecutionActive;
@@ -481,14 +496,224 @@ function loopWorkflow(): ResolvedWorkflow {
   };
 }
 
+/** 只有输入与输出两个节点的免费图：不含 Action，仍走完整的引擎生命周期。 */
+function passthroughWorkflow(): ResolvedWorkflow {
+  const workflow = workflowRow("workflow-passthrough", "直通测试");
+  const port = {
+    name: "value",
+    objectTypeId: "text-type",
+    objectTypeName: "文本",
+    kind: "text" as const,
+  };
+  const inputRow = {
+    id: "input-node",
+    workflowId: workflow.id,
+    kind: "input" as const,
+    actionId: null,
+    objectTypeId: "text-type",
+    label: "输入",
+    x: 12,
+    y: 34,
+  };
+  const outputRow = {
+    id: "output-node",
+    workflowId: workflow.id,
+    kind: "output" as const,
+    actionId: null,
+    objectTypeId: "text-type",
+    label: "输出",
+    x: 56,
+    y: 78,
+  };
+  return {
+    workflow,
+    settings: { toggles: {}, mcpServers: [] },
+    subsetIssues: [],
+    nodes: [
+      { id: "input-node", kind: "input", label: "输入", inputs: [], outputs: [port] },
+      { id: "output-node", kind: "output", label: "输出", inputs: [port], outputs: [] },
+    ],
+    edges: [
+      {
+        id: "edge-passthrough",
+        sourceNodeId: "input-node",
+        sourcePort: "value",
+        targetNodeId: "output-node",
+        targetPort: "value",
+      },
+    ],
+    nodeRows: new Map([
+      [inputRow.id, inputRow],
+      [outputRow.id, outputRow],
+    ] as Array<[string, typeof inputRow | typeof outputRow]>),
+    ...executionSnapshot([]),
+  };
+}
+
+/**
+ * 嵌套回边图：input → A → B → C → D → 输出，内环 C 打回 B、外环 D 打回 A。
+ * 外环重入时 B / C / D 已经跑过第 1 轮，一律取「触发重入那个节点的轮次 + 1」会把它们
+ * 再次推回第 1 轮，撞 (run_id, node_id, round) 唯一键。
+ */
+function nestedLoopWorkflow(): ResolvedWorkflow {
+  const workflow = workflowRow("workflow-nested-loop", "嵌套回边测试");
+  const port = (name: string) => ({
+    name,
+    objectTypeId: "text-type",
+    objectTypeName: "文本",
+    kind: "text" as const,
+  });
+  const actionRow = (id: string, actionId: string, label: string) => ({
+    id,
+    workflowId: workflow.id,
+    kind: "action" as const,
+    actionId,
+    objectTypeId: null,
+    label,
+    x: 0,
+    y: 0,
+  });
+  return {
+    workflow,
+    settings: { toggles: {}, mcpServers: [] },
+    subsetIssues: [],
+    nodes: [
+      { id: "input-node", kind: "input", label: "题目", inputs: [], outputs: [port("value")] },
+      {
+        id: "a-node",
+        kind: "action",
+        label: "起草",
+        inputs: [port("题目"), port("终审意见")],
+        outputs: [port("稿件")],
+        maxReentries: 2,
+        onExhausted: "fail",
+      },
+      {
+        id: "b-node",
+        kind: "action",
+        label: "改写",
+        inputs: [port("稿件"), port("初审意见")],
+        outputs: [port("改稿")],
+        maxReentries: 2,
+        onExhausted: "fail",
+      },
+      {
+        id: "c-node",
+        kind: "action",
+        label: "初审",
+        inputs: [port("改稿")],
+        outputs: [
+          { ...port("过初审"), exitName: "通过" },
+          { ...port("初审意见"), exitName: "不通过" },
+        ],
+      },
+      {
+        id: "d-node",
+        kind: "action",
+        label: "终审",
+        inputs: [port("过初审")],
+        outputs: [
+          { ...port("定稿"), exitName: "通过" },
+          { ...port("终审意见"), exitName: "不通过" },
+        ],
+      },
+      { id: "output-node", kind: "output", label: "产出", inputs: [port("value")], outputs: [] },
+    ],
+    edges: [
+      {
+        id: "n1-题目",
+        sourceNodeId: "input-node",
+        sourcePort: "value",
+        targetNodeId: "a-node",
+        targetPort: "题目",
+      },
+      {
+        id: "n2-稿件",
+        sourceNodeId: "a-node",
+        sourcePort: "稿件",
+        targetNodeId: "b-node",
+        targetPort: "稿件",
+      },
+      {
+        id: "n3-改稿",
+        sourceNodeId: "b-node",
+        sourcePort: "改稿",
+        targetNodeId: "c-node",
+        targetPort: "改稿",
+      },
+      {
+        id: "n4-过初审",
+        sourceNodeId: "c-node",
+        sourcePort: "过初审",
+        targetNodeId: "d-node",
+        targetPort: "过初审",
+      },
+      {
+        id: "n5-内环回边",
+        sourceNodeId: "c-node",
+        sourcePort: "初审意见",
+        targetNodeId: "b-node",
+        targetPort: "初审意见",
+      },
+      {
+        id: "n6-外环回边",
+        sourceNodeId: "d-node",
+        sourcePort: "终审意见",
+        targetNodeId: "a-node",
+        targetPort: "终审意见",
+      },
+      {
+        id: "n7-定稿",
+        sourceNodeId: "d-node",
+        sourcePort: "定稿",
+        targetNodeId: "output-node",
+        targetPort: "value",
+      },
+    ],
+    nodeRows: new Map([
+      ["a-node", actionRow("a-node", "action-a", "起草")],
+      ["b-node", actionRow("b-node", "action-b", "改写")],
+      ["c-node", actionRow("c-node", "action-c", "初审")],
+      ["d-node", actionRow("d-node", "action-d", "终审")],
+    ]),
+    ...executionSnapshot(["action-a", "action-b", "action-c", "action-d"]),
+  };
+}
+
+interface RoundRow {
+  nodeId: string;
+  round: number;
+  status: string;
+  sessionId: string | null;
+  startedAt: number;
+  finishedAt: number | null;
+  exitName: string | null;
+  error: string | null;
+  inputs: string | null;
+  outputs: string | null;
+}
+
+function roundRows(runId: string): RoundRow[] {
+  return sqlite
+    .prepare(
+      `select node_id as nodeId, round, status, session_id as sessionId,
+              started_at as startedAt, finished_at as finishedAt, exit_name as exitName,
+              error, inputs, outputs
+         from run_node_rounds where run_id = ? order by node_id, round`,
+    )
+    .all(runId) as RoundRow[];
+}
+
 beforeAll(async () => {
   ({ startRun, startResolvedRun, cancelRun, isRunExecutionActive } = await import("./runner"));
+  ({ beginRound, settleRoundIfRunning } = await import("./rounds"));
+  ({ reconcileOrphanRuns } = await import("./reconcile"));
   ({ deleteRun } = await import("../monitor/cleanup"));
   ({ UnsettledRunLaunchError } = await import("../harness/launch"));
 });
 
 beforeEach(() => {
-  sqlite.exec("DELETE FROM run_results;");
+  sqlite.exec("DELETE FROM run_results; DELETE FROM run_node_rounds; DELETE FROM run_events;");
   controls.createRunWorkspace.mockReset();
   controls.createRunWorkspace.mockImplementation(
     async ({ workflowId, runId }: { workflowId: string; runId: string }) => ({
@@ -1115,6 +1340,454 @@ describe("回边重入", () => {
       .get(startedRun.runId) as { status: string; outputs: string };
     expect(output.status).toBe("success");
     expect(output.outputs).toContain("验收通过的脚本");
+  });
+});
+
+describe("冻结图与轮次行", () => {
+  it("受理把图冻进 runs.graph；输入与输出各得一行零时长的成功轮次", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(passthroughWorkflow());
+
+    const startedRun = await startRun("workflow-passthrough", {
+      "input-node": { kind: "text", text: "直通" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    // 受理返回 runId 时图已经在库里，不等执行器启动（与 runs 行同一事务）。
+    const graph = JSON.parse(
+      (
+        sqlite.prepare("select graph from runs where id = ?").get(startedRun.runId) as {
+          graph: string;
+        }
+      ).graph,
+    );
+    expect(graph.version).toBe(1);
+    expect(graph.nodes.map((n: { id: string; x: number }) => [n.id, n.x])).toEqual([
+      ["input-node", 12],
+      ["output-node", 56],
+    ]);
+    expect(graph.edges.map((e: { id: string }) => e.id)).toEqual(["edge-passthrough"]);
+
+    await vi.waitFor(() => {
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
+      expect(run.status).toBe("success");
+    });
+
+    const rows = roundRows(startedRun.runId);
+    expect(rows.map((r) => [r.nodeId, r.round, r.status])).toEqual([
+      ["input-node", 0, "success"],
+      ["output-node", 0, "success"],
+    ]);
+    for (const row of rows) {
+      // 零时长：这两种节点从不进 action.ts，起止同一时刻，也没有会话与快照。
+      expect(row.startedAt).toBe(row.finishedAt);
+      expect(row.sessionId).toBeNull();
+      // 抽屉的「输入输出」页签靠这两列，输入节点记的是发起时提交的值
+      //（已按 ADR-0012 物化成工作区文件，所以这里是文件引用而不是正文）。
+      expect(JSON.parse(row.inputs!).value[0].file.name).toBe("输入.md");
+      expect(JSON.parse(row.outputs!).value.file.name).toBe("输入.md");
+    }
+  });
+
+  it("回边重入让输出节点得到两行轮次：先跳过、后成功", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(loopWorkflow());
+    controls.runActionNode.mockImplementation(
+      async (ctx: { node: { id: string }; round: number }) => {
+        if (ctx.node.id === "writer-node") {
+          return { outputs: { 脚本: { kind: "text", text: "脚本" } }, selectedExit: null };
+        }
+        return ctx.round === 0
+          ? { outputs: { 意见: { kind: "text", text: "有用例失败" } }, selectedExit: "不通过" }
+          : { outputs: { 定稿: { kind: "text", text: "通过的脚本" } }, selectedExit: "通过" };
+      },
+    );
+
+    const startedRun = await startRun("workflow-loop", {
+      "input-node": { kind: "text", text: "两数之和" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
+      expect(run.status).toBe("success");
+    });
+
+    // run_nodes 只留最后一轮，只看它回放不出「第 1 轮打回、第 2 轮通过」。
+    expect(
+      roundRows(startedRun.runId)
+        .filter((r) => r.nodeId === "output-node")
+        .map((r) => [r.round, r.status]),
+    ).toEqual([
+      [0, "skipped"],
+      [1, "success"],
+    ]);
+  });
+
+  it("嵌套回边下轮次号按节点单调递增，不撞唯一键", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(nestedLoopWorkflow());
+
+    const calls: Array<{ node: string; round: number }> = [];
+    const seen = new Map<string, number>();
+    controls.runActionNode.mockImplementation(
+      async (ctx: { runId: string; node: { id: string }; round: number }) => {
+        calls.push({ node: ctx.node.id, round: ctx.round });
+        // 复刻 action.ts 的落库：唯一键由数据库把关，轮次号一旦重复这里就抛，
+        // 运行随之失败——正是本用例要挡住的回归。
+        sqlite
+          .prepare(
+            "insert into run_node_rounds (id, run_id, node_id, round, status, started_at, finished_at) values (?, ?, ?, ?, 'success', ?, ?)",
+          )
+          .run(
+            `${ctx.node.id}-${ctx.round}`,
+            ctx.runId,
+            ctx.node.id,
+            ctx.round,
+            Date.now(),
+            Date.now(),
+          );
+        const times = (seen.get(ctx.node.id) ?? 0) + 1;
+        seen.set(ctx.node.id, times);
+        if (ctx.node.id === "c-node") {
+          return times === 1
+            ? { outputs: { 初审意见: { kind: "text", text: "改" } }, selectedExit: "不通过" }
+            : { outputs: { 过初审: { kind: "text", text: "过" } }, selectedExit: "通过" };
+        }
+        if (ctx.node.id === "d-node") {
+          return times === 1
+            ? { outputs: { 终审意见: { kind: "text", text: "重来" } }, selectedExit: "不通过" }
+            : { outputs: { 定稿: { kind: "text", text: "定稿" } }, selectedExit: "通过" };
+        }
+        const name = ctx.node.id === "a-node" ? "稿件" : "改稿";
+        return { outputs: { [name]: { kind: "text", text: name } }, selectedExit: null };
+      },
+    );
+
+    const startedRun = await startRun("workflow-nested-loop", {
+      "input-node": { kind: "text", text: "选题" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string | null };
+      expect(run.status).toBe("success");
+      expect(run.error).toBeNull();
+    });
+
+    const keys = calls.map((c) => `${c.node}#${c.round}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    // 内环先把 B / C 推到第 1 轮，外环再重入时它们只能继续往上走，不能回到第 1 轮。
+    expect(calls.filter((c) => c.node === "b-node").map((c) => c.round)).toEqual([0, 1, 2]);
+    expect(calls.filter((c) => c.node === "d-node").map((c) => c.round)).toEqual([1, 2]);
+  });
+
+  it("重入耗尽把节点写成 failed 并补上 finishedAt", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const graph = loopWorkflow();
+    const writer = graph.nodes.find((n) => n.id === "writer-node")!;
+    writer.maxReentries = 1;
+    controls.resolveWorkflow.mockResolvedValue(graph);
+    controls.runActionNode.mockImplementation(async (ctx: { node: { id: string } }) =>
+      ctx.node.id === "writer-node"
+        ? { outputs: { 脚本: { kind: "text", text: "脚本" } }, selectedExit: null }
+        : { outputs: { 意见: { kind: "text", text: "还是不行" } }, selectedExit: "不通过" },
+    );
+
+    const startedRun = await startRun("workflow-loop", {
+      "input-node": { kind: "text", text: "两数之和" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
+      expect(run.status).toBe("failed");
+    });
+
+    // 重入耗尽不是一轮，只在 run_nodes 上留终态与时刻：回放据此在最后一轮成功之后翻成失败。
+    const node = sqlite
+      .prepare(
+        "select status, error, finished_at as finishedAt from run_nodes where run_id = ? and node_id = 'writer-node'",
+      )
+      .get(startedRun.runId) as { status: string; error: string; finishedAt: number | null };
+    expect(node.status).toBe("failed");
+    expect(node.error).toContain("重入次数已达上限");
+    expect(node.finishedAt).not.toBeNull();
+  });
+
+  it("Action 抛出时本轮写成 failed，下游节点各得一行 skipped 轮次", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    controls.runActionNode.mockRejectedValue(new Error("声明的产物没有写出来：result.md"));
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
+      expect(run.status).toBe("failed");
+    });
+
+    const rows = roundRows(startedRun.runId);
+    expect(rows.map((r) => [r.nodeId, r.round, r.status])).toEqual([
+      ["action-node", 0, "failed"],
+      ["input-node", 0, "success"],
+      ["output-node", 0, "skipped"],
+    ]);
+    const failed = rows.find((r) => r.nodeId === "action-node")!;
+    expect(failed.error).toContain("result.md");
+    expect(failed.finishedAt).not.toBeNull();
+    expect(rows.every((r) => r.status !== "running")).toBe(true);
+  });
+
+  it("会话还没开就失败时，一进门开出的骨架行被收口成 failed 并留住本轮输入", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    // 复刻 action.ts 的入口顺序：先开骨架行，再做会抛的准备（校验产物路径、读技能投影）。
+    controls.runActionNode.mockImplementation(
+      async (ctx: {
+        runId: string;
+        node: { id: string };
+        round: number;
+        inputs: Record<string, unknown>;
+      }) => {
+        beginRound({
+          runId: ctx.runId,
+          nodeId: ctx.node.id,
+          round: ctx.round,
+          sessionId: ctx.node.id,
+          startedAt: new Date(),
+          inputs: ctx.inputs,
+        });
+        throw new Error("Action「测试 Action」的输出端口「result」没有产物路径");
+      },
+    );
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
+      expect(run.status).toBe("failed");
+    });
+
+    const row = roundRows(startedRun.runId).find((r) => r.nodeId === "action-node")!;
+    expect(row.status).toBe("failed");
+    expect(row.error).toContain("没有产物路径");
+    expect(row.finishedAt).not.toBeNull();
+    // 收口只写终态列：骨架行带着的会话与本轮输入原样保留。
+    expect(row.sessionId).toBe("action-node");
+    expect(JSON.parse(row.inputs!).source[0].kind).toBe("file");
+    // 起止不同一时刻：这一轮真的开过，不是补出来的零时长行。
+    expect(row.startedAt).toBeLessThanOrEqual(row.finishedAt!);
+  });
+
+  it("Action 已把本轮写成 success、取消随后才到时，轮次行仍被改回 cancelled", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+
+    let release: (() => void) | undefined;
+    let markSettled: (() => void) | undefined;
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 反向次序：action.ts 已经把这一轮收口成 success（此刻取消还没到，条件更新写得进去），
+    // 取消随后才落下——`closeRunningRounds` 找不到 running 的行，只有 runner 的取消分支能纠正。
+    controls.runActionNode.mockImplementation(
+      async (ctx: { runId: string; node: { id: string }; round: number }) => {
+        const key = { runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round };
+        beginRound({ ...key, sessionId: ctx.node.id, startedAt: new Date() });
+        settleRoundIfRunning({
+          ...key,
+          status: "success",
+          finishedAt: new Date(),
+          exitName: null,
+          outputs: { result: { kind: "text", text: "已收口的成功" } },
+        });
+        markSettled?.();
+        await gate;
+        return { outputs: { result: { kind: "text", text: "已收口的成功" } }, selectedExit: null };
+      },
+    );
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await settled;
+    expect(roundRows(startedRun.runId).find((r) => r.nodeId === "action-node")?.status).toBe(
+      "success",
+    );
+    await expect(cancelRun(startedRun.runId)).resolves.toEqual({ ok: true });
+    // 取消只收口仍 running 的行，这一行已经是 success，它动不了。
+    expect(roundRows(startedRun.runId).find((r) => r.nodeId === "action-node")?.status).toBe(
+      "success",
+    );
+    release?.();
+
+    // 等执行器真正收束：cancelRun 早就把 runs 写成 cancelled，只看它会在任务恢复前就通过。
+    await vi.waitFor(() => {
+      expect(isRunExecutionActive(startedRun.runId)).toBe(false);
+    });
+    expect(
+      (
+        sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+          status: string;
+        }
+      ).status,
+    ).toBe("cancelled");
+
+    // 节点与轮次的终态必须一致，否则回放会在一段成功上叠一个取消的节点。
+    const node = sqlite
+      .prepare("select status from run_nodes where run_id = ? and node_id = 'action-node'")
+      .get(startedRun.runId) as { status: string };
+    const row = roundRows(startedRun.runId).find((r) => r.nodeId === "action-node")!;
+    expect(node.status).toBe("cancelled");
+    expect(row.status).toBe("cancelled");
+    expect(row.finishedAt).not.toBeNull();
+    // 收口只改终态列：这一轮真跑出来的产物留着，抽屉仍看得到。
+    expect(row.outputs).toContain("已收口的成功");
+  });
+
+  it("取消赶在 Action 收束之前落下时，Action 侧的成功不覆盖 cancelled", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+
+    let release: (() => void) | undefined;
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // 取消可能在 Action 正等最后一次 sessionOutput / closeSession 时到达；这里复刻
+    // action.ts 的顺序：先 beginRound，收束时只在行仍是 running 时写成功。
+    let statusAfterActionSettle: string | undefined;
+    controls.runActionNode.mockImplementation(
+      async (ctx: { runId: string; node: { id: string }; round: number }) => {
+        beginRound({
+          runId: ctx.runId,
+          nodeId: ctx.node.id,
+          round: ctx.round,
+          sessionId: ctx.node.id,
+          startedAt: new Date(),
+        });
+        markStarted?.();
+        await gate;
+        settleRoundIfRunning({
+          runId: ctx.runId,
+          nodeId: ctx.node.id,
+          round: ctx.round,
+          status: "success",
+          finishedAt: new Date(),
+          outputs: { result: { kind: "text", text: "晚到的成功" } },
+        });
+        statusAfterActionSettle = (
+          sqlite
+            .prepare("select status from run_node_rounds where run_id = ? and node_id = ?")
+            .get(ctx.runId, ctx.node.id) as { status: string }
+        ).status;
+        return { outputs: { result: { kind: "text", text: "晚到的成功" } }, selectedExit: null };
+      },
+    );
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+
+    await started;
+    await expect(cancelRun(startedRun.runId)).resolves.toEqual({ ok: true });
+    release?.();
+
+    await vi.waitFor(() => {
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
+      expect(run.status).toBe("cancelled");
+    });
+    // 先到的终态赢：Action 侧那次条件更新一行都没改到。
+    expect(statusAfterActionSettle).toBe("cancelled");
+    const rows = roundRows(startedRun.runId);
+    expect(rows.find((r) => r.nodeId === "action-node")?.status).toBe("cancelled");
+    expect(rows.find((r) => r.nodeId === "output-node")?.status).toBe("skipped");
+    expect(rows.every((r) => r.status !== "running")).toBe(true);
+  });
+
+  it("整运行失败（executeRun 自身抛出）给未开始的节点补齐 skipped 轮次", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    controls.resolveWorkflow.mockResolvedValue(resolvedWorkflow());
+    controls.createRunWorkspace.mockRejectedValueOnce(new Error("工作区创建失败"));
+
+    const startedRun = await startRun("workflow-1", {
+      "input-node": { kind: "text", text: "测试" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    await vi.waitFor(() => {
+      const run = sqlite
+        .prepare("SELECT status, error FROM runs WHERE id = ?")
+        .get(startedRun.runId) as { status: string; error: string };
+      expect(run.status).toBe("failed");
+      expect(run.error).toContain("工作区创建失败");
+    });
+
+    expect(roundRows(startedRun.runId).map((r) => [r.nodeId, r.round, r.status])).toEqual([
+      ["action-node", 0, "skipped"],
+      ["input-node", 0, "skipped"],
+      ["output-node", 0, "skipped"],
+    ]);
+  });
+
+  it("启动对账收口仍在跑的轮次行，并给未开始的节点补 skipped 轮次", () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const now = Date.now();
+    sqlite
+      .prepare(
+        "insert into runs (id, workflow_id, status, started_at) values ('orphan-run', 'workflow-1', 'running', ?)",
+      )
+      .run(now);
+    sqlite.exec(`
+      INSERT INTO run_nodes (id, run_id, node_id, label, status)
+        VALUES ('rn-1', 'orphan-run', 'action-node', '测试 Action', 'running'),
+               ('rn-2', 'orphan-run', 'output-node', '输出', 'pending');
+      INSERT INTO run_node_rounds (id, run_id, node_id, round, session_id, status, started_at)
+        VALUES ('rr-1', 'orphan-run', 'action-node', 0, 'action-node', 'running', ${now});
+    `);
+
+    reconcileOrphanRuns();
+
+    expect(roundRows("orphan-run").map((r) => [r.nodeId, r.round, r.status])).toEqual([
+      ["action-node", 0, "failed"],
+      ["output-node", 0, "skipped"],
+    ]);
+    const closed = roundRows("orphan-run")[0];
+    expect(closed.finishedAt).not.toBeNull();
+    expect(closed.error).toBe("进程重启，运行被中断");
   });
 });
 

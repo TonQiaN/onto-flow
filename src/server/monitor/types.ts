@@ -92,45 +92,6 @@ export interface SessionsPayload {
   items: LiveSession[];
 }
 
-// ---------------- Trace ----------------
-
-export type SpanKind = "run" | "node" | "session" | "step";
-
-/** span 状态：复用节点状态词，外加 step 专用的 running/success/failed */
-export type SpanStatus = NodeStatus | RunStatus;
-
-export interface TraceSpan {
-  id: string;
-  parentId: string | null;
-  kind: SpanKind;
-  label: string;
-  /** 相对 run.startedAt 的毫秒偏移 */
-  startMs: number;
-  durMs: number;
-  status: SpanStatus;
-  tokens: number;
-  cost: number;
-  /** 一行补充说明（错误信息、工具入参摘要、模型名等） */
-  detail: string;
-}
-
-export interface TraceRunInfo {
-  id: string;
-  workflowId: string;
-  workflowName: string;
-  status: RunStatus;
-  error: string | null;
-  startedAt: number;
-  finishedAt: number | null;
-  tokens: number;
-  cost: number;
-}
-
-export interface TracePayload {
-  run: TraceRunInfo;
-  spans: TraceSpan[];
-}
-
 // ---------------- 日志检索 ----------------
 
 export interface LogItem {

@@ -9,7 +9,10 @@ import {
   createObjectType,
   createWorkflow,
   createWorkflowGraph,
+  finishSyntheticRuns,
   inputPort,
+  insertSyntheticRun,
+  linearRunGraph,
   outputPort,
   type RevisionOwner,
   uniqueSuffix,
@@ -427,5 +430,60 @@ test.describe("工作流画布", () => {
     await page.getByRole("button", { name: "取消", exact: true }).click();
     await expect(page.getByRole("heading", { name: "运行工作流" })).toBeHidden();
     expect(runRequests).toBe(0);
+  });
+
+  test("编辑器只编排与发起：画布上没有运行条、切换器，也不再认 ?runId= 深链", async ({
+    page,
+    request,
+  }) => {
+    const suffix = uniqueSuffix();
+    const objectTypeId = await createObjectType(
+      request,
+      { name: `${PREFIX}类型-${suffix}` },
+      owners,
+    );
+    // 输入直通输出：无 Action、零费用；这里连运行都不发起，只合成一条「进行中」的 DB 行
+    const workflowName = `${PREFIX}不跟随-${suffix}`;
+    const graph = await createWorkflowGraph(
+      request,
+      { name: workflowName, description: "编辑器不再跟随运行（ADR-0018）", objectTypeId },
+      owners,
+    );
+    const { inputNodeId, outputNodeId } = graph;
+    const runId = insertSyntheticRun({
+      workflowId: graph.workflowId,
+      workflowName,
+      status: "running",
+      graph: linearRunGraph({ inputNodeId, outputNodeId, objectTypeId }),
+      nodes: [
+        { nodeId: inputNodeId, label: "输入" },
+        { nodeId: outputNodeId, label: "输出" },
+      ],
+    });
+
+    try {
+      await page.goto(`/workflows/${graph.workflowId}`);
+      await expect(page.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
+
+      // 这条运行确实在跑（导航面板列出了它），画布上仍然没有任何跟随运行的东西：
+      // 运行条、并行切换器、取消与「再次运行」都属于运行页，`run-*` 元素一个都不该出现
+      await expect(
+        page.getByTestId("nav-running-run").filter({ hasText: runId.slice(0, 8) }),
+      ).toHaveCount(1, { timeout: 15_000 });
+      await expect(page.locator('[data-testid^="run-"]')).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "取消运行" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "再次运行" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "运行", exact: true })).toBeVisible();
+
+      // 旧的 ?runId= 深链不再被解析：URL 原样留着，画布什么也不跟随
+      await page.goto(`/workflows/${graph.workflowId}?runId=${runId}`);
+      await expect(page.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
+      await expect(page.locator('[data-testid^="run-"]')).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "取消运行" })).toHaveCount(0);
+    } finally {
+      finishSyntheticRuns([runId]);
+      const del = await request.delete(`/api/runs/${runId}`);
+      expect(del.ok(), `删除运行 ${runId}`).toBeTruthy();
+    }
   });
 });

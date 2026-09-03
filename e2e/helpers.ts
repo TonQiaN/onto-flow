@@ -456,3 +456,215 @@ export async function cleanupFoldersByPrefix(
   targets.sort((a, b) => depth(b.id) - depth(a.id));
   for (const folder of targets) await request.delete(`/api/folders/${folder.id}`);
 }
+
+/* ---------------------------- 合成运行（不经引擎、零费用） ---------------------------- */
+
+/**
+ * 合成运行夹具：直接写 runs / run_nodes / run_node_rounds，不 spawn 子进程、不花钱、时序完全可控。
+ * 运行页只读受理时冻结的 `runs.graph` 与轮次行（ADR-0018），所以夹具要把这两样一起写出来。
+ * 收尾用 `finishSyntheticRuns` 把 running 收口，再经 `DELETE /api/runs/[id]` 删除
+ * （运行中的运行会被 409 拒绝）。
+ */
+export interface RunFixtureNode {
+  nodeId: string;
+  label: string;
+  status?: "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
+  sessionId?: string | null;
+  startedAt?: number | null;
+  finishedAt?: number | null;
+  snapshot?: unknown;
+  outputs?: unknown;
+}
+
+export interface RunFixtureRound {
+  nodeId: string;
+  round: number;
+  status: "running" | "success" | "failed" | "cancelled" | "skipped";
+  startedAt: number;
+  finishedAt?: number | null;
+  sessionId?: string | null;
+  exitName?: string | null;
+  error?: string | null;
+  inputs?: unknown;
+  outputs?: unknown;
+  snapshot?: unknown;
+}
+
+export interface SyntheticRunInput {
+  workflowId: string;
+  workflowName: string;
+  runId?: string;
+  status?: "running" | "success" | "failed" | "cancelled";
+  startedAt?: number;
+  finishedAt?: number | null;
+  runDir?: string | null;
+  imports?: unknown;
+  /** 冻结图；不给就落列默认的空图（早于 ADR-0018 的运行就是这样） */
+  graph?: unknown;
+  nodes?: RunFixtureNode[];
+  rounds?: RunFixtureRound[];
+}
+
+export function insertSyntheticRun(input: SyntheticRunInput): string {
+  const runId = input.runId ?? randomUUID();
+  const startedAt = input.startedAt ?? Date.now();
+  const database = openDb();
+  try {
+    database.transaction(() => {
+      const columns = [
+        "id",
+        "workflow_id",
+        "status",
+        "workflow_name",
+        "started_at",
+        "finished_at",
+        "run_dir",
+        "imports",
+      ];
+      const values: unknown[] = [
+        runId,
+        input.workflowId,
+        input.status ?? "running",
+        input.workflowName,
+        startedAt,
+        input.finishedAt ?? null,
+        input.runDir ?? null,
+        input.imports == null ? null : JSON.stringify(input.imports),
+      ];
+      // graph 有列默认值（空图），只有夹具明确给了才写，好让「早于 ADR-0018 的运行」也可造
+      if (input.graph !== undefined) {
+        columns.push("graph");
+        values.push(JSON.stringify(input.graph));
+      }
+      database
+        .prepare(
+          `insert into runs (${columns.join(", ")}) values (${columns.map(() => "?").join(", ")})`,
+        )
+        .run(...values);
+
+      const insertNode = database.prepare(
+        "insert into run_nodes (id, run_id, node_id, label, status, snapshot, outputs, session_id, started_at, finished_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      for (const node of input.nodes ?? []) {
+        insertNode.run(
+          randomUUID(),
+          runId,
+          node.nodeId,
+          node.label,
+          node.status ?? "pending",
+          node.snapshot == null ? null : JSON.stringify(node.snapshot),
+          node.outputs == null ? null : JSON.stringify(node.outputs),
+          node.sessionId ?? null,
+          node.startedAt ?? null,
+          node.finishedAt ?? null,
+        );
+      }
+
+      const insertRound = database.prepare(
+        "insert into run_node_rounds (id, run_id, node_id, round, session_id, status, started_at, finished_at, exit_name, error, inputs, outputs, snapshot) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      for (const round of input.rounds ?? []) {
+        insertRound.run(
+          randomUUID(),
+          runId,
+          round.nodeId,
+          round.round,
+          round.sessionId ?? null,
+          round.status,
+          round.startedAt,
+          round.finishedAt ?? null,
+          round.exitName ?? null,
+          round.error ?? null,
+          round.inputs == null ? null : JSON.stringify(round.inputs),
+          round.outputs == null ? null : JSON.stringify(round.outputs),
+          round.snapshot == null ? null : JSON.stringify(round.snapshot),
+        );
+      }
+    })();
+  } finally {
+    database.close();
+  }
+  return runId;
+}
+
+/** 把合成运行连同它的节点与仍在跑的轮次一起收口成 success（收尾删除的前提）。 */
+export function finishSyntheticRuns(runIds: string[]): void {
+  if (runIds.length === 0) return;
+  const database = openDb();
+  try {
+    const now = Date.now();
+    const finishRun = database.prepare(
+      "update runs set status = 'success', finished_at = ? where id = ?",
+    );
+    const finishNodes = database.prepare(
+      "update run_nodes set status = 'success', finished_at = ? where run_id = ? and status in ('pending', 'running')",
+    );
+    const finishRounds = database.prepare(
+      "update run_node_rounds set status = 'success', finished_at = ? where run_id = ? and status = 'running'",
+    );
+    database.transaction(() => {
+      for (const runId of runIds) {
+        finishNodes.run(now, runId);
+        finishRounds.run(now, runId);
+        finishRun.run(now, runId);
+      }
+    })();
+  } finally {
+    database.close();
+  }
+}
+
+/** 只有输入与输出两个节点、一条连线的冻结图：够画布画出两个节点与一条线。 */
+export function linearRunGraph(input: {
+  inputNodeId: string;
+  outputNodeId: string;
+  objectTypeId: string;
+  objectTypeName?: string;
+  inputLabel?: string;
+  outputLabel?: string;
+}): unknown {
+  const type = {
+    name: "value",
+    objectTypeId: input.objectTypeId,
+    objectTypeName: input.objectTypeName ?? "文本",
+    kind: "text" as const,
+    exitName: null,
+    artifactPath: null,
+  };
+  return {
+    version: 1,
+    nodes: [
+      {
+        id: input.inputNodeId,
+        kind: "input",
+        label: input.inputLabel ?? "输入",
+        x: 0,
+        y: 0,
+        actionId: null,
+        objectTypeId: input.objectTypeId,
+        inputs: [],
+        outputs: [type],
+      },
+      {
+        id: input.outputNodeId,
+        kind: "output",
+        label: input.outputLabel ?? "输出",
+        x: 260,
+        y: 0,
+        actionId: null,
+        objectTypeId: input.objectTypeId,
+        inputs: [type],
+        outputs: [],
+      },
+    ],
+    edges: [
+      {
+        id: `${input.inputNodeId}-${input.outputNodeId}`,
+        sourceNodeId: input.inputNodeId,
+        sourcePort: "value",
+        targetNodeId: input.outputNodeId,
+        targetPort: "value",
+      },
+    ],
+  };
+}

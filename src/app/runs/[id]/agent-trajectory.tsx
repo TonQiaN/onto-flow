@@ -235,12 +235,21 @@ function DetailPane({ record }: { record: TrajectoryRecord | null }) {
 function RecordLedger({
   records,
   selectedId,
+  cursorId,
   onSelect,
 }: {
   records: TrajectoryRecord[];
   selectedId: string | null;
+  /** 光标所在的那条记录：高亮并滚进视野，但不过滤列表 */
+  cursorId: string | null;
   onSelect: (id: string) => void;
 }) {
+  const cursorRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    cursorRef.current?.scrollIntoView({ block: "nearest" });
+  }, [cursorId]);
+
   let previousLocation = "";
   return (
     <div className="max-h-[34rem] overflow-auto p-2" aria-label="Agent 轨迹记录">
@@ -251,6 +260,7 @@ function RecordLedger({
           const location = `${record.turn ?? ""}/${record.step ?? ""}`;
           const showLocation = location !== previousLocation;
           previousLocation = location;
+          const atCursor = record.id === cursorId;
           return (
             <div key={record.id}>
               {showLocation && (record.turn != null || record.step != null) && (
@@ -261,8 +271,10 @@ function RecordLedger({
               )}
               <button
                 type="button"
+                ref={atCursor ? cursorRef : undefined}
                 data-testid="trajectory-record"
                 data-kind={record.kind}
+                data-cursor={atCursor ? "true" : undefined}
                 data-call-id={record.callId ?? undefined}
                 aria-pressed={selectedId === record.id}
                 onClick={() => onSelect(record.id)}
@@ -270,7 +282,7 @@ function RecordLedger({
                   selectedId === record.id
                     ? "border-blue-200 bg-blue-50/70"
                     : "border-transparent hover:border-zinc-200 hover:bg-zinc-50"
-                }`}
+                } ${atCursor ? "ring-1 ring-blue-500" : ""}`}
               >
                 <span className="mt-0.5 font-mono text-[10px] text-zinc-300">#{record.seq}</span>
                 <RecordBadge kind={record.kind} />
@@ -293,8 +305,12 @@ function RecordLedger({
 }
 
 /**
- * Action 的会话轨迹按需读取：折叠时不下载原始模型上下文；运行中的展开面板
- * 定时重读 JSONL 投影，节点进入终态后停止。
+ * Action 的会话轨迹：挂载即读一次（抽屉的轨迹页签按需挂载它），运行中每 1.5s 重读 JSONL
+ * 投影，节点进入终态后停止。接口按节点读各轮会话，与轮次表无关——没有轮次行的历史运行
+ * 一样能看整份轨迹。
+ *
+ * 光标只用来定位，不过滤：`sessionId` 把面板切到光标所在那一轮的会话，`cursorMs` 高亮并
+ * 滚到那一刻的记录；点某条记录反过来把光标拨到它的开始时刻（onSeek）。
  */
 export function AgentTrajectory({
   runId,
@@ -302,23 +318,36 @@ export function AgentTrajectory({
   nodeLabel,
   status,
   active,
+  sessionId,
+  cursorMs,
+  onSeek,
 }: {
   runId: string;
   nodeId: string;
   nodeLabel: string;
   status: NodeStatus;
   active: boolean;
+  /** 光标所在轮的会话 id；没有轮次行时为 null，面板就展示全部会话不做定位 */
+  sessionId?: string | null;
+  cursorMs?: number;
+  onSeek?: (ms: number) => void;
 }) {
-  const [open, setOpen] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AgentTrajectoryResponse | null>(null);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(sessionId ?? null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const fetching = useRef(false);
   const reloadQueued = useRef(false);
-  const openRef = useRef(false);
+  /** 光标所在会话放在 ref 里读：进 load 的依赖会让每次换轮都重新拉一遍轨迹 */
+  const pinnedSessionRef = useRef<string | null>(sessionId ?? null);
+  /**
+   * 本组件刚刚 onSeek 过去的那条记录。点第 1 轮的记录会把光标带进第 1 轮，
+   * sessionId 随之变化——换轮本该重挑记录，但这一次的换轮正是这条记录引起的，
+   * 清掉它详情面板就退回第一条，等于点了个寂寞。
+   */
+  const seekTargetRef = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     if (fetching.current) {
@@ -343,17 +372,18 @@ export function AgentTrajectory({
       setData(payload);
       setError(null);
       if (payload.available && payload.sessions.length > 0) {
-        setActiveSessionId((current) =>
-          payload.sessions.some((session) => session.id === current)
-            ? current
-            : payload.sessions.at(-1)!.id,
-        );
+        const pinned = pinnedSessionRef.current;
+        setActiveSessionId((current) => {
+          if (payload.sessions.some((session) => session.id === current)) return current;
+          if (pinned && payload.sessions.some((session) => session.id === pinned)) return pinned;
+          return payload.sessions.at(-1)!.id;
+        });
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "加载 Agent 轨迹失败");
     } finally {
       fetching.current = false;
-      const shouldReload = reloadQueued.current && openRef.current;
+      const shouldReload = reloadQueued.current;
       reloadQueued.current = false;
       if (shouldReload) {
         void load();
@@ -363,26 +393,27 @@ export function AgentTrajectory({
     }
   }, [nodeId, runId]);
 
+  // 光标换轮就换会话；面板已经打开，不重新拉数据
   useEffect(() => {
-    openRef.current = open;
-    if (!open) reloadQueued.current = false;
-    return () => {
-      openRef.current = false;
-    };
-  }, [open]);
+    pinnedSessionRef.current = sessionId ?? null;
+    if (!sessionId) return;
+    setActiveSessionId(sessionId);
+    const seeked = seekTargetRef.current;
+    seekTargetRef.current = null;
+    setSelectedId((current) => (current && current === seeked ? current : null));
+  }, [sessionId]);
 
   // status / active 必须是依赖：运行态切到终态时先补拉一次，避免轮询清除后
   // 漏掉最后一条模型消息、工具结果或 usage；run 已终态但 node 状态陈旧时也不再轮询。
   useEffect(() => {
-    if (!open) return;
     void load();
-  }, [active, load, open, status]);
+  }, [active, load, status]);
 
   useEffect(() => {
-    if (!open || !active) return;
+    if (!active) return;
     const timer = setInterval(() => void load(), 1500);
     return () => clearInterval(timer);
-  }, [active, load, open]);
+  }, [active, load]);
 
   const activeSession = useMemo(() => {
     if (!data?.available) return null;
@@ -409,130 +440,128 @@ export function AgentTrajectory({
     if (selected?.id !== selectedId) setSelectedId(selected?.id ?? null);
   }, [selected?.id, selectedId]);
 
-  return (
-    <div className="mt-3 border-t border-zinc-100 pt-3">
-      <button
-        type="button"
-        data-testid="agent-trajectory-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="inline-flex items-center gap-1.5 text-xs text-zinc-500 transition-colors hover:text-zinc-900"
-      >
-        <span
-          className="inline-block transition-transform duration-150"
-          style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}
-        >
-          ▸
-        </span>
-        {open ? "收起 Agent 轨迹" : "查看 Agent 轨迹"}
-      </button>
+  /** 光标所在记录：该会话里开始时刻不晚于光标的最后一条 */
+  const cursorRecordId = useMemo(() => {
+    if (cursorMs == null || !activeSession) return null;
+    let hit: TrajectoryRecord | null = null;
+    for (const record of activeSession.records) {
+      if (record.startedAt > cursorMs) continue;
+      if (!hit || record.startedAt >= hit.startedAt) hit = record;
+    }
+    return hit?.id ?? null;
+  }, [activeSession, cursorMs]);
 
-      {open && (
-        <div
-          data-testid="agent-trajectory-panel"
-          aria-label={`${nodeLabel} Agent 轨迹`}
-          className="mt-3 overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50/60"
-        >
-          {loading && data === null ? (
-            <div className="px-4 py-10 text-center text-xs text-zinc-400">正在读取会话轨迹…</div>
-          ) : error ? (
-            <div className="flex items-center justify-between gap-3 px-4 py-4 text-xs text-red-700">
-              <span>{error}</span>
-              <button
-                type="button"
-                onClick={() => void load()}
-                className="rounded border border-red-200 bg-white px-2 py-1 hover:bg-red-50"
-              >
-                重试
-              </button>
-            </div>
-          ) : data && !data.available ? (
-            <div className="px-4 py-8 text-center text-xs text-zinc-400">
-              {data.reason === "cleaned"
-                ? "会话轨迹文件已清理，运行概要仍可查看。"
-                : "这个 Action 没有留下可读取的会话轨迹。"}
-            </div>
-          ) : activeSession ? (
-            <>
-              <div className="border-b border-zinc-200 bg-white px-3 py-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  {(data?.available ? data.sessions : []).map((session) => (
-                    <button
-                      key={session.id}
-                      type="button"
-                      aria-pressed={session.id === activeSession.id}
-                      onClick={() => {
-                        setActiveSessionId(session.id);
-                        setSelectedId(null);
-                      }}
-                      className={`rounded-md border px-2.5 py-1 text-[11px] transition-colors ${
-                        session.id === activeSession.id
-                          ? "border-zinc-800 bg-zinc-900 text-white"
-                          : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-400"
-                      }`}
-                    >
-                      第 {session.round} 轮
-                    </button>
-                  ))}
-                  {active && (
-                    <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-blue-600">
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
-                      实时
-                    </span>
-                  )}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-500">
-                  <span>{SESSION_STATUS[activeSession.status]}</span>
-                  <span>
-                    {activeSession.provider && activeSession.model
-                      ? `${activeSession.provider}/${activeSession.model}`
-                      : "模型未知"}
-                  </span>
-                  <span>
-                    耗时{" "}
-                    {activeSession.durationMs == null
-                      ? "—"
-                      : formatDuration(activeSession.durationMs)}
-                  </span>
-                  <span>回合 {activeSession.turns}</span>
-                  <span>步骤 {activeSession.steps}</span>
-                  <span>调用 {activeSession.calls}</span>
-                  <span>token {formatTokens(sessionTokens(activeSession))}</span>
-                </div>
-                <div className="mt-3">
-                  <TrajectoryTimeline
-                    records={records}
-                    selectedId={selected?.id ?? null}
-                    onSelect={setSelectedId}
-                  />
-                </div>
-                <div className="mt-3 flex items-center gap-2">
-                  <input
-                    type="search"
-                    aria-label="搜索 Agent 轨迹"
-                    placeholder="搜索轨迹"
-                    value={query}
-                    onChange={(event) => setQuery(event.currentTarget.value)}
-                    className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-700 outline-none transition-colors placeholder:text-zinc-400 focus:border-blue-400"
-                  />
-                  <span className="shrink-0 text-[10px] text-zinc-400">
-                    {records.length} / {activeSession.records.length} 条
-                  </span>
-                </div>
-              </div>
-              <div className="grid min-h-64 bg-white lg:grid-cols-[minmax(280px,1.15fr)_minmax(320px,1fr)] lg:divide-x lg:divide-zinc-200">
-                <RecordLedger
-                  records={records}
-                  selectedId={selected?.id ?? null}
-                  onSelect={setSelectedId}
-                />
-                <DetailPane record={selected} />
-              </div>
-            </>
-          ) : (
-            <div className="px-4 py-8 text-center text-xs text-zinc-400">暂无会话轨迹</div>
-          )}
+  const selectRecord = (id: string) => {
+    setSelectedId(id);
+    const record = activeSession?.records.find((item) => item.id === id);
+    if (!record || !onSeek) return;
+    seekTargetRef.current = id;
+    onSeek(record.startedAt);
+  };
+
+  return (
+    <div
+      data-testid="agent-trajectory-panel"
+      aria-label={`${nodeLabel} Agent 轨迹`}
+      className="overflow-hidden rounded-lg border border-zinc-200 bg-zinc-50/60"
+    >
+      {loading && data === null ? (
+        <div className="px-4 py-10 text-center text-xs text-zinc-400">正在读取会话轨迹…</div>
+      ) : error ? (
+        <div className="flex items-center justify-between gap-3 px-4 py-4 text-xs text-red-700">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded border border-red-200 bg-white px-2 py-1 hover:bg-red-50"
+          >
+            重试
+          </button>
         </div>
+      ) : data && !data.available ? (
+        <div className="px-4 py-8 text-center text-xs text-zinc-400">
+          {data.reason === "cleaned"
+            ? "会话轨迹文件已清理，运行概要仍可查看。"
+            : "这个节点没有留下可读取的会话轨迹。"}
+        </div>
+      ) : activeSession ? (
+        <>
+          <div className="border-b border-zinc-200 bg-white px-3 py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {(data?.available ? data.sessions : []).map((session) => (
+                <button
+                  key={session.id}
+                  type="button"
+                  aria-pressed={session.id === activeSession.id}
+                  onClick={() => {
+                    setActiveSessionId(session.id);
+                    setSelectedId(null);
+                  }}
+                  className={`rounded-md border px-2.5 py-1 text-[11px] transition-colors ${
+                    session.id === activeSession.id
+                      ? "border-zinc-800 bg-zinc-900 text-white"
+                      : "border-zinc-200 bg-white text-zinc-500 hover:border-zinc-400"
+                  }`}
+                >
+                  第 {session.round} 轮
+                </button>
+              ))}
+              {active && (
+                <span className="ml-auto inline-flex items-center gap-1 text-[11px] text-blue-600">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-blue-500" />
+                  实时
+                </span>
+              )}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-500">
+              <span>{SESSION_STATUS[activeSession.status]}</span>
+              <span>
+                {activeSession.provider && activeSession.model
+                  ? `${activeSession.provider}/${activeSession.model}`
+                  : "模型未知"}
+              </span>
+              <span>
+                耗时{" "}
+                {activeSession.durationMs == null ? "—" : formatDuration(activeSession.durationMs)}
+              </span>
+              <span>回合 {activeSession.turns}</span>
+              <span>步骤 {activeSession.steps}</span>
+              <span>调用 {activeSession.calls}</span>
+              <span>token {formatTokens(sessionTokens(activeSession))}</span>
+            </div>
+            <div className="mt-3">
+              <TrajectoryTimeline
+                records={records}
+                selectedId={selected?.id ?? null}
+                onSelect={selectRecord}
+              />
+            </div>
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                type="search"
+                aria-label="搜索 Agent 轨迹"
+                placeholder="搜索轨迹"
+                value={query}
+                onChange={(event) => setQuery(event.currentTarget.value)}
+                className="min-w-0 flex-1 rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-xs text-zinc-700 transition-colors outline-none placeholder:text-zinc-400 focus:border-blue-400"
+              />
+              <span className="shrink-0 text-[10px] text-zinc-400">
+                {records.length} / {activeSession.records.length} 条
+              </span>
+            </div>
+          </div>
+          <div className="grid min-h-64 bg-white lg:grid-cols-[minmax(280px,1.15fr)_minmax(320px,1fr)] lg:divide-x lg:divide-zinc-200">
+            <RecordLedger
+              records={records}
+              selectedId={selected?.id ?? null}
+              cursorId={cursorRecordId}
+              onSelect={selectRecord}
+            />
+            <DetailPane record={selected} />
+          </div>
+        </>
+      ) : (
+        <div className="px-4 py-8 text-center text-xs text-zinc-400">暂无会话轨迹</div>
       )}
     </div>
   );

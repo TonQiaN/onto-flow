@@ -2,7 +2,14 @@
  * Workflow 编辑器模块内共享类型与纯函数工具。
  * 与 docs/DESIGN.md 的 API 契约（ActionDto / NodeDto / EdgeDto）严格一致。
  */
-import type { Edge, Node } from "@xyflow/react";
+import type { Edge } from "@xyflow/react";
+import type {
+  FlowNode,
+  NodeMeta,
+  PortKind,
+  PortSnapshot,
+  ReasoningEffort,
+} from "@/components/canvas/node-model";
 import type { FolderRef } from "@/components/library";
 import type { ValidationIssue } from "@/lib/graph";
 import {
@@ -11,32 +18,6 @@ import {
   type CompositionToggles,
   type WorkflowSettings,
 } from "@/lib/workflow-settings";
-
-export type PortKind = "text" | "file" | "json";
-export type ReasoningEffort = "off" | "low" | "high" | "max";
-export type RunNodeStatus = "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
-
-export const EFFORT_LABEL: Record<ReasoningEffort, string> = {
-  off: "关闭",
-  low: "低",
-  high: "高",
-  max: "最大",
-};
-
-export const KIND_LABEL: Record<PortKind, string> = {
-  text: "文本",
-  file: "文件",
-  json: "JSON",
-};
-
-export interface PortSnapshot {
-  name: string;
-  objectTypeId: string;
-  objectTypeName: string;
-  kind: PortKind;
-  /** 输出端口所属的具名出口；输入端口与普通输出端口为 null */
-  exitName: string | null;
-}
 
 export interface ActionPortDto extends PortSnapshot {
   id: string;
@@ -237,59 +218,6 @@ export function actionNamesByEntity(
   return result;
 }
 
-/** 节点卡片上的只读展示信息，不参与持久化（`_` 前缀，toNodeDto 天然剥离） */
-export interface NodeMeta {
-  description: string;
-  modelName: string;
-  effort: ReasoningEffort;
-  refCount: number;
-  /** Action 已被删除 / 引用失效 */
-  missing?: boolean;
-}
-
-/**
- * node.data 只放展示与引用数据（Dify 模式）：
- * 持久化字段走 toNodeDto 白名单；`_` 前缀为瞬态字段，保存时天然剥离。
- */
-export type FlowNodeData = {
-  kind: "action" | "input" | "output";
-  actionId: string | null;
-  objectTypeId: string | null;
-  label: string;
-  inputs: PortSnapshot[];
-  outputs: PortSnapshot[];
-  /** 瞬态：本次运行中该节点的状态（SSE snapshot 写入，保存时剥离） */
-  _status?: RunNodeStatus;
-  /** 瞬态：卡片副信息（模型、思考强度、引用数…） */
-  _meta?: NodeMeta;
-};
-
-export type FlowNode = Node<FlowNodeData, "flowNode">;
-
-const PALETTE = [
-  "#f59e0b",
-  "#10b981",
-  "#3b82f6",
-  "#8b5cf6",
-  "#ec4899",
-  "#14b8a6",
-  "#f97316",
-  "#6366f1",
-  "#84cc16",
-  "#e11d48",
-  "#0ea5e9",
-  "#a855f7",
-];
-
-/** objectTypeId 稳定哈希取色：同类型同色（ComfyUI 风端口配色） */
-export function typeColor(objectTypeId: string): string {
-  let h = 0;
-  for (let i = 0; i < objectTypeId.length; i++) {
-    h = (h * 31 + objectTypeId.charCodeAt(i)) >>> 0;
-  }
-  return PALETTE[h % PALETTE.length];
-}
-
 /** Action 端口签名：「输入们 → 输出们」 */
 export function portSignature(action: ActionDto): string {
   const ins = actionPorts(action, "input").map((p) => p.name);
@@ -341,15 +269,6 @@ export function actionPortSnapshots(action: ActionDto): {
       exitName: p.exitName,
     }));
   return { inputs: pick("input"), outputs: pick("output") };
-}
-
-/** 连线展示的情况名来自源端口所属出口，连线本身不保存条件（ADR-0009）。 */
-export function sourceExitName(
-  sourceData: FlowNodeData | undefined,
-  sourceHandleId: string | null | undefined,
-): string | null {
-  const sourcePort = sourceData?.outputs.find((port) => port.name === (sourceHandleId ?? "value"));
-  return sourcePort?.exitName ?? null;
 }
 
 /** Action → 节点卡片副信息 */

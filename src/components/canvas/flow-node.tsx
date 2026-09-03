@@ -2,21 +2,24 @@
 
 /**
  * 画布唯一注册的自定义节点组件（Dify 模式：单一 nodeType，内部按 data.kind 分发）。
+ * 编辑器与运行页共用，运行页多一份视觉上下文。
  *
  * 信息层级（自上而下逐级弱化）：
  *   ① 标题行：Action 名 / 输入·输出角色
  *   ② 副信息：模型 · 思考强度（Action）或 对象类型形态（输入输出节点）
  *   ③ 端口行：类型色点 + 端口名，hover 才显示对象类型全名
  *
- * 运行态视觉（模块 C）：
- * - 状态源是 RunVisualsContext（use-run-visuals.ts）；无 Provider 时降级读 data._status。
+ * 运行态视觉：
+ * - 状态源是 CanvasVisualsContext（node-visuals.tsx），值是 visualsAt(t) 在光标时刻的推导；
+ *   没有 Provider（编辑器）时不画任何运行态。
  * - 五态描边见 STATUS_STYLE；执行中额外挂 .ff-node-running 呼吸 + 顶部细进度条，
  *   running → success 的瞬间挂一次 .ff-node-pulse。
- * - 卡片底部常驻运行信息条：执行中是秒级计时 + 最近活动摘要，
- *   结束后是耗时 + token + 费用（失败再补一行错误摘要）。
+ * - 卡片底部运行信息条：执行中是「光标 - 本轮开始」的计时 + 最近活动摘要，
+ *   结束后是本轮耗时 +（节点收束后的）token 与费用（失败再补一行错误摘要）。
  */
 import { memo, useEffect, useRef, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { formatCost, formatDuration, formatTokens } from "@/app/runs/lib";
 import {
   EFFORT_LABEL,
   KIND_LABEL,
@@ -24,20 +27,12 @@ import {
   type FlowNode,
   type PortSnapshot,
   type RunNodeStatus,
-} from "./types";
+} from "./node-model";
 import { handleAffinity, useCanvasState } from "./canvas-state";
-import {
-  activitySummary,
-  formatCost,
-  formatDuration,
-  formatTokens,
-  useRunVisualsContext,
-  type NodeActivity,
-  type NodeVisual,
-} from "./use-run-visuals";
+import { activitySummary, useCanvasVisuals, type CanvasNodeVisual } from "./node-visuals";
 
 /**
- * 五态（+pending）视觉。动画类由 globals.css（模块 B）提供，这里只挂类名。
+ * 五态（+pending）视觉。动画类由 globals.css 提供，这里只挂类名。
  * 语义：未执行淡灰半透明 / 执行中蓝 / 已完成绿 / 失败红 /
  *       跳过灰虚线更淡（没轮到它） / 已取消琥珀虚线（人为中止，不是出错）。
  */
@@ -109,18 +104,17 @@ function TopProgress() {
   );
 }
 
-/** 卡片底部的运行信息条：执行中实时，结束后固化 */
-function RunFooter({
-  status,
-  visual,
-  activity,
-  now,
-}: {
-  status: RunNodeStatus;
-  visual: NodeVisual | undefined;
-  activity: NodeActivity | undefined;
-  now: number;
-}) {
+/** 本轮时长：进行中按光标时刻现算，结束后是这一轮的真实耗时 */
+function roundDuration(visual: CanvasNodeVisual, t: number): number | null {
+  if (visual.startedAt == null) return null;
+  const end = visual.finishedAt ?? t;
+  return Math.max(0, end - visual.startedAt);
+}
+
+/** 卡片底部的运行信息条：光标停在哪一轮就描述哪一轮 */
+function RunFooter({ visual, t }: { visual: CanvasNodeVisual; t: number }) {
+  const status = visual.status;
+
   if (status === "pending") {
     return (
       <div className="rounded-b-[10px] border-t border-zinc-100 bg-zinc-50/60 px-3 py-1 text-[10px] text-zinc-400">
@@ -130,16 +124,15 @@ function RunFooter({
   }
 
   if (status === "running") {
-    const startedAt = visual?.startedAt ?? null;
-    const elapsed = startedAt == null ? 0 : Math.max(0, now - startedAt);
     return (
       <div className="rounded-b-[10px] border-t border-blue-100 bg-blue-50/70 px-3 py-1">
         <div className="flex items-center gap-1.5 text-[10px] font-medium tabular-nums text-blue-700">
           <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-500" />
-          {formatDuration(elapsed)}
+          {formatDuration(roundDuration(visual, t) ?? 0)}
         </div>
         <p className="mt-0.5 truncate text-[10px] leading-4 text-blue-600/90">
-          {activitySummary(activity) ?? "会话已启动，等待首个输出…"}
+          {/* 没有活动可报：Action 会话刚开、或这一轮本就没有会话（输入 / 输出节点） */}
+          {activitySummary(visual.activity) ?? "执行中…"}
         </p>
       </div>
     );
@@ -154,16 +147,18 @@ function RunFooter({
   }
 
   if (status === "cancelled") {
+    const duration = roundDuration(visual, t);
     return (
       <div className="rounded-b-[10px] border-t border-amber-100 bg-amber-50/70 px-3 py-1 text-[10px] tabular-nums text-amber-700">
         已取消
-        {visual?.durationMs != null && <> · {formatDuration(visual.durationMs)}</>}
+        {duration != null && <> · {formatDuration(duration)}</>}
       </div>
     );
   }
 
-  // success / failed：耗时 + token + 费用固化在卡片上
+  // success / failed：本轮耗时 + 节点收束后的 token 与费用
   const failed = status === "failed";
+  const duration = roundDuration(visual, t);
   return (
     <div
       className={`rounded-b-[10px] border-t px-3 py-1 ${
@@ -175,17 +170,17 @@ function RunFooter({
           failed ? "text-red-700" : "text-emerald-700"
         }`}
       >
-        <span>{visual?.durationMs != null ? formatDuration(visual.durationMs) : "—"}</span>
-        {visual && visual.totalTokens > 0 && (
+        <span>{duration == null ? "—" : formatDuration(duration)}</span>
+        {visual.tokens != null && visual.tokens > 0 && (
           <>
             <span className="opacity-40">·</span>
-            <span>{formatTokens(visual.totalTokens)} tokens</span>
+            <span>{formatTokens(visual.tokens)} tokens</span>
             <span className="opacity-40">·</span>
-            <span>{formatCost(visual.cost)}</span>
+            <span>{formatCost(visual.cost ?? 0)}</span>
           </>
         )}
       </div>
-      {failed && visual?.error && (
+      {failed && visual.error && (
         <p className="mt-0.5 line-clamp-2 text-[10px] leading-4 text-red-600" title={visual.error}>
           {visual.error}
         </p>
@@ -262,12 +257,10 @@ export const FlowNodeView = memo(function FlowNodeView({
   selected,
 }: NodeProps<FlowNode>) {
   const { issueNodeIds, onEditAction } = useCanvasState();
-  const visuals = useRunVisualsContext();
+  const visuals = useCanvasVisuals();
 
   const visual = visuals?.nodes[id];
-  // Context 优先；没挂 RunVisualsProvider 时降级读 data._status（只有状态、没有用量）
-  const status: RunNodeStatus | undefined = visual?.status ?? data._status;
-  const activity = visuals?.activityByNode[id];
+  const status = visual?.status;
   const pulsing = useCompletionPulse(status);
   const meta = data._meta;
   const hasIssue = issueNodeIds.has(id);
@@ -282,19 +275,15 @@ export const FlowNodeView = memo(function FlowNodeView({
     "hover:shadow-md",
   ].join(" ");
 
-  const runFooter = status ? (
-    <RunFooter
-      status={status}
-      visual={visual}
-      activity={activity}
-      now={visuals?.now ?? Date.now()}
-    />
-  ) : null;
+  const runFooter = visual ? <RunFooter visual={visual} t={visuals?.t ?? 0} /> : null;
 
   const statusBadge = status ? (
     <span className="flex shrink-0 items-center gap-1 rounded-full bg-white/80 px-1.5 py-0.5 text-[10px] text-zinc-500">
       <span className={`h-1.5 w-1.5 rounded-full ${STATUS_DOT[status]}`} />
       {STATUS_TEXT[status]}
+      {visual != null && visual.round != null && visual.round > 0 && (
+        <span className="font-mono text-zinc-400">第 {visual.round + 1} 轮</span>
+      )}
     </span>
   ) : null;
 
@@ -305,7 +294,7 @@ export const FlowNodeView = memo(function FlowNodeView({
         {/* 标题区 */}
         <div className="rounded-t-[10px] border-b border-zinc-200 bg-gradient-to-b from-zinc-50 to-white px-3 py-2">
           <div className="flex items-center gap-2">
-            <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[9px] font-medium leading-none text-white">
+            <span className="rounded bg-zinc-900 px-1.5 py-0.5 text-[9px] leading-none font-medium text-white">
               ACTION
             </span>
             {meta?.missing && (
@@ -381,7 +370,7 @@ export const FlowNodeView = memo(function FlowNodeView({
       {status === "running" && <TopProgress />}
       <div className="flex items-center gap-2 rounded-t-[10px] border-b border-zinc-200 bg-gradient-to-b from-zinc-50 to-white px-3 py-1.5">
         <span
-          className={`rounded px-1.5 py-0.5 text-[9px] font-medium leading-none ${
+          className={`rounded px-1.5 py-0.5 text-[9px] leading-none font-medium ${
             isInput ? "bg-sky-100 text-sky-700" : "bg-emerald-100 text-emerald-700"
           }`}
         >
@@ -395,7 +384,7 @@ export const FlowNodeView = memo(function FlowNodeView({
         ) : (
           <p className="px-3 py-1 text-xs text-zinc-400">（未绑定类型）</p>
         )}
-        <p className="px-3 pb-0.5 pt-0.5 text-[10px] text-zinc-400">
+        <p className="px-3 pt-0.5 pb-0.5 text-[10px] text-zinc-400">
           {port ? `${port.objectTypeName} · ${KIND_LABEL[port.kind]}` : "—"}
         </p>
       </div>

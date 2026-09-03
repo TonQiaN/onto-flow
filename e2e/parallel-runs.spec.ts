@@ -23,6 +23,9 @@ interface RunDetail {
     status: string;
     error: string | null;
     runDir: string | null;
+    finishedAt: string | number | null;
+    /** 受理时冻结的图（ADR-0018）：运行页只读它 */
+    graph: { nodes: Array<{ id: string }>; edges: unknown[] };
   };
   nodes: Array<{
     nodeId: string;
@@ -75,7 +78,7 @@ test.describe("并行运行", () => {
     await removeStale(request);
   });
 
-  test(`同一工作流同时发起 ${RUN_COUNT} 次运行，全部并行成功`, async ({ request }) => {
+  test(`同一工作流同时发起 ${RUN_COUNT} 次运行，全部并行成功`, async ({ page, request }) => {
     test.setTimeout(180_000);
 
     // 直通工作流：输入 → 输出，无 Action、零费用，但每次运行仍 spawn 独立子进程。
@@ -285,6 +288,26 @@ test.describe("并行运行", () => {
       expect(fs.existsSync(stderrLog), `运行 ${runId} 缺少 ${stderrLog}`).toBeTruthy();
     }
     expect(runDirs.size).toBe(RUN_COUNT);
+
+    // 运行页（ADR-0018）：画布画的是这次运行受理时冻结的图，不是工作流的现图；
+    // 跑完之后两个节点都是成功，时间光标默认停在末尾（已结束的运行 t = finishedAt）。
+    const firstDetailForPage = details.get(firstRunId)!;
+    expect(firstDetailForPage.run.graph.nodes.map((n) => n.id).sort()).toEqual(
+      [inputNodeId, outputNodeId].sort(),
+    );
+    await page.goto(`/runs/${firstRunId}`);
+    const canvasNodes = page.locator('[data-testid="run-canvas"] .react-flow__node');
+    await expect(canvasNodes).toHaveCount(firstDetailForPage.run.graph.nodes.length);
+    await expect(canvasNodes.filter({ hasText: "成功" })).toHaveCount(
+      firstDetailForPage.run.graph.nodes.length,
+    );
+    // 已结束的运行光标默认停在末尾：run-cursor 的 data-t 就是这次运行的收束时刻
+    const cursor = page.getByTestId("run-cursor");
+    await expect(cursor).toBeVisible();
+    const finishedMs = new Date(firstDetailForPage.run.finishedAt!).getTime();
+    await expect
+      .poll(() => cursor.getAttribute("data-t").then((value) => Number(value)))
+      .toBe(finishedMs);
 
     // 收尾即验收删除 API：逐个删运行，记录与目录一起消失。
     for (const [runId, detail] of details) {
