@@ -9,15 +9,15 @@
 
 | 批 | 分支 | PR | 状态 |
 |---|---|---|---|
-| 0 共识文档（CONTEXT 术语、ADR-0018/0019、本文） | `cleanup/0-consensus-docs` | #18 | 待合并 |
-| 0a 格式化基线 | `cleanup/0a-format-baseline` | #19 | 待合并（stacked 于 #18） |
-| 0b lint / knip / CI / 记录树 / skill / proposed 记录 | `cleanup/0b-toolchain-and-notes` | #20 | 待合并（stacked 于 #19） |
-| 1 删采购演示与归档链条；seed 只种平台级；e2e 自建夹具 | `cleanup/1-remove-procurement` | #21 | 待合并（stacked 于 #20） |
-| 2 运行列表：信封、来源读时推导、筛选与用量汇总 | `cleanup/2-runs-list` | #22 | 待合并（stacked 于 #21） |
-| 3 运行页：`graph` 列、只读画布、回放、抽屉；编辑器剥离跟随 | `cleanup/3-run-page` | #23 | 待合并（stacked 于 #22） |
-| 4 监控台收口为系统健康一页 | `cleanup/4-monitor-health-only` | #24 | 待合并（stacked 于 #23） |
-| 3b 回边重入等待环体收束（第 3 批附加） | `cleanup/3b-reentry-waits-for-loop-body` | #25 | 待合并（stacked 于 #24） |
-| 3c 轮次重载荷按轮另取、maxReentries 上限（第 3 批附加） | `cleanup/3c-round-payload-on-demand` | #26 | 待合并（stacked 于 #25） |
+| 0 共识文档（CONTEXT 术语、ADR-0018/0019、本文） | `cleanup/0-consensus-docs` | #18 | 已合并（b537cc1；Codex 二十五轮评审） |
+| 0a 格式化基线 | `cleanup/0a-format-baseline` | #19 | 已合并（16c2cf0） |
+| 0b lint / knip / CI / 记录树 / skill / proposed 记录 | `cleanup/0b-toolchain-and-notes` | #20 | 已合并（0a02530） |
+| 1 删采购演示与归档链条；seed 只种平台级；e2e 自建夹具 | `cleanup/1-remove-procurement` | #21 | 已合并（2cc512c） |
+| 2 运行列表：信封、来源读时推导、筛选与用量汇总 | `cleanup/2-runs-list` | #22 | 已合并（618ed52） |
+| 3 运行页：`graph` 列、只读画布、回放、抽屉；编辑器剥离跟随 | `cleanup/3-run-page` | #23 | 已合并（35e3a02） |
+| 4 监控台收口为系统健康一页 | `cleanup/4-monitor-health-only` | #24 | 已合并——提交随 #25 进 main（GitHub 在 #23 合并删基分支时把 #24 关闭未 retarget，见 #24 留言） |
+| 3b 回边重入等待环体收束（第 3 批附加） | `cleanup/3b-reentry-waits-for-loop-body` | #25 | 已合并（9032beb） |
+| 3c 轮次重载荷按轮另取、maxReentries 上限（第 3 批附加） | `cleanup/3c-round-payload-on-demand` | #26 | 已合并（4bae66a） |
 | 5 `find-simplifications` 第一轮 | `cleanup/5-simplifications-round-1` | — | 未开始 |
 
 顺序 0 → 0a → 0b → 1 → 2 → 3 → 4 → 5；1 与 2 互不依赖，可并行开发、按序合并；3 依赖 2；
