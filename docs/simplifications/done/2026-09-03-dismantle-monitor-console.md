@@ -37,7 +37,7 @@ health 与 cleanup；`metrics.ts`、`use-monitor-stream.ts`、SSE stream、暗�
 
 ## 落地
 
-PR：待补（分支 `cleanup/4-monitor-health-only`，[DESIGN-V3 第 4 批](../../DESIGN-V3.md)）。
+PR：https://github.com/TonQiaN/onto-flow/pull/24（分支 `cleanup/4-monitor-health-only`，[DESIGN-V3 第 4 批](../../DESIGN-V3.md)）。
 成本 → 运行列表汇总在第 2 批落地，Trace → 运行页时间轴在第 3 批落地，本批只做最后一步：
 删总览 / 实时会话 / 日志检索，把系统健康页归位成 `/monitor` 自己。
 
