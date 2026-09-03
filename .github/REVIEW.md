@@ -27,7 +27,7 @@
 - [ ] 名称冲突交给数据库：writer 没有预查名字，`handle()` 把 `UNIQUE constraint failed` 映射成 409；folders 是唯一例外（根级 parent 为 NULL 无法约束）
 - [ ] 实体体校验在 writer 的 `parse…Payload` 里，route 只窄化自己的非实体参数；仍是手写 `typeof` 窄化，没有引入 schema 库
 - [ ] 每次实体写入在**同一事务**里记一版修订，包含关系；回滚复用同一个 `write<Kind>()`
-- [ ] 原生 SQL 只经 `sql` 标签（`sql\`…\`` 与 `sql<T>\`…\`` 两种拼法都算）、只出现在查询构建器表达不了聚合的地方；白名单是 AGENTS.md 那句点名的 `monitor/` 与五个文件，`src/rules.test.ts` 钉住并要求名单里的文件今天仍在用；`LIKE` 里的用户输入已转义并配 `escape '\'`
+- [ ] 原生 SQL 只经 `sql` 标签（`sql\`…\`` 与 `sql<T>\`…\`` 两种拼法都算）、只出现在查询构建器表达不了聚合的地方；白名单是 AGENTS.md 那句点名的七个文件（`monitor/cleanup.ts`、`monitor/health.ts` 与另外五个），`src/rules.test.ts` 钉住并要求名单里的文件今天仍在用；`LIKE` 里的用户输入已转义并配 `escape '\'`
 - [ ] 全局设置仍是单行表里的一份 JSON 文档，整份在 `src/server/settings.ts` 写边界校验；凭据只以环境变量**名**出现，值从 Next 进程环境在 spawn 时取；插件开关是 `toggles` 五键、默认指令是 `defaultInstructions`，没有回到 `webSearchEnabled` 或硬编码指令
 - [ ] 三层归属没有越界（Settings have three tiers）：全局给基线；工作流拥有 `instructions` / `settings.toggles`（只写覆盖键）/ `settings.mcpServers` / 技能集 / Tool 集；Action 只有预载 ⊆ 技能集、可见 Tool ⊆ Tool 集。⊆ 在**工作流保存**（`parseGraphPayload` 400，指名 Action 与技能 / Tool）与**运行受理**（`resolveWorkflow` 抛 `WorkflowResolveError` → 422）两处校验，没有挪到 Action 保存，也没有只留一处
 - [ ] 工作流 PUT 对 `instructions` / `settings` / `skillIds` / `toolIds` 仍是「缺省沿用现值、出现即整体替换」；画布只发图的保存没有清空集合
@@ -42,7 +42,7 @@
 
 ## 4. 路由与客户端边界（Conventions）
 
-- [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/monitor/stream`、`api/runs/[id]/events`（原生 SSE）与 `api/models`（早于规则的单语句 GET）是仅有的三个例外，没有被复制
+- [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/runs/[id]/events`（原生 SSE）与 `api/models`（早于规则的单语句 GET）是仅有的两个例外，没有被复制
 - [ ] 每个 route `export const dynamic = "force-dynamic"`
 - [ ] 客户端代码（含 `"use client"` 文件与 `src/app`（`api/` 除外）、`src/components` 下没有指令的共享模块）没有从 `@/server` 或 `@/db` 导入运行时值；`import type` 只从 `@/server/monitor/types`。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
 - [ ] 能到达修订还原的 route 带 `import "@/server/writers";`，否则 restore 静默答 501
@@ -64,7 +64,7 @@
 - [ ] 重入仍等环体收束（The workflow graph is not a DAG）：回边满足时只排队（`pendingReentries`），受影响节点里还有在 `running` 表里的就不重置，挂起期间 `pickReady` 也不放它们开跑；重入次数在真正重置时才计；取消与整运行失败让排队中的重入作废。直接在回边满足处重置正在跑的节点 = 串轮 + 运行可能在会话仍在飞时被判结束
 - [ ] 子进程收束失败时运行被隔离（留在 `activeRuns`、保留进程句柄），预览 / 清理 / 删除 / 新运行容量 fail-closed
 - [ ] 看一次运行只有 `/runs/<id>`（ADR-0018）：它只读受理时冻结的 `runs.graph`，不回查 `workflow_nodes` / `workflow_edges`；编辑器没有运行条、并行切换器与 `?runId=` 深链，发起后跳运行页；导航「运行中」面板每一路深链 `/runs/<id>`
-- [ ] 会话事件到达即写 `run_events`（两个 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写；每条新写入的行都带 `session_id`（`events.ts` 的通用落库与 `action.ts` 自插的 `usage` 事件两处都要写）
+- [ ] 会话事件到达即写 `run_events`（运行页那条 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写；每条新写入的行都带 `session_id`（`events.ts` 的通用落库与 `action.ts` 自插的 `usage` 事件两处都要写）
 - [ ] 用量按 chunk 求和、`outputTokens` 已含推理，没有把推理另算一桶；费用在写入时按到达时刻定价，未知模型为 0 而不是猜价
 - [ ] 每运行组合没有 stdout logger（stdout 属于协议）；`dshHome` / `agentsHome` 钉在运行目录内；节点步数上限仍在
 - [ ] 声明的产物必须真在盘上；模型说写了不算证据（ADR-0008）

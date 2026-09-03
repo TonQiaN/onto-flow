@@ -5,16 +5,14 @@ import { expect, test, type APIRequestContext, type Page, type Route } from "@pl
 import { cleanupByPrefix, DATA_DIR, openDb } from "./helpers";
 
 /**
- * 监控台（/monitor 五个标签页）的端到端覆盖。
+ * 系统健康页 `/monitor` 的端到端覆盖——监控台收口后这里只剩这一页（DESIGN-V3 第 4 批）。
  *
- * 只读纪律：本文件**绝不**点击「执行清理」/「确认删除」/「中止该运行」，
- * 也不发起任何工作流运行（真实调模型，昂贵）。清理面板只走 dryRun 预览路径。
+ * 只读纪律：本文件**绝不**点击「执行清理」/「确认删除」，也不发起任何工作流运行
+ * （真实调模型，昂贵）。清理面板只走 dryRun 预览路径。
  *
- * 历史数据不靠库里既有的付费运行：CI 的库只有 db:seed 的五个库，一次运行都没有。
- * beforeAll 用与 runs.spec.ts 相同的模式合成一份本 spec 自己的运行历史——e2e- 前缀的
- * 工作流、一条已结束的运行、两个 Action 节点、十条 run_events、三条 node_usage，
- * 外加一个真实落盘的运行目录。断言只针对这份夹具，其余一律取页面自己消费的 API 载荷、
- * 断言 DOM 与之一致（含空态）；从不假设「最近一次运行是哪一条」这类会随真实使用漂移的事。
+ * 磁盘行必须能断言出非零，所以 beforeAll 合成一条已结束的运行，并真的在 data/runs 下落一份
+ * 产物——CI 的库只有平台基线，一次运行都没有。断言只针对这份夹具，其余一律取页面自己消费的
+ * `/api/monitor/health` 载荷、断言 DOM 与之一致；从不假设「库里本来就有什么」。
  * afterAll 经 DELETE /api/runs/[id] 与 cleanupByPrefix 收走，运行目录一并删除。
  */
 
@@ -22,8 +20,6 @@ const PREFIX = "e2e-监控-";
 const RUNS_ROOT = path.join(DATA_DIR, "runs");
 /** 夹具工作区里产物的体积：磁盘占用行要能显示出非零、且不止几字节的 data/runs 体积 */
 const WORKSPACE_BYTES = 4096;
-const PROVIDER_ID = "deepseek-official";
-const MODEL_ID = "deepseek-v4-flash";
 const RUN_ERROR = "e2e 合成的会话错误";
 
 interface MonitorFixture {
@@ -31,44 +27,15 @@ interface MonitorFixture {
   workflowName: string;
   runId: string;
   runDir: string;
-  nodeA: string;
-  nodeB: string;
-  labelA: string;
-  labelB: string;
-  /** 只出现在本夹具 payload 里的检索词；含下划线，专门验 LIKE 转义 */
-  keyword: string;
-  /** 把 keyword 的下划线换成连字符的诱饵：`_` 若被当成单字符通配符就会误命中它 */
-  keywordDecoy: string;
-  /** 把 keyword 的下划线换成 `%` 的探针：`%` 若被当成通配符就会命中 keyword 行 */
-  keywordProbe: string;
-  /** payload 含 keyword 的事件数（一条 text + 一条 tool 输出） */
-  keywordEvents: number;
-  /** 错误类事件数（一条 tool error + 一条 session.error） */
-  errorEvents: number;
-  /** 本运行写入的事件总数 */
-  events: number;
-}
-
-interface LogsPayload {
-  items: Array<{ id: number; payload: Record<string, unknown> | null }>;
 }
 
 interface HealthPayload {
   disk: { runsDir: { bytes: number; dirs: number } };
 }
 
-interface SessionsPayload {
-  items: Array<{ sessionId: string; workflowName: string }>;
-}
-
 /* ------------------------------ 展示格式的镜像 ------------------------------ */
 
-/** 与 src/app/runs/lib.ts 的 formatTokens 同款：按载荷算出 DOM 应显示的文本 */
-function formatTokens(n: number): string {
-  return Math.round(n).toLocaleString("zh-CN");
-}
-
-/** 与 src/app/monitor/health/lib.ts 的 formatBytes / formatCount 同款 */
+/** 与 src/app/monitor/lib.ts 的 formatBytes / formatCount 同款：按载荷算出 DOM 应显示的文本 */
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -81,7 +48,9 @@ function formatBytes(n: number): string {
   return `${i === 0 ? String(Math.round(v)) : v.toFixed(v >= 100 ? 0 : 1)} ${units[i]}`;
 }
 
-const formatCount = formatTokens;
+function formatCount(n: number): string {
+  return Math.round(n).toLocaleString("zh-CN");
+}
 
 /* --------------------------------- 夹具 --------------------------------- */
 
@@ -101,36 +70,15 @@ function fixtureWorkflowDir(runDir: string): string | null {
   return path.dirname(candidate);
 }
 
-/**
- * 合成一条已结束（failed）的运行：节点甲成功，节点乙以会话错误失败。
- * 事件与用量的时间都落在「现在」之前一分钟内，因此总览近 24 小时桶能看到它。
- */
+/** 合成一条已结束（failed）的运行，并把它的工作区目录真的写到磁盘上。 */
 async function createFixture(request: APIRequestContext): Promise<MonitorFixture> {
   const suffix = randomUUID().slice(0, 8);
   const workflowId = randomUUID();
   const runId = randomUUID();
-  const nodeA = randomUUID();
-  const nodeB = randomUUID();
   const workflowName = `${PREFIX}${suffix}`;
-  const keyword = `e2e_monitor_kw_${suffix}`;
   const runDir = path.join(RUNS_ROOT, workflowId, runId);
   const runStart = Date.now() - 60_000;
-  const fixture: MonitorFixture = {
-    workflowId,
-    workflowName,
-    runId,
-    runDir,
-    nodeA,
-    nodeB,
-    labelA: "e2e-监控·甲",
-    labelB: "e2e-监控·乙",
-    keyword,
-    keywordDecoy: keyword.replaceAll("_", "-"),
-    keywordProbe: keyword.replaceAll("_", "%"),
-    keywordEvents: 2,
-    errorEvents: 2,
-    events: 10,
-  };
+  const fixture: MonitorFixture = { workflowId, workflowName, runId, runDir };
 
   try {
     await mkdir(path.join(runDir, "workspace"), { recursive: true });
@@ -139,79 +87,6 @@ async function createFixture(request: APIRequestContext): Promise<MonitorFixture
       `# e2e 监控夹具 ${suffix}\n${"x".repeat(WORKSPACE_BYTES)}\n`,
       "utf8",
     );
-
-    const snapshot = JSON.stringify({
-      actionName: "e2e-监控 Action",
-      prompt: "合成监控测试",
-      rule: "只使用测试数据",
-      model: {
-        providerId: PROVIDER_ID,
-        modelId: MODEL_ID,
-        displayName: "DeepSeek V4 Flash",
-      },
-      reasoningEffort: "high",
-      skills: [],
-      tools: [],
-      ports: { inputs: [], outputs: [] },
-    });
-
-    const events: Array<[string, number, string, Record<string, unknown>]> = [
-      [nodeA, runStart + 2_000, "text", { text: `开始读取输入，标记 ${keyword}` }],
-      [
-        nodeA,
-        runStart + 2_500,
-        "tool",
-        {
-          tool: "bash",
-          status: "running",
-          callId: "call-a1",
-          sessionId: nodeA,
-          input: JSON.stringify({ command: "pdftotext inputs/a.pdf -" }),
-        },
-      ],
-      [
-        nodeA,
-        runStart + 3_000,
-        "tool",
-        {
-          tool: "bash",
-          status: "ok",
-          callId: "call-a1",
-          sessionId: nodeA,
-          output: `TOOL_OUTPUT ${keyword}`,
-        },
-      ],
-      [
-        nodeA,
-        runStart + 3_200,
-        "tool",
-        {
-          tool: "read",
-          status: "running",
-          callId: "call-a2",
-          sessionId: nodeA,
-          input: JSON.stringify({ path: "workspace/missing.md" }),
-        },
-      ],
-      [
-        nodeA,
-        runStart + 3_400,
-        "tool",
-        {
-          tool: "read",
-          status: "error",
-          callId: "call-a2",
-          sessionId: nodeA,
-          error: "Error: cannot read workspace/missing.md: not found",
-        },
-      ],
-      [nodeA, runStart + 3_600, "text", { text: `诱饵：${fixture.keywordDecoy}` }],
-      [nodeA, runStart + 5_500, "session.idle", { reason: "completed" }],
-      [nodeB, runStart + 8_000, "text", { text: "汇总六份结论…" }],
-      [nodeB, runStart + 9_000, "session.error", { error: RUN_ERROR }],
-      [nodeB, runStart + 9_001, "session.idle", { reason: "error" }],
-    ];
-    expect(events.length).toBe(fixture.events);
 
     const database = openDb();
     try {
@@ -234,101 +109,6 @@ async function createFixture(request: APIRequestContext): Promise<MonitorFixture
             runStart,
             runStart + 10_000,
           );
-
-        const node = database.prepare(
-          "insert into run_nodes (id, run_id, node_id, label, status, snapshot, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, cost, session_id, error, started_at, finished_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)",
-        );
-        // 节点汇总 = 该节点各条 node_usage 之和（与引擎的结算口径一致）
-        node.run(
-          randomUUID(),
-          runId,
-          nodeA,
-          fixture.labelA,
-          "success",
-          snapshot,
-          1600,
-          420,
-          70,
-          2300,
-          0.003,
-          nodeA,
-          null,
-          runStart + 1_000,
-          runStart + 6_000,
-        );
-        node.run(
-          randomUUID(),
-          runId,
-          nodeB,
-          fixture.labelB,
-          "failed",
-          snapshot,
-          300,
-          50,
-          10,
-          0,
-          0.0004,
-          nodeB,
-          RUN_ERROR,
-          runStart + 7_000,
-          runStart + 9_500,
-        );
-
-        const event = database.prepare(
-          "insert into run_events (run_id, node_id, ts, type, payload) values (?, ?, ?, ?, ?)",
-        );
-        for (const [nodeId, ts, type, payload] of events) {
-          event.run(runId, nodeId, ts, type, JSON.stringify(payload));
-        }
-
-        const usage = database.prepare(
-          "insert into node_usage (id, run_id, node_id, session_id, message_id, provider_id, model_id, variant, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, cost, ts) values (?, ?, ?, ?, ?, ?, ?, 'high', ?, ?, ?, ?, 0, ?, ?)",
-        );
-        usage.run(
-          randomUUID(),
-          runId,
-          nodeA,
-          nodeA,
-          "turn1-step1",
-          PROVIDER_ID,
-          MODEL_ID,
-          1200,
-          300,
-          50,
-          800,
-          0.0021,
-          runStart + 3_400,
-        );
-        usage.run(
-          randomUUID(),
-          runId,
-          nodeA,
-          nodeA,
-          "turn1-step2",
-          PROVIDER_ID,
-          MODEL_ID,
-          400,
-          120,
-          20,
-          1500,
-          0.0009,
-          runStart + 5_400,
-        );
-        usage.run(
-          randomUUID(),
-          runId,
-          nodeB,
-          nodeB,
-          "turn1-step1",
-          PROVIDER_ID,
-          MODEL_ID,
-          300,
-          50,
-          10,
-          0,
-          0.0004,
-          runStart + 8_500,
-        );
       });
       insert();
     } finally {
@@ -398,38 +178,11 @@ test.afterAll(async ({ request }) => {
 
 /* --------------------------------- 工具 --------------------------------- */
 
-const TABS: Array<{ label: string; url: RegExp }> = [
-  { label: "总览", url: /\/monitor$/ },
-  { label: "实时会话", url: /\/monitor\/sessions$/ },
-  { label: "日志检索", url: /\/monitor\/logs(\?.*)?$/ },
-  { label: "系统健康", url: /\/monitor\/health$/ },
-];
-
-/** 顶栏标签导航（与左侧主导航区分开） */
-const tab = (page: Page, label: string) =>
-  page.locator("header").getByRole("link", { name: label, exact: true });
-
-/** 指标卡取值：<div data-testid="metric-card" data-label="…"> 里的 metric-value */
-const metricValue = (page: Page, label: string) =>
-  page.locator(`[data-testid="metric-card"][data-label="${label}"]`).getByTestId("metric-value");
-
-/** 指标卡渲染出真实数值（不是加载态的「—」，也不是空） */
-async function expectMetricHasValue(page: Page, label: string): Promise<string> {
-  const value = metricValue(page, label);
-  await expect(value).toBeVisible();
-  await expect(value).not.toHaveText("—", { timeout: 15_000 });
-  const text = (await value.innerText()).trim();
-  expect(text.length, `指标卡「${label}」应有数值`).toBeGreaterThan(0);
-  // 数字 / 千分位 / ¥0.5180 / <¥0.0001 / 0（费用以人民币计价，ADR-0011 的 pricing）
-  expect(text, `指标卡「${label}」的值应是数值`).toMatch(/^(<?[¥$])?[\d,.]+/);
-  return text;
-}
-
 /**
  * 执行 action 并截获页面自己发出的那次 GET 响应，把它的 JSON 交给断言——
  * DOM 与「页面实际拿到的载荷」比对，而不是测试另拉一份可能已经变化的数据。
  *
- * 用请求拦截而不是 waitForResponse + json()：进行中的自动刷新紧接着再发一次同样的请求时，
+ * 用请求拦截而不是 waitForResponse + json()：页面 15 秒自动刷新一次，紧接着再发一次同样的请求时
  * 浏览器会丢掉上一份响应体，Playwright 报 `Network.getResponseBody` 协议错误。这里由测试
  * 自己取回响应、留下正文、再交给页面，页面渲染的就是断言拿到的那一份。dev 模式下页面会对
  * 同一接口连发两次（strict mode），两次各自用自己取回的响应 fulfill；捕获之后不 unroute——
@@ -482,233 +235,28 @@ async function captureJson<T>(
   return captured!.value;
 }
 
-const isLogs = (url: URL) => url.pathname === "/api/monitor/logs";
-
-test.describe("监控台 · 导航", () => {
-  test("左下角「监控台」入口进入 /monitor，顶栏四个标签逐个切换且 URL 变化", async ({ page }) => {
+test.describe("系统健康 · 导航", () => {
+  test("左下角「系统健康」入口进入 /monitor，页面没有标签栏", async ({ page }) => {
     await page.goto("/workflows");
 
-    // 主导航底部的监控台入口
-    const entry = page.getByRole("link", { name: "监控台", exact: true });
+    // 主导航底部的开发者面入口
+    const entry = page.getByRole("link", { name: "系统健康", exact: true });
     await expect(entry).toBeVisible();
     await entry.click();
     await page.waitForURL(/\/monitor$/);
-    await expect(page.getByRole("heading", { name: "监控台", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "系统健康", exact: true })).toBeVisible();
 
-    // 四个标签都在，且逐个点过去 URL 都变
-    for (const item of TABS) {
-      await expect(tab(page, item.label)).toBeVisible();
-    }
-    for (const item of TABS.slice(1)) {
-      await tab(page, item.label).click();
-      await expect(page).toHaveURL(item.url);
-      await expect(tab(page, item.label)).toHaveAttribute("aria-current", "page");
-    }
-    // 回到总览
-    await tab(page, "总览").click();
-    await expect(page).toHaveURL(/\/monitor$/);
-    await expect(tab(page, "总览")).toHaveAttribute("aria-current", "page");
-  });
-});
-
-test.describe("监控台 · 总览", () => {
-  test("六张指标卡都渲染出数值（不是「—」）", async ({ page }) => {
-    await page.goto("/monitor");
-    for (const label of [
-      "活跃运行",
-      "活跃会话",
-      "今日运行",
-      "今日 token",
-      "今日费用",
-      "近 1 小时错误",
-    ]) {
-      await expectMetricHasValue(page, label);
-    }
-    // 六张，不多不少
-    await expect(page.locator('[data-testid="metric-card"]')).toHaveCount(6);
-  });
-
-  test("近 24 小时两张图渲染出 svg（运行量柱状图 + token 折线图）", async ({ page }) => {
-    await page.goto("/monitor");
-
-    const bars = page.locator('svg[aria-label="近 24 小时运行量"]');
-    const line = page.locator('svg[aria-label="近 24 小时 token 消耗"]');
-    await expect(bars).toBeVisible();
-    await expect(line).toBeVisible();
-
-    // 服务端保证 24 个整点桶：柱状图 24 组、折线图 24 个热区
-    expect(await bars.locator("g").count()).toBeGreaterThanOrEqual(24);
-    expect(await line.locator("rect").count()).toBeGreaterThanOrEqual(24);
-    // 面板标题与实时连接徽标
-    await expect(page.getByText("近 24 小时运行量")).toBeVisible();
-    await expect(page.getByText("按运行开始时间归入整点桶")).toBeVisible();
-  });
-});
-
-test.describe("监控台 · 实时会话", () => {
-  test("SSE 会话帧到达：表格与 /api/monitor/sessions 载荷逐项一致，或明确的空态", async ({
-    page,
-    request,
-  }) => {
-    await page.goto("/monitor/sessions");
-
-    await expect(page.getByRole("heading", { name: "进行中的会话" })).toBeVisible();
-
-    // 连接活着：面板头里的连接徽标显示「实时 HH:MM:SS」，会话计数不再是加载态的「—」
-    const panelHeader = page.locator("header").filter({ hasText: "进行中的会话" });
-    await expect(panelHeader).toHaveCount(1);
-    await expect(panelHeader).toContainText(/实时\s*\d{1,2}:\d{2}:\d{2}/, {
-      timeout: 15_000,
-    });
-    await expect(panelHeader.getByText("—")).toHaveCount(0);
-
-    // 收到 sessions 帧后，要么有行、要么是空态文案——都不能停在「等待实时数据…」
-    const rows = page.locator("tbody tr");
-    const empty = page.getByText("当前没有进行中的会话");
-    await expect(rows.first().or(empty)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("等待实时数据…")).toHaveCount(0);
-
-    // e2e 从不发起含 Action 的运行，本夹具也是已结束的运行，所以这里通常是空态；
-    // 本机若恰有真实运行在跑，表格必须与接口载荷逐项对得上，不能假定它属于某个具体工作流。
-    const payload = (await (await request.get("/api/monitor/sessions")).json()) as SessionsPayload;
-    if (payload.items.length === 0) {
-      await expect(empty).toBeVisible();
-      await expect(rows).toHaveCount(0);
-      return;
-    }
-    await expect(rows).toHaveCount(payload.items.length);
-    await expect(page.getByText("模型 · 强度")).toBeVisible();
-    for (const item of payload.items) {
-      const row = rows.filter({ hasText: item.sessionId.slice(0, 8) });
-      await expect(row).toHaveCount(1);
-      await expect(row).toContainText(item.workflowName);
+    // 收口成一页：页面自己的顶栏里没有任何导航，也没有旧标签的入口
+    await expect(page.locator("header nav")).toHaveCount(0);
+    for (const label of ["总览", "实时会话", "日志检索", "Trace", "成本分析"]) {
+      await expect(page.getByRole("link", { name: label, exact: true })).toHaveCount(0);
     }
   });
 });
 
-/**
- * 日志页每次筛选变化都会清空列表再拉第一页（PAGE_SIZE=50）。「筛选生效」不能靠
- * 「行数比筛选前少」判断：命中数一旦 ≥ 一页，筛选前后都是满页。所以一律截获页面自己
- * 发出的那次接口响应，以响应里的条数为准等 DOM 渲染出同样多的行；夹具自己的事件
- * 条数是确定的，可以进一步断言精确值。
- */
-test.describe("监控台 · 日志检索", () => {
-  test("首屏与载荷一致；按夹具运行筛选后列出它的全部事件，「只看错误」只剩两条错误事件", async ({
-    page,
-  }) => {
-    const current = fixture!;
-    const rows = page.getByTestId("log-row");
-
-    const all = await captureJson<LogsPayload>(
-      page,
-      (url) => isLogs(url) && !url.searchParams.has("runId") && !url.searchParams.has("cursor"),
-      () => page.goto("/monitor/logs"),
-    );
-    await expect(rows).toHaveCount(all.items.length, { timeout: 15_000 });
-    expect(all.items.length, "夹具已写入事件，首屏不该为空").toBeGreaterThan(0);
-
-    // ?runId= 只留夹具自己的事件：条数就是夹具写入的条数
-    const scoped = await captureJson<LogsPayload>(
-      page,
-      (url) =>
-        isLogs(url) &&
-        url.searchParams.get("runId") === current.runId &&
-        !url.searchParams.has("onlyErrors"),
-      () => page.goto(`/monitor/logs?runId=${current.runId}`),
-    );
-    expect(scoped.items.length).toBe(current.events);
-    await expect(rows).toHaveCount(current.events, { timeout: 15_000 });
-    await expect(rows.first()).toContainText(current.workflowName);
-
-    const errors = await captureJson<LogsPayload>(
-      page,
-      (url) =>
-        isLogs(url) &&
-        url.searchParams.get("runId") === current.runId &&
-        url.searchParams.get("onlyErrors") === "true",
-      async () => {
-        await page.getByText("只看错误").click();
-        await expect(page).toHaveURL(/errors=1/);
-      },
-    );
-    expect(errors.items.length).toBe(current.errorEvents);
-    await expect(rows).toHaveCount(current.errorEvents, { timeout: 15_000 });
-    // 剩下的都应是错误类事件（session.error 或 tool 的 error 状态）
-    for (let i = 0; i < current.errorEvents; i += 1) {
-      await expect(rows.nth(i)).toContainText(/session\.error|error/);
-    }
-  });
-
-  test("关键词按字面匹配 payload 全文：只命中夹具里含该词的两条，下划线不是单字符通配符", async ({
-    page,
-  }) => {
-    const current = fixture!;
-    await page.goto("/monitor/logs");
-    const rows = page.getByTestId("log-row");
-    await expect(rows.first()).toBeVisible({ timeout: 15_000 });
-
-    const hits = await captureJson<LogsPayload>(
-      page,
-      (url) => isLogs(url) && url.searchParams.get("q") === current.keyword,
-      async () => {
-        await page.getByPlaceholder("关键词：匹配 payload 全文").fill(current.keyword);
-        await expect(page).toHaveURL(new RegExp(`q=${current.keyword}`), {
-          timeout: 15_000,
-        });
-      },
-    );
-    // 夹具里恰有两条事件的 payload 含该词；另有一条把下划线换成连字符的诱饵，
-    // `_` 若没被转义成字面量就会多命中它。
-    expect(hits.items.length).toBe(current.keywordEvents);
-    await expect(rows).toHaveCount(current.keywordEvents, { timeout: 15_000 });
-    for (const item of hits.items) {
-      expect(JSON.stringify(item.payload)).toContain(current.keyword);
-    }
-    // 逐行核对：折叠行的摘要在 JS 里截断过，长消息的命中点可能在截断之后——
-    // 摘要里找不到就展开行，对完整 payload 核对。
-    for (let i = 0; i < current.keywordEvents; i += 1) {
-      const row = rows.nth(i);
-      const summary = (await row.textContent()) ?? "";
-      if (summary.includes(current.keyword)) continue;
-      await row.click();
-      await expect(page.getByTestId("log-row-detail")).toContainText(current.keyword);
-      await row.click();
-    }
-  });
-
-  test("LIKE 通配符按字面匹配：把下划线换成 % 的探针不应命中夹具关键词", async ({ page }) => {
-    const current = fixture!;
-    await page.goto("/monitor/logs");
-    const rows = page.getByTestId("log-row");
-    await expect(rows.first()).toBeVisible({ timeout: 15_000 });
-
-    // 服务端已转义 LIKE 通配符：% 是普通字符，不能当成「任意字符」用
-    const miss = await captureJson<LogsPayload>(
-      page,
-      (url) => isLogs(url) && url.searchParams.get("q") === current.keywordProbe,
-      async () => {
-        await page.getByPlaceholder("关键词：匹配 payload 全文").fill(current.keywordProbe);
-        await expect(page).toHaveURL(/q=e2e%25monitor%25kw/, { timeout: 15_000 });
-      },
-    );
-    expect(miss.items.length, "% 若被当成通配符会命中夹具的关键词行").toBe(0);
-    await expect(page.getByText("没有匹配的事件")).toBeVisible({ timeout: 15_000 });
-    await expect(rows).toHaveCount(0);
-
-    // 清除筛选后结果回来，证明上一步的空结果是过滤造成的
-    const restored = await captureJson<LogsPayload>(
-      page,
-      (url) => isLogs(url) && !url.searchParams.has("q"),
-      () => page.getByText("清除全部筛选").click(),
-    );
-    expect(restored.items.length).toBeGreaterThan(0);
-    await expect(rows).toHaveCount(restored.items.length, { timeout: 15_000 });
-  });
-});
-
-test.describe("监控台 · 系统健康", () => {
+test.describe("系统健康", () => {
   test("执行引擎状态卡出现，运行子进程与数据库卡同在", async ({ page }) => {
-    await page.goto("/monitor/health");
+    await page.goto("/monitor");
 
     // 换成 dsh 引擎后没有常驻外部服务可探（ADR-0006）：就绪只取决于 runner 入口
     // 与凭据引用，卡片报的是这两样而不是某个地址的可达性。
@@ -732,7 +280,7 @@ test.describe("监控台 · 系统健康", () => {
     const health = await captureJson<HealthPayload>(
       page,
       (url) => url.pathname === "/api/monitor/health",
-      () => page.goto("/monitor/health"),
+      () => page.goto("/monitor"),
     );
 
     const panel = page.locator('section:has(h2:text-is("磁盘占用"))');
@@ -755,7 +303,7 @@ test.describe("监控台 · 系统健康", () => {
   });
 
   test("清理面板三项「预览影响」都返回成功并显示影响面（不点执行清理）", async ({ page }) => {
-    await page.goto("/monitor/health");
+    await page.goto("/monitor");
 
     const items = page.getByTestId("cleanup-item");
     await expect(items).toHaveCount(3, { timeout: 15_000 });

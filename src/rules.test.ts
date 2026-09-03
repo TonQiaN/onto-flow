@@ -57,18 +57,14 @@ describe("AGENTS.md · Repository layout", () => {
 
 describe("AGENTS.md · Conventions · handle()", () => {
   /**
-   * 「Every API route body runs inside handle() from @/lib/http. Three do not: api/monitor/stream
-   * and api/runs/[id]/events return a raw SSE Response, and api/models is a one-statement GET
+   * 「Every API route body runs inside handle() from @/lib/http. Two do not:
+   * api/runs/[id]/events returns a raw SSE Response, and api/models is a one-statement GET
    * that predates the rule — do not copy them.」
    */
-  const EXEMPT = [
-    "src/app/api/monitor/stream/route.ts",
-    "src/app/api/runs/[id]/events/route.ts",
-    "src/app/api/models/route.ts",
-  ];
+  const EXEMPT = ["src/app/api/runs/[id]/events/route.ts", "src/app/api/models/route.ts"];
   const METHOD_RE = /^export (?:async )?function (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/gm;
 
-  it("三个例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
+  it("两个例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));
     const found = violations(files, (content) => {
       const methods = content.match(METHOD_RE)?.length ?? 0;
@@ -84,7 +80,7 @@ describe("AGENTS.md · Conventions · handle()", () => {
     expect(found).toEqual([]);
   });
 
-  it("三个例外 route 仍然存在、仍然不用 handle()；修好了就把它从白名单删掉", () => {
+  it("两个例外 route 仍然存在、仍然不用 handle()；修好了就把它从白名单删掉", () => {
     for (const relPath of EXEMPT) {
       const file = path.join(ROOT, relPath);
       expect(fs.existsSync(file), `${relPath} 不存在，白名单已过期`).toBe(true);
@@ -322,24 +318,26 @@ describe("AGENTS.md · Conventions · library list GETs", () => {
 describe("AGENTS.md · Conventions · raw SQL", () => {
   /**
    * 「Raw SQL goes through drizzle's sql tag … and only where the query builder cannot express
-   * the aggregate」。允许范围按现状定：monitor/ 的聚合、writers/list.ts 的 LIKE 搜索、
-   * engine/action.ts 的按会话 SUM 汇总、engine/events.ts 的 json_extract 查工具名、
-   * revisions.ts 的 max(version_no)、api/runs/route.ts 的运行列表合计。
+   * the aggregate」。允许范围按现状定：monitor/cleanup.ts 与 monitor/health.ts 的聚合、
+   * writers/list.ts 的 LIKE 搜索、engine/action.ts 的按会话 SUM 汇总、
+   * engine/events.ts 的 json_extract 查工具名、revisions.ts 的 max(version_no)、
+   * api/runs/route.ts 的运行列表合计。
    * 两种拼法都要抓：sql`…` 与 sql<T>`…`——只认前者时后三处漏网，本测试曾空绿。
    */
   // 泛型参数里可以再套尖括号（sql<Record<string, number>>`…`），所以只在反引号与分号前停
   const RAW_SQL = /\bsql(<[^`;]*>)?`/;
   const ALLOWED_FILES = [
+    "src/server/monitor/cleanup.ts",
+    "src/server/monitor/health.ts",
     "src/server/writers/list.ts",
     "src/server/engine/action.ts",
     "src/server/engine/events.ts",
     "src/server/revisions.ts",
     "src/app/api/runs/route.ts",
   ];
-  const ALLOWED = (file: string): boolean =>
-    file.startsWith("src/server/monitor/") || ALLOWED_FILES.includes(file);
+  const ALLOWED = (file: string): boolean => ALLOWED_FILES.includes(file);
 
-  it("sql` / sql<T>` 标签只出现在白名单：monitor/ 与五个点名文件", () => {
+  it("sql` / sql<T>` 标签只出现在白名单点名的七个文件里", () => {
     const found = sourceFiles
       .filter((file) => !isTest(file) && RAW_SQL.test(read(file)))
       .map(rel)

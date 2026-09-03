@@ -1,362 +1,591 @@
 "use client";
 
 /**
- * 监控台 · 总览：6 个实时指标卡 + 近 24 小时两张手写 SVG 图 + 最近失败。
+ * 系统健康 /monitor —— 监控台收口后仅剩的一页（DESIGN-V3 第 4 批）。
  *
- * 指标与曲线全部来自 /api/monitor/stream（SSE，2 秒一轮，载荷不变就不推）；
- * 「最近失败」不在流里，走既有的 /api/runs?status=，仅在流里的失败/取消计数
- * 或活跃运行数变化时重新拉一次，不做无谓轮询。
+ * 开发者/管理员视角：引擎就绪、在跑的运行子进程、数据库与磁盘占用、孤儿运行与孤儿实体，
+ * 外加手动清理面板。用工作台的普通浅色外壳（与库页面一致），不再自带深色控制台外壳与标签栏；
+ * 成本归集在运行列表页、单次运行的实时与回放在运行页（ADR-0018），这里只管进程与磁盘。
+ *
+ * 数据来源：GET /api/monitor/health（契约见 ./lib.ts）+ GET /api/references/orphans，
+ * 加上唯一的破坏性路径 POST /api/monitor/cleanup（面板里必须先 dryRun 预览）。
+ * 图表手写 SVG，不引图表库。
  */
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { durationText, formatDateTime, toMillis } from "@/app/runs/lib";
+import { CleanupPanel, type CleanupUsage } from "./cleanup-panel";
 import {
-  durationText,
-  formatCost,
-  formatDateTime,
-  formatTokens,
-  toMillis,
-  type RunListItem,
-} from "@/app/runs/lib";
-import {
-  CHART_COLORS,
-  ConnectionBadge,
-  Legend,
-  MetricCard,
-  MonitorEmpty,
-  MonitorErrorBar,
-  Num,
-  Panel,
-  Sparkbars,
-  Sparkline,
-  StatusChip,
-} from "./ui";
-import { useMonitorStream, type OverviewPoint } from "./use-monitor-stream";
+  asHealth,
+  asOrphanEntities,
+  formatBytes,
+  formatCount,
+  kindLabel,
+  WORKSPACE_WARN_BYTES,
+  type HealthPayload,
+  type OrphanEntity,
+} from "./lib";
+import { Dot, Legend, MetricCard, MonitorErrorBar, Num, Panel } from "./ui";
 
-const HOUR_MS = 3_600_000;
-const HOURS = 24;
-const FAILURE_LIMIT = 5;
+const AUTO_REFRESH_MS = 15_000;
 
-/** 大数紧凑表示（坐标轴用） */
-function compact(n: number): string {
-  const v = Math.round(n);
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}m`;
-  if (v >= 10_000) return `${Math.round(v / 1000)}k`;
-  if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
-  return String(v);
-}
+export default function MonitorHealthPage() {
+  const [health, setHealth] = useState<HealthPayload | null>(null);
+  const [orphanEntities, setOrphanEntities] = useState<OrphanEntity[]>([]);
+  const [healthError, setHealthError] = useState<string | null>(null);
+  const [orphanError, setOrphanError] = useState<string | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const aliveRef = useRef(true);
 
-const pad2 = (n: number) => String(n).padStart(2, "0");
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [healthRes, orphanRes] = await Promise.allSettled([
+      fetchJson("/api/monitor/health"),
+      fetchJson("/api/references/orphans"),
+    ]);
+    if (!aliveRef.current) return;
 
-/** 服务端保证 24 个对齐的桶；万一没拿到就自己补一条零基线，图形不塌 */
-function fallbackSeries(): OverviewPoint[] {
-  const now = new Date();
-  now.setMinutes(0, 0, 0);
-  const base = now.getTime() - (HOURS - 1) * HOUR_MS;
-  return Array.from({ length: HOURS }, (_, i) => ({
-    hourISO: "",
-    hourMs: base + i * HOUR_MS,
-    runs: 0,
-    failed: 0,
-    tokens: 0,
-    cost: 0,
-  }));
-}
-
-/** 运行终态里区分失败/取消两条线的最近记录（列表 API 没有 error 文本，故只列元信息） */
-async function fetchRecentFailures(): Promise<RunListItem[]> {
-  const [failed, cancelled] = await Promise.all(
-    (["failed", "cancelled"] as const).map(async (status) => {
-      // 只要最近几条，信封第一页（默认 30）已经够 FAILURE_LIMIT 取
-      const res = await fetch(`/api/runs?status=${status}`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error("加载失败运行列表失败");
-      const data = (await res.json()) as { items?: unknown };
-      return Array.isArray(data.items) ? (data.items as RunListItem[]) : [];
-    }),
-  );
-  const endedAt = (row: RunListItem) => toMillis(row.finishedAt) ?? toMillis(row.startedAt) ?? 0;
-  return [...failed, ...cancelled].sort((a, b) => endedAt(b) - endedAt(a)).slice(0, FAILURE_LIMIT);
-}
-
-export default function MonitorOverviewPage() {
-  const { overview, connection } = useMonitorStream({ logLimit: 1 });
-
-  const series = useMemo(
-    () => (overview && overview.series.length > 0 ? overview.series : fallbackSeries()),
-    [overview],
-  );
-
-  const totals = useMemo(
-    () =>
-      series.reduce(
-        (acc, p) => ({
-          runs: acc.runs + p.runs,
-          failed: acc.failed + p.failed,
-          tokens: acc.tokens + p.tokens,
-          cost: acc.cost + p.cost,
-        }),
-        { runs: 0, failed: 0, tokens: 0, cost: 0 },
-      ),
-    [series],
-  );
-
-  const today = overview?.today;
-  const finished = today ? today.success + today.failed + today.cancelled : 0;
-  const successRate = today && finished > 0 ? (today.success / finished) * 100 : null;
-  const loading = overview === null;
-
-  // 最近失败：只在「失败/取消计数」或「活跃运行数」变化时重拉
-  const failureKey = today
-    ? `${today.failed}/${today.cancelled}/${overview?.live.activeRuns ?? 0}`
-    : "init";
-  const [failures, setFailures] = useState<RunListItem[] | null>(null);
-  const [failureError, setFailureError] = useState<string | null>(null);
-
-  const loadFailures = useCallback(async (alive: () => boolean) => {
-    try {
-      const rows = await fetchRecentFailures();
-      if (!alive()) return;
-      setFailures(rows);
-      setFailureError(null);
-    } catch {
-      if (alive()) setFailureError("最近失败列表加载失败");
+    if (healthRes.status === "fulfilled") {
+      setHealth(asHealth(healthRes.value));
+      setHealthError(null);
+    } else {
+      setHealthError(errorText(healthRes.reason, "加载系统健康数据失败"));
     }
+
+    if (orphanRes.status === "fulfilled") {
+      setOrphanEntities(asOrphanEntities(orphanRes.value));
+      setOrphanError(null);
+    } else {
+      setOrphanError(errorText(orphanRes.reason, "加载孤儿实体失败"));
+    }
+
+    setLoadedAt(Date.now());
+    setLoading(false);
   }, []);
 
   useEffect(() => {
-    let disposed = false;
-    void loadFailures(() => !disposed);
+    aliveRef.current = true;
+    void load();
     return () => {
-      disposed = true;
+      aliveRef.current = false;
     };
-  }, [failureKey, loadFailures]);
+  }, [load]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const timer = setInterval(() => void load(), AUTO_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [autoRefresh, load]);
+
+  const workspaceOverLimit = health !== null && health.disk.runs.sizeBytes > WORKSPACE_WARN_BYTES;
 
   return (
-    <div className="space-y-4 px-6 py-5">
-      {connection.state === "closed" && (
-        <MonitorErrorBar
-          message={connection.error ?? "实时连接已断开"}
-          onRetry={connection.retry}
-        />
+    <div className="mx-auto flex max-w-6xl flex-col gap-4 px-8 py-6">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-zinc-900">系统健康</h1>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-zinc-500">
+            开发者 / 管理员视角：直接读取进程、数据库与磁盘状态。页内的清理操作
+            <strong className="font-semibold text-amber-700">立即生效且不可撤销</strong>
+            （没有回收站、没有备份），执行前请先预览影响。
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-3 font-mono text-[11px] text-zinc-500">
+          <label className="flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={autoRefresh}
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+              className="accent-zinc-500"
+            />
+            自动刷新 15s
+          </label>
+          <span className="inline-flex items-center gap-1.5">
+            {loading && <Dot tone="sky" pulse />}
+            {loading ? "刷新中…" : loadedAt ? `更新于 ${formatDateTime(loadedAt)}` : "—"}
+          </span>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-zinc-700 transition-colors hover:bg-zinc-50"
+          >
+            刷新
+          </button>
+        </div>
+      </header>
+
+      {healthError && <MonitorErrorBar message={healthError} onRetry={() => void load()} />}
+
+      {workspaceOverLimit && health && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs leading-5 text-amber-800">
+          <Dot tone="amber" pulse />
+          <span>
+            运行工作区已占用{" "}
+            <Num className="font-semibold">{formatBytes(health.disk.runs.sizeBytes)}</Num>
+            ，超过阈值 <Num>{formatBytes(WORKSPACE_WARN_BYTES)}</Num>（共{" "}
+            <Num>{formatCount(health.disk.runs.count)}</Num> 个目录）。 建议清理旧运行的工作区目录。
+          </span>
+          <button
+            type="button"
+            onClick={scrollToCleanup}
+            className="rounded border border-amber-300 px-2 py-0.5 text-amber-800 transition-colors hover:bg-amber-100"
+          >
+            去清理
+          </button>
+        </div>
       )}
 
-      {/* 指标卡 */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <MetricCard
-          label="活跃运行"
-          value={String(overview?.live.activeRuns ?? 0)}
-          tone={overview && overview.live.activeRuns > 0 ? "sky" : "zinc"}
-          hint={
-            overview && overview.live.activeRuns > 0
-              ? `${overview.live.runningNodes} 个节点执行中`
-              : "引擎空闲"
-          }
-          loading={loading}
-        />
-        <MetricCard
-          label="活跃会话"
-          value={String(overview?.live.activeSessions ?? 0)}
-          tone={overview && overview.live.activeSessions > 0 ? "sky" : "zinc"}
-          hint={
-            <Link
-              href="/monitor/sessions"
-              className="underline transition-colors hover:text-zinc-300"
-            >
-              查看实时会话
-            </Link>
-          }
-          loading={loading}
-        />
-        <MetricCard
-          label="今日运行"
-          value={String(today?.runs ?? 0)}
-          tone="violet"
-          hint={
-            successRate == null ? (
-              "尚无已结束的运行"
-            ) : (
-              <>
-                成功率 <Num className="text-zinc-300">{successRate.toFixed(0)}%</Num>
-                <span className="ml-2 text-zinc-600">
-                  {today?.success ?? 0}/{finished}
-                </span>
-              </>
-            )
-          }
-          loading={loading}
-        />
-        <MetricCard
-          label="今日 token"
-          value={formatTokens(today?.tokens ?? 0)}
-          tone="sky"
-          hint="input/output/cache 合计；推理已含在 output"
-          loading={loading}
-        />
-        <MetricCard
-          label="今日费用"
-          value={formatCost(today?.cost ?? 0)}
-          tone="emerald"
-          hint={
-            <Link href="/runs" className="underline transition-colors hover:text-zinc-300">
-              按筛选归集
-            </Link>
-          }
-          loading={loading}
-        />
-        <MetricCard
-          label="近 1 小时错误"
-          value={String(overview?.lastHourErrors ?? 0)}
-          tone={overview && overview.lastHourErrors > 0 ? "red" : "zinc"}
-          hint={
-            overview && overview.lastHourErrors > 0 ? (
-              <Link
-                href="/monitor/logs"
-                className="underline transition-colors hover:text-zinc-300"
-              >
-                去日志检索
-              </Link>
-            ) : (
-              "无错误事件"
-            )
-          }
-          loading={loading}
-        />
-      </div>
-
-      {/* 两张图 */}
-      <div className="grid gap-4 xl:grid-cols-2">
-        <Panel
-          title="近 24 小时运行量"
-          subtitle="按运行开始时间归入整点桶"
-          right={
-            <ConnectionBadge
-              state={connection.state}
-              lastMessageAt={connection.lastMessageAt}
-              onRetry={connection.retry}
-            />
-          }
-        >
-          <Sparkbars
-            data={series.map((p) => ({
-              label: pad2(new Date(p.hourMs).getHours()),
-              values: [Math.max(0, p.runs - p.failed), p.failed],
-              title: `${formatDateTime(p.hourMs).slice(5, 16)} · 发起 ${p.runs} · 失败 ${p.failed}`,
-            }))}
-            colors={[CHART_COLORS.success, CHART_COLORS.failed]}
-            formatValue={(n) => compact(n)}
-          />
-          <div className="mt-2">
-            <Legend
-              items={[
-                {
-                  color: CHART_COLORS.success,
-                  label: "非失败（成功/取消/进行中）",
-                  value: String(Math.max(0, totals.runs - totals.failed)),
-                },
-                {
-                  color: CHART_COLORS.failed,
-                  label: "失败",
-                  value: String(totals.failed),
-                },
-              ]}
-            />
+      {health === null ? (
+        !healthError && <p className="py-16 text-center font-mono text-xs text-zinc-400">加载中…</p>
+      ) : (
+        <>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <EngineCard health={health} />
+            <RunProcessesCard health={health} />
           </div>
-        </Panel>
 
-        <Panel
-          title="近 24 小时 token 消耗"
-          subtitle="按 node_usage 的消息时间归集"
-          right={
-            <span className="text-[11px] text-zinc-500">
-              合计 <Num className="text-zinc-300">{formatTokens(totals.tokens)}</Num>
-              <span className="mx-1.5 text-zinc-700">·</span>
-              <Num className="text-zinc-300">{formatCost(totals.cost)}</Num>
-            </span>
-          }
-        >
-          <Sparkline
-            data={series.map((p) => ({
-              label: pad2(new Date(p.hourMs).getHours()),
-              value: p.tokens,
-              title: `${formatDateTime(p.hourMs).slice(5, 16)} · ${formatTokens(p.tokens)} token / ${formatCost(p.cost)}`,
-            }))}
-            formatValue={(n) => compact(n)}
-            ariaLabel="近 24 小时 token 消耗"
-          />
-        </Panel>
-      </div>
-
-      {/* 最近失败 */}
-      <Panel
-        title="最近失败"
-        subtitle={`最近 ${FAILURE_LIMIT} 条失败或被取消的运行`}
-        bodyClassName=""
-        right={
-          <Link
-            href="/runs?status=failed"
-            className="text-[11px] text-zinc-500 underline transition-colors hover:text-zinc-300"
-          >
-            全部失败运行
-          </Link>
-        }
-      >
-        {failureError ? (
-          <div className="p-4">
-            <MonitorErrorBar message={failureError} onRetry={() => void loadFailures(() => true)} />
+          <div className="grid gap-4 lg:grid-cols-2">
+            <DatabaseCard health={health} />
+            <DiskCard health={health} />
           </div>
-        ) : failures === null ? (
-          <p className="px-4 py-10 text-center text-xs text-zinc-600">加载中…</p>
-        ) : failures.length === 0 ? (
-          <MonitorEmpty
-            title="没有失败或被取消的运行"
-            description="这一栏空着是好事：所有已结束的运行都成功了。"
+
+          <OrphanCard health={health} entities={orphanEntities} entityError={orphanError} />
+
+          <CleanupPanel
+            usage={cleanupUsage(health)}
+            usageWarning={workspaceOverLimit}
+            onDone={() => void load()}
           />
-        ) : (
-          <ul className="divide-y divide-zinc-800">
-            {failures.map((run) => {
-              const endedAt = toMillis(run.finishedAt);
-              return (
-                <li
-                  key={run.id}
-                  className="flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-zinc-900"
-                >
-                  <StatusChip status={run.status} />
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-zinc-200">
-                      {run.workflowName || "（未命名工作流）"}
-                    </span>
-                    <span className="text-[11px] text-zinc-600">
-                      <Num>{run.id.slice(0, 8)}</Num>
-                      <span className="mx-1.5 text-zinc-700">·</span>
-                      <Num>{formatTokens(run.totalTokens)}</Num> token
-                      <span className="mx-1.5 text-zinc-700">·</span>
-                      <Num>{formatCost(run.totalCost)}</Num>
-                    </span>
-                  </div>
-                  <div className="shrink-0 text-right">
-                    <Num className="block text-[11px] text-zinc-500">
-                      {endedAt == null ? "—" : formatDateTime(endedAt)}
-                    </Num>
-                    <Num className="block text-[11px] text-zinc-600">
-                      {durationText(run.startedAt, run.finishedAt)}
-                    </Num>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-0.5 text-[11px]">
-                    <Link
-                      href={`/runs/${run.id}`}
-                      className="text-sky-400 underline transition-colors hover:text-sky-300"
-                    >
-                      运行详情
-                    </Link>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Panel>
+        </>
+      )}
     </div>
   );
+}
+
+/* -------------------------------------------------------------------------- */
+/* 卡片                                                                        */
+/* -------------------------------------------------------------------------- */
+
+function EngineCard({ health }: { health: HealthPayload }) {
+  const { engine } = health;
+  // 换成 dsh 引擎后没有常驻外部服务（ADR-0006）：就绪只取决于 runner 入口在不在、
+  // 凭据引用名有没有值。真正「活着的东西」是每次运行自己的子进程，见右边那张卡。
+  const ok = engine.ready && engine.credentialConfigured;
+  return (
+    <Panel
+      title="执行引擎"
+      subtitle="DeepSeek Harness，每次运行一个子进程，无常驻外部服务"
+      right={
+        <span
+          className={`inline-flex items-center gap-1.5 rounded border px-2 py-0.5 font-mono text-[11px] ${
+            ok
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          <Dot tone={ok ? "emerald" : "red"} />
+          {ok ? "就绪" : "未就绪"}
+        </span>
+      }
+    >
+      <dl className="grid grid-cols-[4.5rem_1fr] gap-y-1 font-mono text-[11px]">
+        <dt className="text-zinc-500">runner</dt>
+        <dd className="break-all text-zinc-800">{engine.runnerEntry || "—"}</dd>
+        <dt className="text-zinc-500">凭据</dt>
+        <dd className="text-zinc-800">
+          {engine.credentialRef || "—"}
+          <span
+            className={engine.credentialConfigured ? "ml-2 text-emerald-600" : "ml-2 text-red-600"}
+          >
+            {engine.credentialConfigured ? "已配置" : "未配置"}
+          </span>
+        </dd>
+      </dl>
+
+      {!ok && (
+        <div className="mt-3 space-y-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs leading-5 text-red-800">
+          {engine.error && <p className="font-mono break-all">{engine.error}</p>}
+          <div>
+            <p className="font-medium">排查步骤</p>
+            <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+              {!engine.ready && (
+                <li>
+                  runner 入口不存在：确认{" "}
+                  <code className="font-mono">src/server/harness/runner.ts</code> 未被删除。
+                </li>
+              )}
+              {!engine.credentialConfigured && (
+                <li>
+                  把 <code className="font-mono">{engine.credentialRef}</code> 写进仓库根的{" "}
+                  <code className="font-mono">.env.local</code>（已被 .gitignore 排除），然后重启
+                  Next.js 进程——凭据在启动时按引用名从进程环境挑值。
+                </li>
+              )}
+            </ol>
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function RunProcessesCard({ health }: { health: HealthPayload }) {
+  const { activeRuns, runEntries } = health.runProcesses;
+  // 计数与明细应一一对应，不一致说明有子进程句柄没被 executeRun 的 finally 清掉
+  const mismatch = activeRuns !== runEntries;
+  return (
+    <Panel
+      title="运行子进程"
+      subtitle="一次运行一个 harness 子进程，独占一个工作区"
+      right={
+        <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-zinc-500">
+          <Dot tone={mismatch ? "amber" : "zinc"} pulse={mismatch} />
+          {mismatch ? "计数不一致" : "一致"}
+        </span>
+      }
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <MetricCard
+          label="在跑运行"
+          value={formatCount(activeRuns)}
+          unit="个"
+          tone={activeRuns > 0 ? "sky" : "zinc"}
+          hint="ontoflowRunProcesses"
+        />
+        <MetricCard
+          label="子进程句柄"
+          value={formatCount(runEntries)}
+          unit="个"
+          tone={mismatch ? "amber" : "zinc"}
+          hint="runProcesses.runs"
+        />
+      </div>
+      <p className="mt-3 text-xs leading-5 text-zinc-500">
+        运行收束时 executeRun 的 finally 会 dispose 子进程并从表里移除。
+        {mismatch &&
+          " 当前两个数字不相等，说明有子进程未被正常收束（进程内残留），重启 Next.js 进程即可清空。"}
+      </p>
+    </Panel>
+  );
+}
+
+function DatabaseCard({ health }: { health: HealthPayload }) {
+  const { database } = health;
+  const maxRows = database.tables.reduce((m, t) => Math.max(m, t.rows), 0);
+  const totalRows = database.tables.reduce((s, t) => s + t.rows, 0);
+  return (
+    <Panel
+      title="数据库"
+      subtitle={database.path || "data/ontoflow.db"}
+      right={<Num className="text-[11px] text-zinc-500">{formatBytes(database.sizeBytes)}</Num>}
+    >
+      {database.tables.length === 0 ? (
+        <p className="font-mono text-xs text-zinc-400">暂无表统计</p>
+      ) : (
+        <div className="max-h-72 overflow-y-auto">
+          <table className="w-full font-mono text-[11px]">
+            <thead className="sticky top-0 bg-white text-zinc-500">
+              <tr className="text-left">
+                <th className="py-1 pr-2 font-normal">表</th>
+                <th className="py-1 pr-2 text-right font-normal">行数</th>
+                <th className="w-24 py-1 font-normal">相对占比</th>
+              </tr>
+            </thead>
+            <tbody>
+              {database.tables.map((t) => (
+                <tr key={t.name} className="border-t border-zinc-100">
+                  <td className="py-1 pr-2 text-zinc-700">{t.name}</td>
+                  <td className="py-1 pr-2 text-right">
+                    <Num className="text-zinc-800">{formatCount(t.rows)}</Num>
+                  </td>
+                  <td className="py-1">
+                    <MiniBar ratio={maxRows > 0 ? t.rows / maxRows : 0} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-zinc-300 text-zinc-600">
+                <td className="py-1 pr-2">合计</td>
+                <td className="py-1 pr-2 text-right">
+                  <Num>{formatCount(totalRows)}</Num>
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+/**
+ * 手写 SVG 的 fill 用字面色值（Tailwind 的 fill-* 不参与编译）：
+ * 两个数据目录各一色，空条与行数占比条各一个中性灰。
+ */
+const BAR_COLORS = {
+  runs: "#0284c7",
+  uploads: "#a1a1aa",
+  empty: "#e4e4e7",
+  rows: "#71717a",
+} as const;
+
+function DiskCard({ health }: { health: HealthPayload }) {
+  const { disk } = health;
+  const segments = [
+    { key: "runs", label: "data/runs 运行工作区", entry: disk.runs, unit: "个目录" },
+    { key: "uploads", label: "data/uploads 上传", entry: disk.uploads, unit: "个文件" },
+  ] as const;
+  const total = segments.reduce((s, x) => s + x.entry.sizeBytes, 0);
+  const over = disk.runs.sizeBytes > WORKSPACE_WARN_BYTES;
+
+  let cursor = 0;
+  const bars = segments.map((seg) => {
+    const w = total > 0 ? (seg.entry.sizeBytes / total) * 100 : 0;
+    const x = cursor;
+    cursor += w;
+    return <rect key={seg.key} x={x} y={0} width={w} height={6} fill={BAR_COLORS[seg.key]} />;
+  });
+
+  return (
+    <Panel
+      title="磁盘占用"
+      subtitle={`工作区阈值 ${formatBytes(WORKSPACE_WARN_BYTES)}，超出即在页面顶部告警`}
+      right={<Num className="text-[11px] text-zinc-500">合计 {formatBytes(total)}</Num>}
+    >
+      <svg
+        viewBox="0 0 100 6"
+        preserveAspectRatio="none"
+        className="h-3 w-full overflow-hidden rounded-sm bg-zinc-100"
+        role="img"
+        aria-label="两个数据目录的体积占比"
+      >
+        {total > 0 ? (
+          bars
+        ) : (
+          <rect x={0} y={2.25} width={100} height={1.5} fill={BAR_COLORS.empty} />
+        )}
+      </svg>
+
+      <div className="mt-2">
+        <Legend
+          items={segments.map((seg) => ({
+            color: BAR_COLORS[seg.key],
+            label: seg.label,
+          }))}
+        />
+      </div>
+
+      <table className="mt-3 w-full font-mono text-[11px]">
+        <tbody>
+          {segments.map((seg) => (
+            <tr key={seg.key} className="border-t border-zinc-100">
+              <td className="py-1.5 pr-2 text-zinc-700">{seg.label}</td>
+              <td className="py-1.5 pr-2 text-right text-zinc-500">
+                <Num>{formatCount(seg.entry.count)}</Num> {seg.unit}
+              </td>
+              <td className="py-1.5 text-right">
+                <Num
+                  className={
+                    seg.key === "runs" && over ? "font-semibold text-amber-700" : "text-zinc-800"
+                  }
+                >
+                  {formatBytes(seg.entry.sizeBytes)}
+                </Num>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Panel>
+  );
+}
+
+function OrphanCard({
+  health,
+  entities,
+  entityError,
+}: {
+  health: HealthPayload;
+  entities: OrphanEntity[];
+  entityError: string | null;
+}) {
+  const runs = health.orphanRuns;
+  const grouped = new Map<string, OrphanEntity[]>();
+  for (const e of entities) {
+    const list = grouped.get(e.kind);
+    if (list) list.push(e);
+    else grouped.set(e.kind, [e]);
+  }
+
+  return (
+    <Panel
+      title="孤儿检测"
+      subtitle="悬挂的运行 + 没人引用的库条目"
+      right={
+        <Num className="text-[11px] text-zinc-500">
+          运行 {formatCount(runs.length)} · 实体 {formatCount(entities.length)}
+        </Num>
+      }
+    >
+      <section>
+        <h3 className="mb-2 text-xs font-medium text-zinc-700">
+          孤儿运行
+          <span className="ml-2 font-normal text-zinc-500">
+            状态仍为进行中、但进程内已无对应会话（多为进程重启遗留；下次启动的对账会把它们失败化）
+          </span>
+        </h3>
+        {runs.length === 0 ? (
+          <p className="font-mono text-xs text-zinc-400">无 —— 没有悬挂的运行</p>
+        ) : (
+          <div className="overflow-x-auto rounded border border-zinc-200">
+            <table className="w-full font-mono text-[11px]">
+              <thead className="bg-zinc-50 text-left text-zinc-500">
+                <tr>
+                  <th className="px-2 py-1.5 font-normal">运行</th>
+                  <th className="px-2 py-1.5 font-normal">工作流</th>
+                  <th className="px-2 py-1.5 font-normal">状态</th>
+                  <th className="px-2 py-1.5 font-normal">开始</th>
+                  <th className="px-2 py-1.5 font-normal">已挂起</th>
+                  <th className="px-2 py-1.5 font-normal">滞留节点</th>
+                </tr>
+              </thead>
+              <tbody>
+                {runs.map((r) => {
+                  const started = toMillis(r.startedAt);
+                  return (
+                    <tr key={r.id} className="border-t border-zinc-100">
+                      <td className="px-2 py-1.5">
+                        <Link
+                          href={`/runs/${r.id}`}
+                          className="text-sky-700 underline-offset-2 hover:underline"
+                        >
+                          {r.id.slice(0, 8)}
+                        </Link>
+                      </td>
+                      <td className="px-2 py-1.5 text-zinc-700">{r.workflowName || "—"}</td>
+                      <td className="px-2 py-1.5 text-amber-700">{r.status}</td>
+                      <td className="px-2 py-1.5 text-zinc-500">
+                        {started == null ? "—" : formatDateTime(started)}
+                      </td>
+                      <td className="px-2 py-1.5 text-zinc-500">
+                        {durationText(r.startedAt, null)}
+                      </td>
+                      <td className="px-2 py-1.5 text-zinc-500">
+                        {r.pendingNodes == null
+                          ? (r.reason ?? "—")
+                          : `${formatCount(r.pendingNodes)} 个`}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="mt-5">
+        <h3 className="mb-2 text-xs font-medium text-zinc-700">
+          孤儿实体
+          <span className="ml-2 font-normal text-zinc-500">
+            没有被任何工作流 / Action 引用的库条目，点击可直接打开（工作流是顶层实体，不参与判定）
+          </span>
+        </h3>
+        {entityError ? (
+          <p className="rounded border border-red-200 bg-red-50 px-3 py-2 font-mono text-xs text-red-700">
+            {entityError}
+          </p>
+        ) : grouped.size === 0 ? (
+          <p className="font-mono text-xs text-zinc-400">无 —— 所有库条目都至少被引用一次</p>
+        ) : (
+          <div className="space-y-2">
+            {[...grouped.entries()].map(([kind, list]) => (
+              <div key={kind} className="flex flex-wrap items-baseline gap-2">
+                <span className="w-24 shrink-0 font-mono text-[11px] text-zinc-500">
+                  {kindLabel(kind)}（{list.length}）
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {list.map((e) => (
+                    <Link
+                      key={`${e.kind}:${e.id}`}
+                      href={e.href || "#"}
+                      className="rounded border border-zinc-200 bg-zinc-50 px-2 py-0.5 font-mono text-[11px] text-zinc-700 transition-colors hover:border-zinc-400 hover:text-zinc-900"
+                    >
+                      {e.name}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </Panel>
+  );
+}
+
+/** 表格里的行数占比条（纯 SVG） */
+function MiniBar({ ratio }: { ratio: number }) {
+  const w = Math.max(0, Math.min(1, ratio)) * 100;
+  return (
+    <svg
+      viewBox="0 0 100 4"
+      preserveAspectRatio="none"
+      className="h-1.5 w-full rounded-sm bg-zinc-100"
+      aria-hidden="true"
+    >
+      <rect x={0} y={0} width={w} height={4} fill={BAR_COLORS.rows} />
+    </svg>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* 工具                                                                        */
+/* -------------------------------------------------------------------------- */
+
+function scrollToCleanup(): void {
+  document.getElementById("cleanup")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/**
+ * 清理面板旁常驻的「当前占用」文案，全部取自 health 接口。
+ * 行数走 counts（服务端为此专门提供的字段），不再按表名去 database.tables 里捞：
+ * 那是靠字符串匹配的软引用，表一改名就静默变 0，和清理面板显示 0 项是同一类坑。
+ */
+function cleanupUsage(health: HealthPayload): CleanupUsage {
+  const { counts } = health;
+  return {
+    workspaces: `${formatBytes(health.disk.runs.sizeBytes)} · ${formatCount(
+      health.disk.runs.count,
+    )} 个目录`,
+    events: `${formatCount(counts.runEvents)} 条事件`,
+    runs: `${formatCount(counts.runs)} 条运行 · ${formatCount(counts.nodeUsage)} 条用量明细`,
+  };
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetch(url, { cache: "no-store" });
+  } catch {
+    throw new Error(`网络错误，无法访问 ${url}`);
+  }
+  const data: unknown = await res.json().catch(() => null);
+  if (!res.ok) {
+    const message =
+      typeof data === "object" && data !== null && "error" in data
+        ? String((data as { error: unknown }).error)
+        : `请求失败（HTTP ${res.status}）：${url}`;
+    throw new Error(message);
+  }
+  return data;
+}
+
+function errorText(reason: unknown, fallback: string): string {
+  return reason instanceof Error && reason.message ? reason.message : fallback;
 }
