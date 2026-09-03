@@ -17,7 +17,7 @@
  * 同一事件重放也只落一行；action.ts 按会话对 node_usage 求和，摘要费用随之进入节点累计。
  * 例外：摘要在提交阶段失败（中止、表层被并发改动、commit 抛错）时上游只写 compaction/end
  * 的 error，不写带 usage 的 summary 事件，那一次已经付费的调用无法计费——这是上游事件模型的
- * 限制，成本页会少算，不要把这里说成完整计费。
+ * 限制，本站的用量汇总会少算，不要把这里说成完整计费。
  */
 import { sql } from "drizzle-orm";
 import { db, nodeUsage, runEvents } from "@/db";

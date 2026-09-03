@@ -77,8 +77,16 @@ interface HistoryItem {
   workflowId: string;
   workflowName: string;
   status: StatusResponse["status"];
+  /** 受理来源（服务端从 imports.invocation 读时推导）：这条运行由专用调用入口发起，应为 resume-match-api */
+  source: string;
   nodesTotal: number;
   nodesDone: number;
+}
+
+/** GET /api/runs 的分页信封（另带 summary，这里用不上） */
+interface HistoryEnvelope {
+  items: HistoryItem[];
+  total: number;
 }
 
 interface TrajectoryRecord {
@@ -321,12 +329,16 @@ async function main(): Promise<void> {
     throw new Error("运行详情中存在未成功节点");
   }
 
-  const history = await requestJson<HistoryItem[]>(
+  const history = await requestJson<HistoryEnvelope>(
     `/api/runs?workflowId=${encodeURIComponent(detail.run.workflowId)}`,
   );
-  const historyRow = history.find((item) => item.id === started.runId);
+  const historyRow = history.items.find((item) => item.id === started.runId);
   if (!historyRow || historyRow.status !== "success" || historyRow.nodesDone !== 11) {
     throw new Error("运行历史中没有这次已完成运行，或节点进度不完整");
+  }
+  // 来源是运行列表按入口筛选的依据，专用入口受理的运行必须能被认出来
+  if (historyRow.source !== "resume-match-api") {
+    throw new Error(`运行历史里的受理来源应为 resume-match-api，实际 ${historyRow.source}`);
   }
 
   const artifacts = await inspectArtifacts(started.runId, detail.nodes);

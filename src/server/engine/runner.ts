@@ -419,6 +419,7 @@ export async function startResolvedRun(
           workflowName: resolved.workflow.name,
           status: "running",
           // 入口来源与 run 同一次同步 insert 落库；专用 GET 不凭工作流名称猜来源。
+          // 来源只此一份：运行列表按来源筛选与汇总时从这里 json_extract 推导，不另存列。
           imports: { invocation },
           // 三层设置与 run 同一事务冻结（ADR-0016）。
           settingsSnapshot: settingsSnapshot as unknown as Record<string, unknown>,

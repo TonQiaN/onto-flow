@@ -4,7 +4,7 @@
  * 约定：**所有时间字段一律是 epoch 毫秒数（number）**，不是 Date 也不是 ISO 串——
  * 服务层在返回前统一归一，前端可直接丢给 `@/app/runs/lib` 的
  * `formatDateTime` / `formatClock` / `formatDuration`，无需再过 `toMillis`。
- * 例外只有显式带 `ISO` 后缀的分桶键（`hourISO` / `dayISO`），那是给图表当 x 轴标签用的。
+ * 例外只有显式带 `ISO` 后缀的分桶键（`hourISO`），那是给图表当 x 轴标签用的。
  *
  * token 口径与运行历史页一致：output 已含 reasoning，总量只加
  * input/output/cacheRead/cacheWrite；reasoning 仅作为 output 的拆分明细展示。
@@ -169,50 +169,6 @@ export interface LogsPayload {
   items: LogItem[];
   /** 还有更旧的数据时是本页最小 id，否则 null */
   nextCursor: number | null;
-}
-
-// ---------------- 成本分析 ----------------
-
-export interface CostByModel {
-  modelId: string;
-  providerId: string;
-  /** assistant 消息条数（node_usage 行数） */
-  messages: number;
-  tokens: number;
-  cost: number;
-}
-
-export interface CostByAction {
-  actionName: string;
-  /** 用到该 Action 的节点执行次数 */
-  nodes: number;
-  tokens: number;
-  cost: number;
-}
-
-export interface CostByWorkflow {
-  workflowName: string;
-  runs: number;
-  tokens: number;
-  cost: number;
-}
-
-export interface CostDailyPoint {
-  /** 本地日期 YYYY-MM-DD */
-  dayISO: string;
-  tokens: number;
-  cost: number;
-}
-
-export interface CostPayload {
-  /** 统计窗口（天） */
-  days: number;
-  /** 窗口起点 epoch 毫秒（本地零点） */
-  since: number;
-  byModel: CostByModel[];
-  byAction: CostByAction[];
-  byWorkflow: CostByWorkflow[];
-  daily: CostDailyPoint[];
 }
 
 // ---------------- 系统健康 ----------------

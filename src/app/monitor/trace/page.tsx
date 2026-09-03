@@ -64,7 +64,8 @@ function TraceConsole() {
         setRuns([]);
         return;
       }
-      setRuns(data as RunListItem[]);
+      // 下拉只列最近一页（信封默认 30 条），选更早的运行经运行列表页深链过来
+      setRuns(Array.isArray(data?.items) ? (data.items as RunListItem[]) : []);
     } catch {
       setError("网络错误，加载运行列表失败");
       setRuns([]);

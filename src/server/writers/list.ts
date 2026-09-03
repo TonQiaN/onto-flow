@@ -4,6 +4,8 @@
  *
  * 契约：?q=&folder=&locate=&sort=&page=&pageSize=  →  { items, total, page, pageSize }
  * item 追加 folder: FolderRef | null（workflow 恒为 null）与 refCount: number。
+ * 其中分页那一段由 parsePageQuery 单独导出，运行列表 GET /api/runs 复用它，
+ * 好让两处的默认值与上限只有一个出处。
  * locate=<实体 id>：反查该实体在当前过滤+排序下的页码并覆盖 page（信封返回生效
  * 页码），树上点实体叶子定位高亮用；不在过滤集内时忽略。
  */
@@ -30,14 +32,34 @@ export type SortKey = (typeof SORT_KEYS)[number];
 export const DEFAULT_PAGE_SIZE = 30;
 export const MAX_PAGE_SIZE = 100;
 
-export interface ListQuery {
+export interface PageQuery {
+  page: number;
+  pageSize: number;
+}
+
+/**
+ * 分页参数的唯一解析口：五个库的列表 GET 与 /api/runs 共用同一套默认值与上限，
+ * 非法或缺省一律回落而不是 400（页码越界返回空页即可）。
+ */
+export function parsePageQuery(url: string): PageQuery {
+  const sp = new URL(url).searchParams;
+
+  const pageRaw = Number.parseInt(sp.get("page") ?? "", 10);
+  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
+
+  const sizeRaw = Number.parseInt(sp.get("pageSize") ?? "", 10);
+  const pageSize =
+    Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(sizeRaw, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
+
+  return { page, pageSize };
+}
+
+export interface ListQuery extends PageQuery {
   q: string;
   folderId: string | null;
   /** 要定位的实体 id：反查其所在页并覆盖 page；不在过滤集内时忽略 */
   locate: string | null;
   sort: SortKey;
-  page: number;
-  pageSize: number;
 }
 
 export function parseListQuery(url: string): ListQuery {
@@ -56,14 +78,7 @@ export function parseListQuery(url: string): ListQuery {
     ? (sortRaw as SortKey)
     : "updated_desc";
 
-  const pageRaw = Number.parseInt(sp.get("page") ?? "", 10);
-  const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
-
-  const sizeRaw = Number.parseInt(sp.get("pageSize") ?? "", 10);
-  const pageSize =
-    Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(sizeRaw, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
-
-  return { q, folderId, locate, sort, page, pageSize };
+  return { q, folderId, locate, sort, ...parsePageQuery(url) };
 }
 
 function escapeLike(input: string): string {

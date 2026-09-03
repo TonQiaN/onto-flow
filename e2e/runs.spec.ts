@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { SESSION_FORMAT_VERSION } from "@deepseek-ai/dsh-session";
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
-import { cleanupByPrefix } from "./helpers";
+import { cleanupByPrefix, openDb } from "./helpers";
 
 interface RunFixture {
   workflowId: string;
@@ -621,5 +621,376 @@ test.describe("运行历史", () => {
       name: "..report.md",
       content: "双点开头是合法文件名",
     });
+  });
+});
+
+/* --------------------------- 运行列表的筛选、分页与用量汇总 --------------------------- */
+
+const LIST_PREFIX = "e2e-运行列表-";
+const DAY_MS = 86_400_000;
+
+interface ListFixture {
+  workflowId: string;
+  workflowName: string;
+  /** 画布发起、成功、三天前；有 node_usage 明细 */
+  canvasRunId: string;
+  canvasStartedAt: number;
+  /** 调用入口发起、失败、今天；刻意没有任何用量，用来验汇总不把零用量的运行挤掉 */
+  apiRunId: string;
+  apiStartedAt: number;
+}
+
+interface RunsEnvelope {
+  items: Array<{ id: string; source: string; status: string; workflowId: string }>;
+  total: number;
+  page: number;
+  pageSize: number;
+  summary: {
+    runs: number;
+    tokens: number;
+    cost: number;
+    byModel: Array<{ providerId: string; modelId: string; tokens: number; cost: number }>;
+  };
+}
+
+/** 与 src/app/runs/lib.ts 同口径：e2e 不从 src 引模块，格式化按同一规则复刻一份。 */
+function formatTokens(n: number): string {
+  return Math.round(n).toLocaleString("zh-CN");
+}
+
+function formatCost(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "¥0";
+  if (n < 0.0001) return "<¥0.0001";
+  return `¥${n.toFixed(4)}`;
+}
+
+/** 日期输入框的 yyyy-MM-dd：按本地时区，与页面的换算同一套 */
+function localDate(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function startOfLocalDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * 两条合成运行：来源、状态、开始日期三处都不同，够时间范围与来源筛选各挑出一条。
+ * 直接写库（runs / run_nodes / node_usage）不落磁盘目录——列表页不读运行目录；
+ * 收尾删工作流即按外键级联收走这三张表的行。
+ */
+function createListFixture(): ListFixture {
+  const workflowId = randomUUID();
+  const workflowName = `${LIST_PREFIX}${workflowId.slice(0, 8)}`;
+  const canvasRunId = randomUUID();
+  const apiRunId = randomUUID();
+  // 取「本地当天 0 点 + 1 秒」而不是 now：无论几点跑，这条运行都稳稳落在今天这一格里
+  const apiStartedAt = startOfLocalDay(Date.now()) + 1_000;
+  const canvasStartedAt = apiStartedAt - 3 * DAY_MS;
+  const canvasNodeA = randomUUID();
+  const canvasNodeB = randomUUID();
+
+  const database = openDb();
+  try {
+    database.transaction(() => {
+      database
+        .prepare(
+          "insert into workflows (id, name, description, created_at, updated_at) values (?, ?, '', ?, ?)",
+        )
+        .run(workflowId, workflowName, canvasStartedAt, apiStartedAt);
+
+      const insertRun = database.prepare(
+        "insert into runs (id, workflow_id, status, workflow_name, imports, started_at, finished_at) values (?, ?, ?, ?, ?, ?, ?)",
+      );
+      insertRun.run(
+        canvasRunId,
+        workflowId,
+        "success",
+        workflowName,
+        // 来源不是列：运行列表从 imports.invocation.source 读时推导
+        JSON.stringify({ invocation: { source: "workflow" } }),
+        canvasStartedAt,
+        canvasStartedAt + 12_000,
+      );
+      insertRun.run(
+        apiRunId,
+        workflowId,
+        "failed",
+        workflowName,
+        JSON.stringify({ invocation: { source: "resume-match-api", contractVersion: 1 } }),
+        apiStartedAt,
+        apiStartedAt + 3_000,
+      );
+
+      const insertNode = database.prepare(
+        "insert into run_nodes (id, run_id, node_id, label, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost, started_at, finished_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      insertNode.run(
+        randomUUID(),
+        canvasRunId,
+        canvasNodeA,
+        "e2e-列表-生成",
+        "success",
+        1_000,
+        200,
+        0,
+        0,
+        0.0021,
+        canvasStartedAt,
+        canvasStartedAt + 6_000,
+      );
+      insertNode.run(
+        randomUUID(),
+        canvasRunId,
+        canvasNodeB,
+        "e2e-列表-复核",
+        "success",
+        300,
+        100,
+        0,
+        0,
+        0.0034,
+        canvasStartedAt + 6_000,
+        canvasStartedAt + 12_000,
+      );
+      insertNode.run(
+        randomUUID(),
+        apiRunId,
+        randomUUID(),
+        "e2e-列表-匹配",
+        "failed",
+        0,
+        0,
+        0,
+        0,
+        0,
+        apiStartedAt,
+        apiStartedAt + 3_000,
+      );
+
+      const insertUsage = database.prepare(
+        "insert into node_usage (id, run_id, node_id, session_id, message_id, provider_id, model_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, cost, ts) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      );
+      insertUsage.run(
+        randomUUID(),
+        canvasRunId,
+        canvasNodeA,
+        canvasNodeA,
+        "turn1-step1",
+        "deepseek-official",
+        "deepseek-chat",
+        1_000,
+        200,
+        0,
+        0,
+        0,
+        0.0021,
+        canvasStartedAt + 1_000,
+      );
+      insertUsage.run(
+        randomUUID(),
+        canvasRunId,
+        canvasNodeB,
+        canvasNodeB,
+        "turn1-step1",
+        "deepseek-official",
+        "deepseek-reasoner",
+        300,
+        100,
+        0,
+        0,
+        0,
+        0.0034,
+        canvasStartedAt + 7_000,
+      );
+    })();
+  } finally {
+    database.close();
+  }
+
+  return {
+    workflowId,
+    workflowName,
+    canvasRunId,
+    canvasStartedAt,
+    apiRunId,
+    apiStartedAt,
+  };
+}
+
+function tableRunIds(page: Page): Promise<string[]> {
+  return page
+    .locator('[data-testid="runs-table"] tbody tr')
+    .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-run-id") ?? ""));
+}
+
+function byModelRows(page: Page): Promise<string[][]> {
+  return page
+    .locator('[data-testid="runs-summary-by-model"] tbody tr')
+    .evaluateAll((rows) =>
+      rows.map((row) => [...row.querySelectorAll("td")].map((cell) => cell.textContent ?? "")),
+    );
+}
+
+/**
+ * 断言表格与「同参数」载荷一致：URL 上的筛选参数原样发给 /api/runs，
+ * 页面渲染出的 id 序列必须等于 items 的 id 序列（顺序也算）。
+ * 不断言条数、不断言某一行恰好是谁——真实运行历史会长，只有载荷说了算。
+ */
+async function expectTableMatchesPayload(page: Page): Promise<RunsEnvelope> {
+  const { search } = new URL(page.url());
+  const res = await page.request.get(`/api/runs${search}`);
+  expect(res.ok()).toBeTruthy();
+  const payload = (await res.json()) as RunsEnvelope;
+  await expect.poll(() => tableRunIds(page)).toEqual(payload.items.map((item) => item.id));
+  return payload;
+}
+
+test.describe("运行列表筛选", () => {
+  let listFixture: ListFixture;
+
+  test.beforeAll(async ({ request }) => {
+    // 上次进程被中断的残留：删工作流即级联收走运行、节点与用量
+    await cleanupByPrefix(request, "/api/workflows", LIST_PREFIX);
+    listFixture = createListFixture();
+  });
+
+  test.afterAll(async ({ request }) => {
+    await cleanupByPrefix(request, "/api/workflows", LIST_PREFIX);
+  });
+
+  test("工作流与来源筛选：表格行与同参数载荷的 items 一致", async ({ page }) => {
+    await page.goto("/runs");
+
+    const workflowSelect = page.getByTestId("runs-filter-workflow");
+    await expect(workflowSelect.locator(`option[value="${listFixture.workflowId}"]`)).toHaveCount(
+      1,
+    );
+    await workflowSelect.selectOption(listFixture.workflowId);
+    await page.waitForURL((url) => url.searchParams.get("workflowId") === listFixture.workflowId);
+    const all = await expectTableMatchesPayload(page);
+    expect(all.items.map((item) => item.id).sort()).toEqual(
+      [listFixture.canvasRunId, listFixture.apiRunId].sort(),
+    );
+
+    await page.getByTestId("runs-filter-source").selectOption("resume-match-api");
+    await page.waitForURL((url) => url.searchParams.get("source") === "resume-match-api");
+    const viaApi = await expectTableMatchesPayload(page);
+    expect(viaApi.items.map((item) => item.id)).toEqual([listFixture.apiRunId]);
+    expect(viaApi.items.every((item) => item.source === "resume-match-api")).toBe(true);
+    await expect(page.getByTestId("runs-table")).toContainText("resume-match-api");
+
+    await page.getByTestId("runs-filter-source").selectOption("workflow");
+    await page.waitForURL((url) => url.searchParams.get("source") === "workflow");
+    const viaCanvas = await expectTableMatchesPayload(page);
+    expect(viaCanvas.items.map((item) => item.id)).toEqual([listFixture.canvasRunId]);
+    await expect(page.getByTestId("runs-table")).toContainText("画布发起");
+  });
+
+  test("状态筛选：表格行与同参数载荷的 items 一致", async ({ page }) => {
+    await page.goto(`/runs?workflowId=${listFixture.workflowId}`);
+
+    await page.getByTestId("runs-filter-status").selectOption("failed");
+    await page.waitForURL((url) => url.searchParams.get("status") === "failed");
+    const failed = await expectTableMatchesPayload(page);
+    expect(failed.items.map((item) => item.id)).toEqual([listFixture.apiRunId]);
+
+    await page.getByTestId("runs-filter-status").selectOption("success");
+    await page.waitForURL((url) => url.searchParams.get("status") === "success");
+    const success = await expectTableMatchesPayload(page);
+    expect(success.items.map((item) => item.id)).toEqual([listFixture.canvasRunId]);
+  });
+
+  test("时间范围筛选：起止同选今天时只剩今天开始的那条运行", async ({ page }) => {
+    await page.goto(`/runs?workflowId=${listFixture.workflowId}`);
+    // 先等表格按载荷渲染出来：goto 在 load 就返回，dev 模式下 React 此时可能还没水合，
+    // 直接 fill 的 change 事件会被没挂上的 handler 丢掉，URL 永远不会变（CI 撞到过）。
+    await expectTableMatchesPayload(page);
+    const today = localDate(listFixture.apiStartedAt);
+
+    // 两个日期各等一次 URL 落地再填下一个：两次 router.replace 挤在同一瞬间时，
+    // 后一次可能在前一次的导航尚未提交时被吞掉（CI 与本机高负载下都撞到过），人手不会这么快。
+    await page.getByTestId("runs-filter-from").fill(today);
+    await page.waitForURL((url) => url.searchParams.has("from"));
+    await page.getByTestId("runs-filter-to").fill(today);
+    await page.waitForURL((url) => url.searchParams.has("from") && url.searchParams.has("to"));
+
+    const payload = await expectTableMatchesPayload(page);
+    expect(payload.items.map((item) => item.id)).toEqual([listFixture.apiRunId]);
+
+    // 窗口是左闭右开：结束日选今天，今天开始的运行仍在窗内，三天前那条被挡在 from 之前
+    const params = new URL(page.url()).searchParams;
+    const from = Number(params.get("from"));
+    const to = Number(params.get("to"));
+    expect(listFixture.apiStartedAt).toBeGreaterThanOrEqual(from);
+    expect(listFixture.apiStartedAt).toBeLessThan(to);
+    expect(listFixture.canvasStartedAt).toBeLessThan(from);
+
+    // 毫秒住 URL，回填输入框要还原成同一天（结束日是次日 0 点，减 1 毫秒才落回当天）
+    await page.reload();
+    await expect(page.getByTestId("runs-filter-from")).toHaveValue(today);
+    await expect(page.getByTestId("runs-filter-to")).toHaveValue(today);
+    await expectTableMatchesPayload(page);
+  });
+
+  test("汇总行与按模型小表与载荷一致，零用量的运行仍计入运行数", async ({ page }) => {
+    await page.goto(`/runs?workflowId=${listFixture.workflowId}`);
+    const payload = await expectTableMatchesPayload(page);
+
+    const summaryText = (await page.getByTestId("runs-summary").innerText()).replace(/\s+/g, " ");
+    expect(summaryText).toContain(`运行数 ${payload.summary.runs}`);
+    expect(summaryText).toContain(`总 token ${formatTokens(payload.summary.tokens)}`);
+    expect(summaryText).toContain(`总费用 ${formatCost(payload.summary.cost)}`);
+    // 两条运行里只有画布那条有 node_usage，汇总仍要数到两条
+    expect(payload.summary.runs).toBe(2);
+
+    expect(await byModelRows(page)).toEqual(
+      payload.summary.byModel.map((m) => [
+        m.providerId,
+        m.modelId,
+        formatTokens(m.tokens),
+        formatCost(m.cost),
+      ]),
+    );
+    expect(payload.summary.byModel.length).toBeGreaterThan(0);
+
+    // 筛到没有任何用量的那条运行：按模型小表退化成「—」
+    await page.getByTestId("runs-filter-source").selectOption("resume-match-api");
+    await page.waitForURL((url) => url.searchParams.get("source") === "resume-match-api");
+    const apiOnly = await expectTableMatchesPayload(page);
+    expect(apiOnly.summary.byModel).toEqual([]);
+    await expect(page.getByTestId("runs-summary-by-model")).toContainText("—");
+  });
+
+  test("筛选住 URL：刷新不丢，换筛选回到第 1 页", async ({ page }) => {
+    await page.goto(`/runs?workflowId=${listFixture.workflowId}`);
+    await page.getByTestId("runs-filter-status").selectOption("failed");
+    await page.waitForURL((url) => url.searchParams.get("status") === "failed");
+    await page.getByTestId("runs-filter-source").selectOption("resume-match-api");
+    await page.waitForURL((url) => url.searchParams.get("source") === "resume-match-api");
+
+    const before = new URL(page.url()).searchParams;
+    expect(before.get("workflowId")).toBe(listFixture.workflowId);
+    expect(before.get("status")).toBe("failed");
+    expect(before.get("source")).toBe("resume-match-api");
+
+    await page.reload();
+    await expect(page.getByTestId("runs-filter-workflow")).toHaveValue(listFixture.workflowId);
+    await expect(page.getByTestId("runs-filter-status")).toHaveValue("failed");
+    await expect(page.getByTestId("runs-filter-source")).toHaveValue("resume-match-api");
+    const payload = await expectTableMatchesPayload(page);
+    expect(payload.items.map((item) => item.id)).toEqual([listFixture.apiRunId]);
+
+    // 换筛选回到第 1 页：cancelled 一条都没有，页码不会被越界回夹改写，只可能是筛选自己清的
+    await page.goto(`/runs?workflowId=${listFixture.workflowId}&status=cancelled&page=2`);
+    await expect(page.getByText("没有符合筛选条件的运行记录")).toBeVisible();
+    expect(new URL(page.url()).searchParams.get("page")).toBe("2");
+    await page.getByTestId("runs-filter-status").selectOption("failed");
+    await page.waitForURL((url) => url.searchParams.get("status") === "failed");
+    expect(new URL(page.url()).searchParams.has("page")).toBe(false);
+    await expectTableMatchesPayload(page);
   });
 });

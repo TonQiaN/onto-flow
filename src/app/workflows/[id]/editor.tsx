@@ -712,12 +712,16 @@ function EditorInner({ workflowId }: { workflowId: string }) {
     let disposed = false;
     const load = async () => {
       try {
+        // 运行列表是分页信封；并行上限 16 路，pageSize=100 一页取完，切换器不做翻页
         const res = await fetch(
-          `/api/runs?workflowId=${encodeURIComponent(workflowId)}&status=running`,
+          `/api/runs?workflowId=${encodeURIComponent(workflowId)}&status=running&pageSize=100`,
           { cache: "no-store" },
         );
         if (!res.ok || disposed) return;
-        const rows = (await res.json()) as Array<{ id: string; startedAt: string | number }>;
+        const data = (await res.json()) as {
+          items?: Array<{ id: string; startedAt: string | number }>;
+        };
+        const rows = data.items;
         if (disposed || !Array.isArray(rows)) return;
         setRunsInFlight(rows.map((row) => ({ id: row.id, startedAt: row.startedAt })));
         const current = visualsRef.current;

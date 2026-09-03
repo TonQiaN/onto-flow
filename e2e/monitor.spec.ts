@@ -5,7 +5,7 @@ import { expect, test, type APIRequestContext, type Page, type Route } from "@pl
 import { cleanupByPrefix, DATA_DIR, openDb } from "./helpers";
 
 /**
- * 监控台（/monitor 六个标签页）的端到端覆盖。
+ * 监控台（/monitor 五个标签页）的端到端覆盖。
  *
  * 只读纪律：本文件**绝不**点击「执行清理」/「确认删除」/「中止该运行」，
  * 也不发起任何工作流运行（真实调模型，昂贵）。清理面板只走 dryRun 预览路径。
@@ -56,17 +56,6 @@ interface LogsPayload {
 interface TracePayload {
   run: { workflowName: string; tokens: number; cost: number };
   spans: Array<{ id: string; kind: string; label: string }>;
-}
-
-interface CostPayload {
-  days: number;
-  byModel: Array<{
-    modelId: string;
-    providerId: string;
-    messages: number;
-    tokens: number;
-    cost: number;
-  }>;
 }
 
 interface HealthPayload {
@@ -125,7 +114,7 @@ function fixtureWorkflowDir(runDir: string): string | null {
 
 /**
  * 合成一条已结束（failed）的运行：节点甲成功，节点乙以会话错误失败。
- * 事件与用量的时间都落在「现在」之前一分钟内，因此成本页近 7 天窗口、总览近 24 小时桶都能看到它。
+ * 事件与用量的时间都落在「现在」之前一分钟内，因此总览近 24 小时桶能看到它。
  */
 async function createFixture(request: APIRequestContext): Promise<MonitorFixture> {
   const suffix = randomUUID().slice(0, 8);
@@ -425,7 +414,6 @@ const TABS: Array<{ label: string; url: RegExp }> = [
   { label: "实时会话", url: /\/monitor\/sessions$/ },
   { label: "Trace", url: /\/monitor\/trace(\?.*)?$/ },
   { label: "日志检索", url: /\/monitor\/logs(\?.*)?$/ },
-  { label: "成本分析", url: /\/monitor\/cost(\?.*)?$/ },
   { label: "系统健康", url: /\/monitor\/health$/ },
 ];
 
@@ -509,7 +497,7 @@ async function captureJson<T>(
 const isLogs = (url: URL) => url.pathname === "/api/monitor/logs";
 
 test.describe("监控台 · 导航", () => {
-  test("左下角「监控台」入口进入 /monitor，顶栏六个标签逐个切换且 URL 变化", async ({ page }) => {
+  test("左下角「监控台」入口进入 /monitor，顶栏五个标签逐个切换且 URL 变化", async ({ page }) => {
     await page.goto("/workflows");
 
     // 主导航底部的监控台入口
@@ -519,7 +507,7 @@ test.describe("监控台 · 导航", () => {
     await page.waitForURL(/\/monitor$/);
     await expect(page.getByRole("heading", { name: "监控台", exact: true })).toBeVisible();
 
-    // 六个标签都在，且逐个点过去 URL 都变
+    // 五个标签都在，且逐个点过去 URL 都变
     for (const item of TABS) {
       await expect(tab(page, item.label)).toBeVisible();
     }
@@ -618,15 +606,15 @@ test.describe("监控台 · Trace", () => {
 
     // 默认选中项 = 运行列表接口的第一条（倒序即最近一次）。哪次运行最近会随真实使用变化，
     // 所以对着页面自己拉到的载荷比对，而不是写死某个工作流。
-    const runs = await captureJson<Array<{ id: string }>>(
+    const runs = await captureJson<{ items: Array<{ id: string }> }>(
       page,
       (url) => url.pathname === "/api/runs" && url.search === "",
       () => page.goto("/monitor/trace"),
     );
-    expect(runs.length, "夹具已写入一条运行，列表不该为空").toBeGreaterThan(0);
+    expect(runs.items.length, "夹具已写入一条运行，列表不该为空").toBeGreaterThan(0);
     const select = page.locator("select");
     await expect(select).toBeEnabled({ timeout: 15_000 });
-    await expect(select).toHaveValue(runs[0].id);
+    await expect(select).toHaveValue(runs.items[0].id);
 
     // 深链到夹具运行：span 行数、摘要条、节点名都与 trace 载荷比对
     const trace = await captureJson<TracePayload>(
@@ -787,61 +775,6 @@ test.describe("监控台 · 日志检索", () => {
     );
     expect(restored.items.length).toBeGreaterThan(0);
     await expect(rows).toHaveCount(restored.items.length, { timeout: 15_000 });
-  });
-});
-
-test.describe("监控台 · 成本分析", () => {
-  const isCost = (url: URL) =>
-    url.pathname === "/api/monitor/cost" && url.searchParams.get("days") === "7";
-
-  test("四张指标卡与 /api/monitor/cost 载荷一致；夹具用量让近 7 天有非零费用与 token", async ({
-    page,
-  }) => {
-    const cost = await captureJson<CostPayload>(page, isCost, () => page.goto("/monitor/cost"));
-    // 与页面同一口径：四张卡都从 byModel 求和
-    const totals = cost.byModel.reduce(
-      (acc, m) => ({
-        cost: acc.cost + m.cost,
-        tokens: acc.tokens + m.tokens,
-        messages: acc.messages + m.messages,
-      }),
-      { cost: 0, tokens: 0, messages: 0 },
-    );
-    expect(totals.tokens, "夹具的 node_usage 落在近 7 天窗口内").toBeGreaterThan(0);
-    expect(totals.cost).toBeGreaterThan(0);
-
-    expect(await expectMetricHasValue(page, "总费用")).toBe(formatCost(totals.cost));
-    expect(await expectMetricHasValue(page, "总 token")).toBe(formatTokens(totals.tokens));
-    expect(await expectMetricHasValue(page, "assistant 消息")).toBe(formatTokens(totals.messages));
-    expect(await expectMetricHasValue(page, "日均费用")).toBe(formatCost(totals.cost / cost.days));
-
-    // 两张图
-    await expect(page.getByText("每日费用")).toBeVisible();
-    await expect(page.getByText("每日 token")).toBeVisible();
-  });
-
-  test("按模型排行与载荷行数一致，夹具的 deepseek 路由在榜上且 token / 费用对得上", async ({
-    page,
-  }) => {
-    const cost = await captureJson<CostPayload>(page, isCost, () => page.goto("/monitor/cost"));
-
-    const panel = page.locator('section:has(h2:text-is("按模型"))');
-    await expect(panel).toBeVisible();
-    const rows = panel.locator("tbody tr");
-    await expect(rows).toHaveCount(cost.byModel.length, { timeout: 15_000 });
-
-    const mine = cost.byModel.find((m) => m.providerId === PROVIDER_ID && m.modelId === MODEL_ID);
-    expect(mine, "夹具的 node_usage 走 deepseek-official/deepseek-v4-flash").toBeTruthy();
-    // 名称单元格的 title 就是 modelId；同一模型经不同 provider 会是两行，再按 provider 收窄
-    const row = rows
-      .filter({ has: page.locator(`[title="${MODEL_ID}"]`) })
-      .filter({ hasText: PROVIDER_ID });
-    await expect(row).toHaveCount(1);
-    await expect(row.locator("td").nth(1)).toHaveText(String(mine!.messages));
-    await expect(row.locator("td").nth(2)).toHaveText(formatTokens(mine!.tokens));
-    // 费用以人民币计价
-    await expect(row.locator("td").nth(3)).toHaveText(formatCost(mine!.cost));
-    await expect(row).toContainText(/[¥$]\d|<[¥$]/);
   });
 });
 

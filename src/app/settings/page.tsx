@@ -97,7 +97,7 @@ const EMPTY: SettingsDoc = {
 const TOGGLE_COPY: Record<CompositionToggleKey, { label: string; hint: string }> = {
   webSearch: {
     label: "DeepSeek 搜索（web_search）",
-    hint: "挂 web / web-search-deepseek / tool-web 三行，模型多一个 web_search 工具，用与模型同一把凭据引用名。DeepSeek 搜索的费用不计入本站用量：搜索是一次独立的辅助模型请求，用量不经 llm/stream，本站的 node_usage 与成本页收不到它，是账外支出。",
+    hint: "挂 web / web-search-deepseek / tool-web 三行，模型多一个 web_search 工具，用与模型同一把凭据引用名。DeepSeek 搜索的费用不计入本站用量：搜索是一次独立的辅助模型请求，用量不经 llm/stream，本站的 node_usage 收不到它，是账外支出。",
   },
   fsSearch: {
     label: "文件搜索（glob / grep）",

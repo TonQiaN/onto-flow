@@ -28,6 +28,11 @@ export interface RunListItem {
   workflowId: string;
   workflowName: string;
   status: RunStatus;
+  /**
+   * 受理来源：`workflow` 是画布通用入口，其余是调用入口的 source 名。
+   * 服务端从 `imports.invocation.source` 读时推导，没有对应的列。
+   */
+  source: string;
   startedAt: string | number;
   finishedAt: string | number | null;
   totalTokens: number;
@@ -35,6 +40,37 @@ export interface RunListItem {
   /** 节点总数与已收束数（success/failed/cancelled/skipped），驱动进度展示 */
   nodesTotal: number;
   nodesDone: number;
+}
+
+/** 画布通用入口的来源名；其余取值都是调用入口 */
+export const WORKFLOW_RUN_SOURCE = "workflow";
+
+/** summary.byModel 的一行：同一组筛选下某条模型路由的用量 */
+export interface RunSummaryByModel {
+  providerId: string;
+  modelId: string;
+  tokens: number;
+  cost: number;
+}
+
+/**
+ * 当前筛选集（不分页）的用量汇总。runs 数的是筛选集里 distinct 的运行，
+ * 零用量的运行也算，所以它等于信封的 total；token 与费用只来自 node_usage。
+ */
+export interface RunSummary {
+  runs: number;
+  tokens: number;
+  cost: number;
+  byModel: RunSummaryByModel[];
+}
+
+/** GET /api/runs 的信封：库列表那套 { items, total, page, pageSize } 另带 summary */
+export interface RunListEnvelope {
+  items: RunListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+  summary: RunSummary;
 }
 
 /** runs 表行（GET /api/runs/[id] 与 SSE snapshot 中的 run） */

@@ -122,7 +122,7 @@ export const COMPOSITION_TOGGLE_LABELS: Record<
 > = {
   webSearch: {
     label: "DeepSeek 搜索",
-    hint: "web_search 工具。搜索是独立的辅助模型请求，用量不经 llm/stream，本站成本页收不到，是账外支出。",
+    hint: "web_search 工具。搜索是独立的辅助模型请求，用量不经 llm/stream，本站 node_usage 收不到，是账外支出。",
   },
   fsSearch: {
     label: "文件搜索",

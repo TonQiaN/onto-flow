@@ -85,12 +85,13 @@ function WorkflowsLibrary() {
   /** 与列表同步刷新的运行中标记；失败静默（徽标缺失不影响列表本身） */
   const loadRunning = useCallback(async () => {
     try {
-      const res = await fetch("/api/runs?status=running", { cache: "no-store" });
+      // 运行列表是分页信封；并行上限 16 路，pageSize=100 一页取完
+      const res = await fetch("/api/runs?status=running&pageSize=100", { cache: "no-store" });
       if (!res.ok) return;
-      const rows = (await res.json()) as Array<{ workflowId?: string }>;
+      const data = (await res.json()) as { items?: Array<{ workflowId?: string }> };
       setRunningIds(
         new Set(
-          (Array.isArray(rows) ? rows : [])
+          (Array.isArray(data.items) ? data.items : [])
             .map((r) => r.workflowId)
             .filter((id): id is string => typeof id === "string"),
         ),

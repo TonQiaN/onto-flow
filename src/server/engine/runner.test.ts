@@ -791,11 +791,27 @@ describe("运行输入物化", () => {
         "json-input": { kind: "json", json: { ok: true } },
       },
       testSettings(),
-      { source: "workflow" },
+      {
+        source: "resume-match-api",
+        contractVersion: 1,
+        resultNodes: { outputNodeId: "output", validatorNodeId: "action" },
+      },
       completionGate,
     );
     expect(startedRun.ok).toBe(true);
     if (!startedRun.ok) return;
+
+    // 来源与 run 行同一次同步 insert 落库，只此一份：运行列表按来源筛选是从这里
+    // json_extract 推导的，专用 GET 也只认它。受理返回时它就必须在盘上。
+    expect(
+      JSON.parse(
+        (
+          sqlite.prepare("select imports from runs where id = ?").get(startedRun.runId) as {
+            imports: string;
+          }
+        ).imports,
+      ),
+    ).toMatchObject({ invocation: { source: "resume-match-api", contractVersion: 1 } });
 
     await vi.waitFor(() => {
       const run = sqlite
@@ -803,7 +819,7 @@ describe("运行输入物化", () => {
         .get(startedRun.runId) as { status: string; imports: string };
       expect(run.status).toBe("success");
       expect(JSON.parse(run.imports)).toMatchObject({
-        invocation: { source: "workflow" },
+        invocation: { source: "resume-match-api", contractVersion: 1 },
         completion: { kind: "test-contract", digest: "abc123" },
       });
     });

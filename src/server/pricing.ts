@@ -10,7 +10,7 @@
  *   两者不相交，各按各的单价计。
  * - outputTokens 直取 completion_tokens，**已含 reasoning**，因此 reasoning 不再单独计费。
  * - 缓存写入官方不计费。
- * - 未知 provider/model 返回 0：宁可少算也不虚构价目，成本页的 0 就是「没有价目」的信号。
+ * - 未知 provider/model 返回 0：宁可少算也不虚构价目，用量汇总里的 0 就是「没有价目」的信号。
  */
 
 /** 每百万 token 的高峰单价（元）；空闲价恒为一半，不单独建表。 */

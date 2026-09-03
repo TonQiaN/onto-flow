@@ -42,13 +42,14 @@ function useLiveRuns(): LiveRun[] | null {
     let disposed = false;
     const load = async () => {
       try {
-        const res = await fetch("/api/runs?status=running", {
+        // 运行列表是分页信封；并行上限 16 路，pageSize=100 一页取完，面板不做翻页
+        const res = await fetch("/api/runs?status=running&pageSize=100", {
           cache: "no-store",
         });
         if (!res.ok) throw new Error("failed");
-        const data = (await res.json()) as unknown;
+        const data = (await res.json()) as { items?: unknown };
         if (disposed) return;
-        setRuns(Array.isArray(data) ? (data as LiveRun[]) : []);
+        setRuns(Array.isArray(data.items) ? (data.items as LiveRun[]) : []);
       } catch {
         if (!disposed) setRuns(null);
       }

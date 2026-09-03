@@ -37,7 +37,7 @@ src/
 | /api/workflows/[id]/run | POST | body: `{ inputs: { [inputNodeId]: PortValue } }`；图校验不通过、或某个 Action 的预载 / 可见 Tool 越出工作流集合（`WorkflowResolveError`）都是 422 `{ error, issues }`；通过则建 run 异步执行，返回 `{ runId }`；同时 running 的运行数达上限（16）时 429，排队归调用方 |
 | /api/internal/resume-matches | POST | 「简历匹配评分」工作流调用入口；body 严格为 `{ job: PortValue(file), resume: PortValue(file) }`，调用方先经 `/api/uploads` 取得两个值；202 返回 `runId`、`statusUrl`、`historyUrl`，不暴露工作流或节点 id |
 | /api/internal/resume-matches/[id] | GET | 只查询由该入口 POST 受理并在 run 元数据中留下来源证明的运行（同名工作流经通用入口启动仍为 404）；running/failed/cancelled 时 `result=null`，success 时读取完成门禁写入 `run_results` 的精确 JSON，再次严格校验并核对完成证据里的内容 SHA-256 后返回；工作区/事件清理不影响结果，删除 run 才级联删除 |
-| /api/runs?workflowId=&status= | GET | 运行列表；每行带 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用） |
+| /api/runs?workflowId=&status=&source=&from=&to=&page=&pageSize= | GET | 运行列表信封 `{ items, total, page, pageSize, summary }`，`items` 按 `startedAt` 倒序、每行带 `source`（受理来源）与 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用）。七个参数：`status` 四值之一、`source` 匹配 `^[a-z][a-z0-9-]*$`、`from` / `to` 是 epoch 毫秒整数且窗口左闭右开（`startedAt ∈ [from, to)`），非法一律 400；`page` / `pageSize` 与五个库同一套（默认 30、上限 100，`parsePageQuery`）。`summary = { runs, tokens, cost, byModel: [{ providerId, modelId, tokens, cost }] }` 按同一组筛选**不分页**聚合：`runs` 数筛选集里 distinct 的运行（零用量的运行也算，因此等于 `total`），token 与费用与每行同源，来自按 `run_id` 预聚合的 `run_nodes` 子查询 left join（权威汇总；`node_usage` 插入瞬时失败的 chunk 只折进 `run_nodes`），只有 `byModel` 来自 `node_usage` 的预聚合、可能略小于 `tokens`——两处内连接都会把无用量的运行挤掉 |
 | /api/runs/[id] | GET, DELETE | GET：run（全列，含受理时冻结的 `settingsSnapshot`：`global` / `workflow` / `effective` 三层，见「三层设置与快照」）+ run_nodes 全量；DELETE：删除单个已结束运行（run_nodes / run_events / node_usage / run_results 外键级联，连同运行目录），running 时 409 |
 | /api/runs/[id]/files?path= | GET | 只读预览已结束运行目录内的 UTF-8 文本文件（执行中 409；路径收敛在该 run 的 run_dir 内；256KB 按完整字符截断，二进制或非法 UTF-8 为 415）；运行详情看输入与产物正文的唯一通道（ADR-0012） |
 | /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
@@ -55,7 +55,7 @@ src/
 - 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
 - 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话（ADR-0009）。
 - 运行之间并行且互相独立：同一个工作流可同时发起多次运行，跨运行状态一律按 runId 隔离（工作区目录、子进程、globalThis 上的取消/进程/输入表）。唯一的准入闸门在 `startRun`：同时 running 的运行数达 `MAX_CONCURRENT_RUNS`（16）即返回 429 而不排队——每个运行是一整个 node+tsx+dsh 子进程，队列归外部调用方管。仓库内付费批量脚本实行全有或全撤：任一项被拒时取消并等齐同批已经受理的运行后才报错。
-- 多路运行的界面契约：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running`），点击深链 `/workflows/<id>?runId=<runId>` 精确跟随那一路；画布运行条在同一工作流多路并行时出现切换器，「运行」按钮在运行中仍可再次发起（发起后运行条切到新的一路，旧的经切换器回看）；运行详情的「回画布看动画」同样带 runId 深链。
+- 多路运行的界面契约：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running&pageSize=100`，一页取完不翻页），点击深链 `/workflows/<id>?runId=<runId>` 精确跟随那一路；画布运行条在同一工作流多路并行时出现切换器，「运行」按钮在运行中仍可再次发起（发起后运行条切到新的一路，旧的经切换器回看）；运行详情的「回画布看动画」同样带 runId 深链。
 - 一次运行独占 `data/runs/<workflowId>/<runId>/`、其中的共同 `workspace/` 与一个 dsh 子进程；每个 Action 的每一轮独占一个会话。全部输入物化到 `workspace/inputs/<节点id>/`——文件拷原件，文字物化为 `<节点名>.md`、JSON 为 `<节点名>.json`，提示里只给路径不内联（ADR-0012）；Action 之间只经共同工作区的产物文件交流（ADR-0006 / ADR-0008）。
 - 运行期间 dsh 会话事件到达即写 `run_events` / `node_usage`；两条 SSE 端点轮询 SQLite 回放与追增量，不依赖进程内 pubsub。`run_events` 只是跨节点实时摘要；单个 Action 的完整轨迹以运行目录内的会话 JSONL 为权威源，用户展开面板时才读取并投影，不把原始 token chunk 复制进 SQLite 或默认下载到浏览器。
 - 专用工作流调用入口可注册完成门禁；门禁核对最终产物后，引擎在同一事务内把完成证据写进 run 元数据、把精确 UTF-8 结果写进 `run_results`，随后才把运行标为 success。工作区与事件清理不删除持久业务结果；删除 run 时由外键级联删除。
@@ -156,10 +156,10 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   设置 `settings.toggles` 只写要覆盖的键，受理时 `effectiveToggles` 合成后与凭据引用、MCP 子集一起
   冻结成 `composition.toggles` 交给 `launchRun`（ADR-0016）；只有目录标为 `workflowToggle` 的行可被
   工作流覆盖，`catalog.test.ts` 对每个键验开与关都只动它那些行。搜索默认关是账目原因：DeepSeek
-  搜索是一次独立的辅助模型请求，用量不经 `llm/stream`，本站 `node_usage` 与成本页收不到，属账外
+  搜索是一次独立的辅助模型请求，用量不经 `llm/stream`，本站 `node_usage` 收不到，属账外
   支出；两个设置页的开关旁都写明这一点，文案各有一份：全局设置页用自己的 `TOGGLE_COPY`
   （「DeepSeek 搜索的费用不计入本站用量：……是账外支出」），工作流设置页与运行页的设置快照用
-  `COMPOSITION_TOGGLE_LABELS`（`src/lib/workflow-settings.ts`，「……本站成本页收不到，是账外支出」）。打开后
+  `COMPOSITION_TOGGLE_LABELS`（`src/lib/workflow-settings.ts`，「……本站 node_usage 收不到，是账外支出」）。打开后
   `web-search-deepseek` 用与模型同一把凭据引用名，`tool-web` 只开 search 不开 fetch。
 - **插件面板**：`GET /api/settings/composition` 返回 `entries`（按当前**全局**设置与开关推导的
   下次组合，不折入任何工作流的覆盖——那是每次运行 `settingsSnapshot` 的事）、`disabledEntries`
@@ -194,7 +194,7 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   `action.ts` 按会话对 `node_usage` 求和，摘要费用随之进入 `run_nodes.cost` 与 usage 结算事件，
   不另设桶、不重复计。例外：摘要在提交阶段失败（中止、表层被并发改动、commit 抛错）时上游只发
   带 `error` 的 `compaction/end`、不发带 usage 的 `compaction/summary`，那一次已付费的调用无法
-  计费——这是上游事件模型的限制，成本页会少算，不能把这条链路说成完整计费。`run_events` 的
+  计费——这是上游事件模型的限制，运行列表的用量汇总会少算，不能把这条链路说成完整计费。`run_events` 的
   compaction 事件：`compaction/start` 落
   `{ op: "summary", status: "running", compactionId, turn }`；`compaction/summary` 落
   `{ op: "summary", status: "ok", compactionId, provider, model, summaryChars, shadowedNodes,
