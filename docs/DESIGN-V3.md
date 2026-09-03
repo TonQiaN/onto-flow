@@ -262,7 +262,11 @@
    update 终态、`finishedAt`、`exitName`、`outputs`、`error`。**Action 侧的收口一律带条件
    `where status = 'running'`**：取消可能在 Action 正等待最后一次 `sessionOutput` / `closeSession`
    时到达，`cancelRun` 先把这一行写成 cancelled，Action 侧随后无条件写 success 就把取消覆盖掉了；
-   条件更新让先到的终态赢，`runner.test.ts` 加一条「Action 完成前一刻被取消」的用例。`runner.test.ts` 覆盖一条会话开始前
+   条件更新让先到的终态赢。反过来的次序——Action 侧已把轮次写成 success、取消在 `runActionNode`
+   返回到 runner 的 post-await 取消检查之前到达——节点会被写成 cancelled，这时 runner 的取消分支
+   同样把这一轮的轮次行**无条件**改成 cancelled（节点与轮次终态一致，回放不会在成功的段上叠一个
+   取消的节点）。`runner.test.ts` 两条用例：「Action 完成前一刻被取消」（轮次行仍是 cancelled）、
+   「Action 已成功收口、取消先于 runner 检查」（轮次行被改成 cancelled）。`runner.test.ts` 覆盖一条会话开始前
    就失败的 Action（产物路径非法），断言它也有一行 failed 轮次。**必须有它的原因**：
    `run_nodes` 一个节点只有一行，回边重入会覆盖它的 `startedAt` / `finishedAt` / `outputs` /
    `sessionId` / `snapshot`，只看 `run_nodes` 回放不出「第 1 轮走了打回、第 2 轮走了通过」。
