@@ -12,12 +12,11 @@ OntoFlow is a local workbench: Actions wired into workflow graphs, each run gett
 
 ```
 src/app/          Next 16 App Router: every page and every REST route; no middleware, no auth
-  api/              42 route handlers, each `export const dynamic = "force-dynamic"`
+  api/              41 route handlers, each `export const dynamic = "force-dynamic"`
   workflows/[id]/   xyflow canvas editor; editor.tsx (1.3k lines) is the largest file here;
                     settings/ is the workflow-settings page (instructions, toggles, MCP subset,
                     skill set, Tool set — the middle tier of ADR-0016)
   monitor/          six-tab console; sub-route == tab
-  documents/        read-only browser over the purchase_plans rows a Tool wrote
 src/instrumentation.ts   boot hook; the only server entry point that is not a route
 src/rules.test.ts        the mechanically checkable rules of this file as vitest assertions (see Checks)
 src/components/library/  list/folder/reference/revision UI the five library pages reuse
@@ -42,8 +41,9 @@ src/server/       server-only services; client code imports no value from here
                     (deletes run_events and runs rows and data/runs/<id>; dryRun previews it)
   folders.ts references.ts revisions.ts resolve.ts fs-safety.ts settings.ts pricing.ts
   skill-library.ts resume-match*.ts
-scripts/seed.ts   idempotent seed of the five libraries; e2e asserts on its literal strings
-e2e/              13 Playwright specs + helpers.ts (prefix-scoped cleanup)
+scripts/seed.ts   idempotent platform baseline only: the three builtin Object Types and the
+                  models rows; case content is seed-resume.ts / seed-leetcode.ts
+e2e/              12 Playwright specs + helpers.ts (fixture builders + prefix-scoped cleanup)
 docs/             DESIGN.md (v1 + engine spec), DESIGN-V2.md (v2 contracts), DESIGN-V3.md (the
                   2026-09 cleanup / run-page / toolchain contract with its progress table),
                   simplifications/ (one evidence-backed record per simplification candidate:
@@ -53,7 +53,7 @@ docs/             DESIGN.md (v1 + engine spec), DESIGN-V2.md (v2 contracts), DES
 .github/          workflows/ci.yml (merge gate), smoke.yml (paid; manual or nightly), claude.yml
                   (@claude review); REVIEW.md (the review checklist); pull_request_template.md
 .nvmrc            the Node major CI installs; package.json `engines` pins the same floor
-data/             gitignored runtime root: ontoflow.db, runs/, uploads/, documents/, samples/, skills/
+data/             gitignored runtime root: ontoflow.db, runs/, uploads/, samples/, skills/
 _reference/       gitignored third-party source, excluded from tsconfig; never import or edit
 ```
 
@@ -66,8 +66,8 @@ Run everything from the repository root: `data/` resolves from `process.cwd()` i
 ```sh
 npm install
 npm run db:push     # drizzle-kit push; applies src/db/schema.ts in place, no migration files
-npm run db:seed     # tsx scripts/seed.ts; idempotent; five libraries + folders + a v1 revision each + the models,
-                    # plus the procurement workflow's skill set / Tool set and each Action's preloads (ADR-0016)
+npm run db:seed     # tsx scripts/seed.ts; idempotent; platform baseline only: the three builtin
+                    # Object Types (text / file / json) and the models rows
 npm run dev         # next dev -p 3592
 npm run build       # next build; catches route and config breakage typecheck misses
 npm run typecheck   # tsc --noEmit under strict
@@ -91,8 +91,7 @@ npx tsx scripts/smoke-parallel.ts [并发数]  # 验并行：同一工作流同�
 npx tsx scripts/seed-resume.ts         # 装入「简历匹配评分」工作流（不花钱）
 npx tsx scripts/seed-leetcode.ts       # 装入「LeetCode 解题验收」工作流：解题⇄测试回边循环 + run_python 工具（不花钱）
 npx tsx scripts/run-leetcode.ts [并发数]  # 跑 LeetCode 工作流并对定稿脚本做本地独立验收；并发数默认 1
-npx tsx scripts/run-procurement.ts     # 验收案例一：采购集采计划生成
-npx tsx scripts/run-resume.ts [data内岗位路径] [data内简历路径]  # 经内部 API 验收案例二；先保持 npm run dev 运行
+npx tsx scripts/run-resume.ts [data内岗位路径] [data内简历路径]  # 经内部 API 验收简历匹配评分；先保持 npm run dev 运行
 ```
 
 ### Checks
@@ -107,21 +106,22 @@ There is no git hook. The gate is GitHub Actions plus the commands above — `ts
 - `next.config.ts` carries two pins a dependency change breaks: a new native or server-only package must join `serverExternalPackages`, and the Turbopack `root` pin is what stops Next latching onto a lockfile outside the repository.
 - Unit tests are `*.test.ts` under `src/` or `scripts/`; everything under `e2e/` is Playwright, and the two globs do not overlap. `vitest.config.ts` re-declares the `@/*` alias, so a service test that bypasses it cannot resolve `@/db`. The CI `check` job has no `data/` (it never runs `db:push`) and vitest files run in parallel workers, so a unit test swaps an in-memory database onto `globalThis.ontoflowDb` and creates every directory it needs itself (`recursive: true`); none opens `data/ontoflow.db`.
 - Unit tests cover pure logic, non-obvious invariants, and the conventions above — from `src/lib/graph.ts` and `src/server/folders.ts` to `catalog.test.ts` and `rules.test.ts`; everything user-visible is covered by Playwright.
-- `test:e2e` starts a dev server or attaches to whatever already listens on 3592 (`reuseExistingServer`), so confirm that server was launched from the repository root or you are testing another database. A user-visible change runs its one matching spec, not the suite. The CI `e2e` job runs the whole suite against a seeded database with **no run history**, and it is green: `monitor.spec.ts` and `documents.spec.ts` synthesize their own runs, events, usage, disk fixtures and archived plan in `beforeAll` (the same direct-SQLite pattern as `runs.spec.ts`) and remove them in `afterAll`, so every assertion is against its own fixture or the API payload — never against history that only exists locally.
+- `test:e2e` starts a dev server or attaches to whatever already listens on 3592 (`reuseExistingServer`), so confirm that server was launched from the repository root or you are testing another database. A user-visible change runs its one matching spec, not the suite. The CI `e2e` job runs the whole suite against a database carrying nothing but the platform baseline and **no run history**, and it is green because every spec builds what it asserts on: library specs create their entities through the API in `beforeAll`, `monitor.spec.ts` and `runs.spec.ts` synthesize their own runs, events, usage and disk fixtures by direct SQLite, and all of them clean up in `afterAll` — so every assertion is against its own fixture or the API payload, never against seed literals or history that only exists locally.
 
 ### Test fixtures cost money, but they are reproducible
 
-`db:seed` writes the five libraries, their folders, a v1 revision each, the `models` rows, the relation rows the three tiers need (`workflow_skills` / `workflow_tools` for the procurement workflow, `action_preloads` for its generate/review Actions), and the sample inputs under `data/samples/` — and nothing else: no runs, no run_events, no node_usage, no purchase_plans. `scripts/seed-resume.ts` and `scripts/seed-leetcode.ts` are part of the same seed list and are just as idempotent. The run history, archived documents, and cost figures exist only in the gitignored local `data/ontoflow.db`; no e2e spec reads them — each synthesizes its own fixture (see Checks).
+**`db:seed` writes the platform baseline and nothing else**: the three builtin Object Types (text / file / json) and the `models` rows — no library entities, no folders, no revisions, no workflow, no sample files, and no runs / run_events / node_usage. Case content is a case's own seed script: `scripts/seed-resume.ts` (which also writes the fictional job/résumé samples under `data/samples/`) and `scripts/seed-leetcode.ts`, both as idempotent as `seed.ts` and both dependent on nothing but the baseline. So a fresh `db:push` + `db:seed` is exactly what CI's `e2e` job starts from, and a spec that wants an entity creates it.
 
-- **The run history can be rebuilt.** `scripts/run-procurement.ts` and `scripts/run-resume.ts` regenerate it from scratch against the current engine, so losing `data/ontoflow.db` costs money and time rather than being unrecoverable. Rebuilding still means paid model calls — treat it as expensive, not as impossible. (This section used to say the fixture could not be regenerated; that was true of the opencode engine, whose runs no longer have any way of being reproduced.)
+- **No test may assert on a seed literal.** There are no seeded library entities left to assert on; each spec builds its own `e2e-`-prefixed fixture and removes it in teardown (see Checks).
+- **The run history can be rebuilt.** `scripts/run-resume.ts` and `scripts/run-leetcode.ts` regenerate it from scratch against the current engine, so losing `data/ontoflow.db` costs money and time rather than being unrecoverable. Rebuilding still means paid model calls — treat it as expensive, not as impossible. (This section used to say the fixture could not be regenerated; that was true of the opencode engine, whose runs no longer have any way of being reproduced.)
 - E2E never starts a run that contains an Action node (that spends money) and never clicks 执行清理 / 确认删除 / 中止该运行; the cleanup panel is exercised only through `dryRun`. The one sanctioned run-starting shape is `parallel-runs.spec.ts`: an input→output workflow with no Action nodes costs nothing, still exercises the full engine lifecycle, and deletes its runs in teardown via `DELETE /api/runs/[id]`.
 - E2E creates entities under a per-spec `e2e-` Chinese prefix and removes them in teardown through `cleanupByPrefix`, which skips `builtin` rows and re-checks the prefix. `settings.spec.ts` is the exception the rule cannot cover: settings are one document rather than named entities, so it saves the whole document in `beforeAll` and writes it back in `afterAll`.
-- **Never assert a count, a first-page containment, or an exact row that real usage grows.** Fetch the API payload in the test and assert the DOM matches it. This bug class has now been fixed three times; the third time it was the run-detail spec asserting that the newest run was the procurement one.
+- **Never assert a count, a first-page containment, or an exact row that real usage grows.** Fetch the API payload in the test and assert the DOM matches it. This bug class has now been fixed three times; the third time it was the run-detail spec asserting that the newest run was a particular seeded one.
 
 ## Conventions
 
 - User-facing strings, error messages, code comments, and test names are Chinese; identifiers are English.
-- Every API route body runs inside `handle()` from `@/lib/http`. Four do not: `api/monitor/stream` and `api/runs/[id]/events` return a raw SSE `Response`, and `api/models` and `api/documents` are one-statement GETs that predate the rule — do not copy them.
+- Every API route body runs inside `handle()` from `@/lib/http`. Three do not: `api/monitor/stream` and `api/runs/[id]/events` return a raw SSE `Response`, and `api/models` is a one-statement GET that predates the rule — do not copy it.
 - **Name collisions are a database concern.** `handle()` maps `UNIQUE constraint failed` to 409, so writers never pre-check a name; folders are the exception, because SQLite cannot constrain a root level whose parent is NULL ([reason](src/db/schema.ts)).
 - **Entity-body validation lives in the writer's `parse…Payload`** (workflow's is `parseGraphPayload`); a route hand-narrows only its own non-entity params. All of it is hand-written `typeof` narrowing — there is no schema library.
 - **Write paths return a result object; the engine throws.** `runner.ts` turns a thrown error into `run_nodes.error` plus skipped downstream nodes. New service modules use `WriteResult` with `writeOk`/`writeFail` from `@/server/writers/types`; `folders.ts` and `revisions.ts` still carry private structurally identical `Result<T>` copies — converge on `WriteResult`, never add a fourth. `fs-safety.ts` and `monitor/cleanup.ts` throw deliberately and their callers map the throw.

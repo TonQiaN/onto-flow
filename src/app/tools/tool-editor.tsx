@@ -219,7 +219,7 @@ export function ToolEditor({
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="如：保存集采计划"
+                    placeholder="如：校验评分结果"
                     className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                   />
                 </label>
@@ -230,7 +230,7 @@ export function ToolEditor({
                   <input
                     value={publicName}
                     onChange={(e) => setPublicName(e.target.value)}
-                    placeholder="如：save_purchase_plan"
+                    placeholder="如：validate_resume_match_result"
                     spellCheck={false}
                     className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-sm focus:border-zinc-500 focus:outline-none"
                   />

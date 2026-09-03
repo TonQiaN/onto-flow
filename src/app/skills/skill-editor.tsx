@@ -296,7 +296,7 @@ export function SkillEditor({
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="如：集采计划编制规范"
+                  placeholder="如：简历评分规范"
                   className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                 />
               </label>

@@ -17,8 +17,8 @@ const full = {
   workflow: {
     settings: { toggles: { webSearch: true }, mcpServers: ["filesystem", "unregistered"] },
     instructionsSha256: "b".repeat(64),
-    skills: [{ id: "s1", name: "集采计划编制规范", slug: "skill-1a2b3c" }],
-    tools: [{ id: "t1", name: "归档采购计划", publicName: "save_purchase_plan" }],
+    skills: [{ id: "s1", name: "简历评分规范", slug: "skill-1a2b3c" }],
+    tools: [{ id: "t1", name: "校验评分结果", publicName: "validate_resume_match_result" }],
   },
   effective: {
     toggles: {
@@ -42,10 +42,10 @@ describe("运行详情的设置快照解析", () => {
     expect(snap?.workflow.settings.mcpServers).toEqual(["filesystem", "unregistered"]);
     expect(snap?.effective.mcpServers).toEqual(["filesystem"]);
     expect(snap?.workflow.skills).toEqual([
-      { id: "s1", name: "集采计划编制规范", slug: "skill-1a2b3c" },
+      { id: "s1", name: "简历评分规范", slug: "skill-1a2b3c" },
     ]);
     expect(snap?.workflow.tools).toEqual([
-      { id: "t1", name: "归档采购计划", publicName: "save_purchase_plan" },
+      { id: "t1", name: "校验评分结果", publicName: "validate_resume_match_result" },
     ]);
     expect(snap?.global.disabledTools).toEqual(["bash"]);
     expect(snap?.workflow.instructionsSha256).toBe("b".repeat(64));

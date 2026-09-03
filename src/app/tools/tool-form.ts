@@ -143,8 +143,8 @@ export const TOOL_EXECUTE_TEMPLATE = `/**
  *   ctx.workspaceDir  本次运行的工作区（会话 cwd），产物只写这里
  *   ctx.runDir        本次运行的运行目录
  *   ctx.tmpDir        本次运行独占的临时目录
- *   ctx.dataDir       工作台数据根 data/；归档类 Tool 用它落备份文件
- *   ctx.dbPath        工作台数据库文件；归档类 Tool 用 node:sqlite 打开
+ *   ctx.dataDir       工作台数据根 data/；要落备份文件时用它
+ *   ctx.dbPath        工作台数据库文件；要读写工作台库时用 node:sqlite 打开它
  *   ctx.cwd           调用本工具的会话的 cwd
  *   ctx.env           白名单环境变量：全局设置里登记的凭据引用名 + ONTOFLOW_DB_PATH / ONTOFLOW_DATA_DIR
  *   ctx.signal        会话取消即触发的 AbortSignal；长时间工作要把它传下去

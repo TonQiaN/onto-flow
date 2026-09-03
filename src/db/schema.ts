@@ -489,32 +489,3 @@ export const nodeUsage = sqliteTable(
     uniqueIndex("node_usage_message").on(t.runId, t.sessionId, t.messageId),
   ],
 );
-
-/** 首个案例的业务表：集采计划归档（由 save_purchase_plan tool 经 bun:sqlite 写入） */
-export const purchasePlans = sqliteTable("purchase_plans", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  /** 集采计划编号（如 CPP-2027-001；正文未提供时由归档 Action 生成并注明） */
-  planNo: text("plan_no").notNull().unique(),
-  planTitle: text("plan_title").notNull(),
-  /** 集采分类（一级集采/二三级集采/自定义集采；依据不明时含「待确认」原文） */
-  planType: text("plan_type"),
-  planYear: text("plan_year"),
-  /** 涉及需求部门/单位清单，逗号分隔 */
-  orgUnits: text("org_units"),
-  categorySummary: text("category_summary"),
-  itemCount: integer("item_count"),
-  /** 预算总额（元），口径见 budgetNote */
-  totalBudget: real("total_budget"),
-  budgetNote: text("budget_note"),
-  scheduleSummary: text("schedule_summary"),
-  /** 审核总结论（通过/有保留通过/退回） */
-  reviewConclusion: text("review_conclusion"),
-  /** 审核评价 JSON 全文 */
-  reviewFeedback: text("review_feedback"),
-  planContent: text("plan_content").notNull(),
-  pendingIssues: text("pending_issues"),
-  backupPath: text("backup_path"),
-  createdAt: text("created_at")
-    .notNull()
-    .$defaultFn(() => new Date().toISOString()),
-});

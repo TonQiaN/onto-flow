@@ -37,7 +37,7 @@ export interface EntityRef {
   kind: "workflow" | "action";
   id: string;
   name: string;
-  /** 引用位置的人话描述，如「节点：集采计划审核」「输入端口：集采计划」「技能集」 */
+  /** 引用位置的人话描述，如「节点：简历汇总评分」「输入端口：岗位JD」「技能集」 */
   detail: string;
   href: string;
 }

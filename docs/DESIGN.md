@@ -11,7 +11,6 @@ src/
 │   ├── workflows/                      # 工作流列表 + [id]/ 画布编辑器
 │   ├── actions/  skills/  tools/  object-types/   # 四个库的管理页
 │   ├── runs/                           # 运行历史列表 + [id]/ 详情
-│   ├── documents/                      # 归档文档（purchase_plans）浏览
 │   └── api/                            # REST 路由（下表）
 ├── components/                         # 共享 UI（nav 已建）
 ├── db/  schema.ts  index.ts            # Drizzle（已建，改动需全员同步）
@@ -44,7 +43,6 @@ src/
 | /api/runs/[id]/events | GET | SSE：`event: node`（run_node 状态变化）、`event: log`（run_events 增量）、`event: run`（终态）；连接时先回放已有事件再跟增量 |
 | /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
 | /api/uploads | POST | multipart 单文件 → 存 `data/uploads/<uuid>/<原名>`，返回 PortValue(file) |
-| /api/documents | GET | purchase_plans 倒序列表 |
 | /api/settings | GET, PUT | 全局设置单文档 `SettingsDocument`（`modelApiKeyEnv`、`modelBaseUrl`、`credentialRefs[]`、`mcpServers[]`、`disabledTools[]`、`toggles`（五键全量，只发部分键时其余取默认，非布尔 400）、`defaultInstructions`（≤ 65536 字节，非字符串 400，空串合法））；写入口整份校验 |
 | /api/settings/composition | GET | 插件面板：按**全局**开关推导的下次组合 `entries`、停用的 MCP、`PLUGIN_CATALOG` 十组投影 `groups`、最近一次运行落盘的 `cordis.yml`；工作流覆盖不在这里，看运行的 `settingsSnapshot` |
 
@@ -250,34 +248,16 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   read 与网络两族都不受限；模型请求的沙箱升级因 `approval policy: "never"` 一律拒绝。
 - **孤儿运行对账**：`src/instrumentation.ts` 启动钩子调用 `reconcileOrphanRuns`，把上次进程
   遗留的 `running` run 及其 running/pending 节点失败化——否则 SSE 结束条件永假、无限轮询。
-- **模型输出用作文件名前先净化**：`save_purchase_plan` 里 `plan_no` 由模型产出，拼进备份
-  文件名前先取 basename、做 NFKC 归一与字符白名单净化；最终绝对路径再约束在 `data/documents/` 内，
-  防止穿越写出 `documents/` 之外。
 - **HMR 下的运行所有权**：取消标记与在跑子进程句柄挂在 `globalThis`，使开发期 HMR 不会丢失
   对现存运行的取消和收束能力；运行结束必须删除对应句柄与取消标记。
 
-## 首个案例种子（scripts/seed.ts，幂等：Action / Skill / 对象类型按 name upsert，Tool 按公名 upsert、展示名已被别的公名占用时点名报错；内容取自 scratchpad research/erp-seed.json）
+## 种子（scripts/seed.ts）
 
-- Object Types：需求文件(file)、需求Prompt(text)、集采计划(text)、**审核评价(json+完整schema)**、
-  **归档回执(text)** + 内置 text/file/json。
-- Models：DeepSeek V4 Flash Vision / V4 Flash / V4 Pro，provider 路由均为 `deepseek-official`。
-- Skills：集采计划编制规范、集采计划审核要点（全文见 erp-seed.json；两者都进工作流技能集）。
-- Tool：显示名「集采计划归档入库」、公名 `save_purchase_plan`——契约形态（ADR-0017）：execute 模块
-  在本运行的 harness 子进程里经平台包装被调用，用 `node:sqlite` 打开 `ctx.dbPath` 写 purchase_plans
-  （17 字段见 schema.ts），备份 Markdown 写 `ctx.dataDir/documents/<safePlanNo>-<日期>-<UUID>.md`
-  （不再读 `ONTOFLOW_*` 环境变量）；同一 `plan_no` 的并发 upsert 以 `BEGIN IMMEDIATE` 排定顺序，
-  提交新指针后删除被替换的旧备份，返回 { id, planNo, backupPath }。
-- Actions（prompt/rule 全文见 erp-seed.json）：需求整理(deepseek, low)、集采计划生成(deepseek, high；
-  预载《集采计划编制规范》)、集采计划审核(deepseek, high；预载《集采计划审核要点》；输出 审核评价+
-  集采计划透传)、集采计划归档(deepseek, low；可见 Tool save_purchase_plan)。规范类技能必定要用，
-  所以走预载；能力冒烟里的技能只进技能集不预载，验证的是「被发现」。
-- Workflow「采购集采计划生成」：输入节点(需求文件) → 需求整理 → 集采计划生成 → 集采计划审核 →
-  集采计划归档 → 输出节点(归档回执)；审核评价另接一个输出节点(审核评价)。工作流设置：
-  技能集 [编制规范, 审核要点]、Tool 集 [save_purchase_plan]、`instructions` = 「# 采购集采计划生成」
-  + 描述、`settings` 为空（全部继承全局）。
-- 示例需求文件写入 data/samples/采购需求示例.txt。
+`scripts/seed.ts` 只种平台基线：内置对象类型（text / file / json）与模型表（DeepSeek V4 Flash
+Vision / V4 Flash / V4 Pro，provider 路由均为 `deepseek-official`）；案例内容各自有种子脚本，
+见 `scripts/seed-resume.ts` 与 `scripts/seed-leetcode.ts`。
 
-## 第二个案例种子（scripts/seed-resume.ts）
+## 案例种子：简历匹配评分（scripts/seed-resume.ts）
 
 - 工作流「简历匹配评分」是两个文件输入 → 一个解析 Action → 六个评委扇出 → 一个汇总 →
   一个输出的 11 节点图。

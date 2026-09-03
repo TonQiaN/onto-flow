@@ -8,10 +8,14 @@ const { createTool, writeTool } = await import("./tool");
 beforeEach(() => resetTestDb(sqlite));
 
 const valid = {
-  name: "归档集采计划",
-  publicName: "save_purchase_plan",
-  description: "把计划写进 purchase_plans",
-  parameters: { type: "object", properties: { planNo: { type: "string" } }, required: ["planNo"] },
+  name: "结果盖章",
+  publicName: "stamp_result",
+  description: "给结果盖章",
+  parameters: {
+    type: "object",
+    properties: { resultId: { type: "string" } },
+    required: ["resultId"],
+  },
   output: { type: "object", properties: { ok: { type: "boolean" } } },
   timeoutMs: 30_000,
   code: "export default async function execute(args, ctx) { return { ok: true }; }",
@@ -76,7 +80,7 @@ describe("Tool 契约校验", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data).toMatchObject({
-      publicName: "save_purchase_plan",
+      publicName: "stamp_result",
       output: null,
       timeoutMs: null,
     });
@@ -93,12 +97,12 @@ describe("Tool 写入", () => {
 
     const updated = writeTool(created.data.id, {
       ...valid,
-      publicName: "archive_plan",
+      publicName: "stamp_twice",
       timeoutMs: null,
     });
     expect(updated.ok).toBe(true);
     if (!updated.ok) return;
-    expect(updated.data).toMatchObject({ publicName: "archive_plan", timeoutMs: null });
+    expect(updated.data).toMatchObject({ publicName: "stamp_twice", timeoutMs: null });
 
     const revision = sqlite
       .prepare(
@@ -107,7 +111,7 @@ describe("Tool 写入", () => {
       .get(created.data.id) as { payload: string };
     expect(JSON.parse(revision.payload)).toEqual({
       ...valid,
-      publicName: "archive_plan",
+      publicName: "stamp_twice",
       timeoutMs: null,
     });
   });

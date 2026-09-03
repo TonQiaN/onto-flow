@@ -18,7 +18,7 @@ export interface FolderDto {
   parentId: string | null;
 }
 
-/** 实体卡片/编辑器上显示的归属：path = 根到本文件夹的 name 用 "/" 连接（如 "采购/集采"） */
+/** 实体卡片/编辑器上显示的归属：path = 根到本文件夹的 name 用 "/" 连接（如 "招聘/简历"） */
 export interface FolderRef {
   id: string;
   name: string;
@@ -237,7 +237,7 @@ function folderMap(): Map<string, { name: string; parentId: string | null }> {
   );
 }
 
-/** 根到本文件夹的 name 用 "/" 连接（如 "采购/集采"） */
+/** 根到本文件夹的 name 用 "/" 连接（如 "招聘/简历"） */
 function folderPath(
   id: string,
   byId: Map<string, { name: string; parentId: string | null }>,

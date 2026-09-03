@@ -487,7 +487,7 @@ export function ActionEditor({
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="如：集采计划生成"
+                    placeholder="如：简历硬性条件审查"
                     className="w-full rounded-md border border-zinc-300 px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                   />
                 </label>

@@ -1,66 +1,104 @@
-import { expect, test, type Page } from "@playwright/test";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
-import { cleanupByPrefix } from "./helpers";
+import { expect, test, type Page } from "@playwright/test";
+import {
+  cleanupByPrefix,
+  cleanupRevisions,
+  createAction,
+  createObjectType,
+  createWorkflow,
+  createWorkflowGraph,
+  inputPort,
+  outputPort,
+  type RevisionOwner,
+  uniqueSuffix,
+} from "./helpers";
 
-const PREFIX = "e2e-PDF输入-";
+/**
+ * 工作流画布。`db:seed` 只种平台基线，所以每个用例先经 API 自建 `e2e-` 前缀的
+ * 对象类型 / Action / 工作流与整张图，再打开画布断言；节点数与连线数是本用例
+ * 自己造出来的事实，可以直接断言。收尾经 cleanupByPrefix + cleanupRevisions。
+ */
+const PREFIX = "e2e-画布-";
 const uploadedDirs = new Set<string>();
-type RevisionOwnerKind = "workflow" | "action" | "object_type";
-const revisionOwners = new Map<string, { kind: RevisionOwnerKind; id: string }>();
-
-function trackRevisionOwner(kind: RevisionOwnerKind, id: string): void {
-  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error(`测试实体 id 不安全：${id}`);
-  revisionOwners.set(`${kind}:${id}`, { kind, id });
-}
-
-/** revisions 是多态引用、没有 FK；实体 API 删除后按本用例创建的精确 id 清掉历史。 */
-function cleanupTrackedRevisions(): void {
-  if (revisionOwners.size === 0) return;
-  const database = new Database(path.join(process.cwd(), "data", "ontoflow.db"));
-  database.pragma("foreign_keys = ON");
-  database.pragma("busy_timeout = 5000");
-  try {
-    const remove = database.prepare(
-      "delete from revisions where entity_kind = ? and entity_id = ?",
-    );
-    database.transaction((owners: Array<{ kind: RevisionOwnerKind; id: string }>) => {
-      for (const owner of owners) remove.run(owner.kind, owner.id);
-    })([...revisionOwners.values()]);
-    const remaining = database.prepare(
-      "select count(*) as total from revisions where entity_kind = ? and entity_id = ?",
-    );
-    for (const owner of revisionOwners.values()) {
-      const row = remaining.get(owner.kind, owner.id) as { total: number };
-      expect(row.total).toBe(0);
-    }
-  } finally {
-    database.close();
-    revisionOwners.clear();
-  }
-}
 
 test.describe("工作流画布", () => {
+  const owners: RevisionOwner[] = [];
+
   test.afterEach(async ({ request }) => {
     await cleanupByPrefix(request, "/api/workflows", PREFIX);
     await cleanupByPrefix(request, "/api/actions", PREFIX);
     await cleanupByPrefix(request, "/api/object-types", PREFIX);
-    cleanupTrackedRevisions();
+    cleanupRevisions(owners);
+    owners.length = 0;
     for (const dir of uploadedDirs) fs.rmSync(dir, { recursive: true, force: true });
     uploadedDirs.clear();
   });
 
-  test("打开「采购集采计划生成」：7 节点 7 连线，保存成功且无校验问题", async ({ page }) => {
-    await page.goto("/workflows");
-    await page.getByRole("heading", { name: "采购集采计划生成", exact: true }).click();
-    await page.waitForURL(/\/workflows\/[0-9a-f-]{36}/);
+  test("打开自建工作流：节点数与连线数与建图时一致，保存成功且无校验问题", async ({
+    page,
+    request,
+  }) => {
+    const suffix = uniqueSuffix();
+    const objectTypeId = await createObjectType(
+      request,
+      { name: `${PREFIX}资料-${suffix}` },
+      owners,
+    );
+    // 第二个 Action 走具名出口，画布上那条线会带出口名标签
+    const firstName = `${PREFIX}起草-${suffix}`;
+    const secondName = `${PREFIX}定稿-${suffix}`;
+    const firstId = await createAction(
+      request,
+      {
+        name: firstName,
+        ports: [inputPort("素材", objectTypeId), outputPort("草稿", objectTypeId, "draft.md")],
+      },
+      owners,
+    );
+    const secondId = await createAction(
+      request,
+      {
+        name: secondName,
+        ports: [
+          inputPort("草稿", objectTypeId),
+          outputPort("成品", objectTypeId, "final.md", 0, "通过"),
+        ],
+      },
+      owners,
+    );
 
-    // 画布加载完成：7 节点 / 7 连线
-    await expect(page.locator(".react-flow__node")).toHaveCount(7, {
+    // 输入 → 起草 → 定稿 → 输出：4 节点 3 连线
+    const graph = await createWorkflowGraph(
+      request,
+      {
+        name: `${PREFIX}线性-${suffix}`,
+        objectTypeId,
+        steps: [
+          { actionId: firstId, label: firstName, inputPort: "素材", outputPort: "草稿" },
+          { actionId: secondId, label: secondName, inputPort: "草稿", outputPort: "成品" },
+        ],
+      },
+      owners,
+    );
+    expect(graph.nodes).toHaveLength(4);
+    expect(graph.edges).toHaveLength(3);
+
+    // 列表按本 spec 的前缀收窄，不依赖自建工作流恰好落在第一页
+    const workflowName = `${PREFIX}线性-${suffix}`;
+    await page.goto(`/workflows?q=${encodeURIComponent(workflowName)}`);
+    await page.getByRole("heading", { name: workflowName, exact: true }).click();
+    await page.waitForURL(new RegExp(`/workflows/${graph.workflowId}$`));
+
+    // 画布加载完成：数目就是刚才建图时的数目
+    await expect(page.locator(".react-flow__node")).toHaveCount(graph.nodes.length, {
       timeout: 20_000,
     });
-    await expect(page.locator(".react-flow__edge")).toHaveCount(7);
+    await expect(page.locator(".react-flow__edge")).toHaveCount(graph.edges.length);
+    // 具名出口的那条线带出口名标签
+    await expect(page.locator('[data-testid^="workflow-edge-exit-"]')).toHaveCount(1);
+    await expect(page.getByTestId(`workflow-edge-exit-${graph.edgeIds[2]}`)).toHaveText("通过");
 
     // 保存：PUT 整图成功（不点「运行」）
     const putResponse = page.waitForResponse(
@@ -69,6 +107,7 @@ test.describe("工作流画布", () => {
     await page.getByRole("button", { name: "保存", exact: true }).click();
     const res = await putResponse;
     expect(res.ok()).toBeTruthy();
+    expect(((await res.json()) as { issues: unknown[] }).issues).toEqual([]);
 
     // 保存按钮恢复可用，无错误横幅、无校验问题横幅
     await expect(page.getByRole("button", { name: "保存", exact: true })).toBeEnabled();
@@ -76,129 +115,61 @@ test.describe("工作流画布", () => {
     await expect(page.getByText(/校验问题（\d+）/)).toBeHidden();
 
     // 图形未被改动：节点与连线数量不变
-    await expect(page.locator(".react-flow__node")).toHaveCount(7);
-    await expect(page.locator(".react-flow__edge")).toHaveCount(7);
+    await expect(page.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
+    await expect(page.locator(".react-flow__edge")).toHaveCount(graph.edges.length);
   });
 
   test("具名出口把情况名显示在对应连线上，修订回滚与保存重载都会同步", async ({
     page,
     request,
   }) => {
-    const suffix = Date.now();
-    const typeName = `${PREFIX}分支类型-${suffix}`;
+    const suffix = uniqueSuffix();
+    const draftName = `${PREFIX}起草-${suffix}`;
+    const decisionName = `${PREFIX}裁决-${suffix}`;
     const workflowName = `${PREFIX}分支工作流-${suffix}`;
 
-    const modelResponse = await request.get("/api/models");
-    expect(modelResponse.ok()).toBeTruthy();
-    const model = ((await modelResponse.json()) as Array<{ id: string }>)[0];
-    expect(model).toBeDefined();
+    const objectTypeId = await createObjectType(
+      request,
+      { name: `${PREFIX}分支类型-${suffix}`, kind: "file", description: "E2E 分支标签类型" },
+      owners,
+    );
 
-    const typeResponse = await request.post("/api/object-types", {
-      data: {
-        name: typeName,
-        kind: "file",
-        description: "E2E 分支标签类型",
-        jsonSchema: null,
-      },
-    });
-    expect(typeResponse.ok()).toBeTruthy();
-    const objectType = (await typeResponse.json()) as { id: string };
-    trackRevisionOwner("object_type", objectType.id);
-
-    const draftResponse = await request.post("/api/actions", {
-      data: {
-        name: `${PREFIX}起草-${suffix}`,
+    const draftId = await createAction(
+      request,
+      {
+        name: draftName,
         description: "普通出口与回边目标",
         prompt: "起草",
-        rule: "",
-        modelId: model!.id,
-        reasoningEffort: "low",
         maxReentries: 1,
-        onExhausted: "fail",
         ports: [
-          {
-            direction: "input",
-            name: "需求",
-            objectTypeId: objectType.id,
-            position: 0,
-            artifactPath: null,
-            exitName: null,
-          },
-          {
-            direction: "input",
-            name: "意见",
-            objectTypeId: objectType.id,
-            position: 1,
-            artifactPath: null,
-            exitName: null,
-          },
-          {
-            direction: "output",
-            name: "草稿",
-            objectTypeId: objectType.id,
-            position: 0,
-            artifactPath: "draft.md",
-            exitName: null,
-          },
+          inputPort("需求", objectTypeId, 0),
+          inputPort("意见", objectTypeId, 1),
+          outputPort("草稿", objectTypeId, "draft.md"),
         ],
-        preloadSkillIds: [],
-        toolIds: [],
       },
-    });
-    expect(draftResponse.ok()).toBeTruthy();
-    const draft = (await draftResponse.json()) as { id: string };
-    trackRevisionOwner("action", draft.id);
+      owners,
+    );
 
-    const decisionResponse = await request.post("/api/actions", {
-      data: {
-        name: `${PREFIX}裁决-${suffix}`,
+    const decisionId = await createAction(
+      request,
+      {
+        name: decisionName,
         description: "通过出口扇出，打回出口形成回边",
         prompt: "裁决",
-        rule: "",
-        modelId: model!.id,
-        reasoningEffort: "low",
-        maxReentries: 0,
-        onExhausted: "fail",
         ports: [
-          {
-            direction: "input",
-            name: "草稿",
-            objectTypeId: objectType.id,
-            position: 0,
-            artifactPath: null,
-            exitName: null,
-          },
-          {
-            direction: "output",
-            name: "成品",
-            objectTypeId: objectType.id,
-            position: 0,
-            artifactPath: "final.md",
-            exitName: "通过",
-          },
-          {
-            direction: "output",
-            name: "意见",
-            objectTypeId: objectType.id,
-            position: 1,
-            artifactPath: "feedback.md",
-            exitName: "打回",
-          },
+          inputPort("草稿", objectTypeId),
+          outputPort("成品", objectTypeId, "final.md", 0, "通过"),
+          outputPort("意见", objectTypeId, "feedback.md", 1, "打回"),
         ],
-        preloadSkillIds: [],
-        toolIds: [],
       },
-    });
-    expect(decisionResponse.ok()).toBeTruthy();
-    const decision = (await decisionResponse.json()) as { id: string };
-    trackRevisionOwner("action", decision.id);
+      owners,
+    );
 
-    const workflowResponse = await request.post("/api/workflows", {
-      data: { name: workflowName, description: "E2E 具名出口连线标签" },
-    });
-    expect(workflowResponse.ok()).toBeTruthy();
-    const workflow = (await workflowResponse.json()) as { id: string };
-    trackRevisionOwner("workflow", workflow.id);
+    const workflowId = await createWorkflow(
+      request,
+      { name: workflowName, description: "E2E 具名出口连线标签" },
+      owners,
+    );
 
     const inputId = randomUUID();
     const draftNodeId = randomUUID();
@@ -211,14 +182,14 @@ test.describe("工作流画布", () => {
     const passBEdgeId = randomUUID();
     const rejectEdgeId = randomUUID();
 
-    const graphResponse = await request.put(`/api/workflows/${workflow.id}`, {
+    const graphResponse = await request.put(`/api/workflows/${workflowId}`, {
       data: {
         nodes: [
           {
             id: inputId,
             kind: "input",
             actionId: null,
-            objectTypeId: objectType.id,
+            objectTypeId,
             label: "需求",
             x: 0,
             y: 160,
@@ -226,18 +197,18 @@ test.describe("工作流画布", () => {
           {
             id: draftNodeId,
             kind: "action",
-            actionId: draft.id,
+            actionId: draftId,
             objectTypeId: null,
-            label: `${PREFIX}起草-${suffix}`,
+            label: draftName,
             x: 320,
             y: 160,
           },
           {
             id: decisionNodeId,
             kind: "action",
-            actionId: decision.id,
+            actionId: decisionId,
             objectTypeId: null,
-            label: `${PREFIX}裁决-${suffix}`,
+            label: decisionName,
             x: 680,
             y: 160,
           },
@@ -245,7 +216,7 @@ test.describe("工作流画布", () => {
             id: outputAId,
             kind: "output",
             actionId: null,
-            objectTypeId: objectType.id,
+            objectTypeId,
             label: "产出 A",
             x: 1040,
             y: 40,
@@ -254,7 +225,7 @@ test.describe("工作流画布", () => {
             id: outputBId,
             kind: "output",
             actionId: null,
-            objectTypeId: objectType.id,
+            objectTypeId,
             label: "产出 B",
             x: 1040,
             y: 280,
@@ -304,7 +275,7 @@ test.describe("工作流画布", () => {
     expect(graph.issues).toEqual([]);
 
     // 给裁决 Action 留下 v2：页面先看到「放行」，随后在同页回滚 v1，验证画布即时同步。
-    const decisionDetailResponse = await request.get(`/api/actions/${decision.id}`);
+    const decisionDetailResponse = await request.get(`/api/actions/${decisionId}`);
     expect(decisionDetailResponse.ok()).toBeTruthy();
     const decisionDetail = (await decisionDetailResponse.json()) as {
       name: string;
@@ -326,7 +297,7 @@ test.describe("工作流画布", () => {
       preloadSkillIds: string[];
       toolIds: string[];
     };
-    const decisionV2Response = await request.put(`/api/actions/${decision.id}`, {
+    const decisionV2Response = await request.put(`/api/actions/${decisionId}`, {
       data: {
         name: decisionDetail.name,
         description: decisionDetail.description,
@@ -361,14 +332,12 @@ test.describe("工作流画布", () => {
       await expect(edgeLabel(page, rejectEdgeId)).toHaveText("打回");
     };
 
-    await page.goto(`/workflows/${workflow.id}`);
+    await page.goto(`/workflows/${workflowId}`);
     await expect(page.locator(".react-flow__node")).toHaveCount(5);
     await expect(page.locator(".react-flow__edge")).toHaveCount(5);
     await expectLabels("放行");
 
-    const decisionNode = page.locator(".react-flow__node").filter({
-      hasText: `${PREFIX}裁决-${suffix}`,
-    });
+    const decisionNode = page.locator(".react-flow__node").filter({ hasText: decisionName });
     await expect(decisionNode).toHaveCount(1);
     await decisionNode.dblclick();
     await expect(page.getByRole("heading", { name: "编辑 Action", exact: true })).toBeVisible();
@@ -376,6 +345,7 @@ test.describe("工作流画布", () => {
     const revisions = page.locator("section").filter({
       has: page.getByRole("heading", { name: "修订历史", exact: true }),
     });
+    // 本用例给这个自建 Action 恰好写了两版（建库 v1 + 改出口名 v2）
     await expect(revisions.getByText("共 2 版", { exact: true })).toBeVisible();
     const v1 = revisions.locator("li").filter({
       has: page.getByText("v1", { exact: true }),
@@ -394,7 +364,7 @@ test.describe("工作流画布", () => {
     const putResponse = page.waitForResponse(
       (response) =>
         response.request().method() === "PUT" &&
-        response.url().endsWith(`/api/workflows/${workflow.id}`),
+        response.url().endsWith(`/api/workflows/${workflowId}`),
     );
     await page.getByRole("button", { name: "保存", exact: true }).click();
     const savedResponse = await putResponse;
@@ -407,72 +377,32 @@ test.describe("工作流画布", () => {
   });
 
   test("文件输入可上传，取消对话框不会发起运行", async ({ page, request }) => {
-    const suffix = Date.now();
-    const typeName = `${PREFIX}类型-${suffix}`;
-    const workflowName = `${PREFIX}工作流-${suffix}`;
-    const typeResponse = await request.post("/api/object-types", {
-      data: {
-        name: typeName,
-        kind: "file",
-        description: "E2E PDF 输入",
-        jsonSchema: null,
+    const suffix = uniqueSuffix();
+    const objectTypeId = await createObjectType(
+      request,
+      { name: `${PREFIX}类型-${suffix}`, kind: "file", description: "E2E PDF 输入" },
+      owners,
+    );
+    // 输入直通输出：无 Action、零费用（本用例连运行都不发起）
+    const graph = await createWorkflowGraph(
+      request,
+      {
+        name: `${PREFIX}上传-${suffix}`,
+        description: "E2E PDF 上传对话框",
+        objectTypeId,
+        inputLabel: "简历",
       },
-    });
-    expect(typeResponse.ok()).toBeTruthy();
-    const objectType = (await typeResponse.json()) as { id: string };
-    trackRevisionOwner("object_type", objectType.id);
-
-    const workflowResponse = await request.post("/api/workflows", {
-      data: { name: workflowName, description: "E2E PDF 上传对话框" },
-    });
-    expect(workflowResponse.ok()).toBeTruthy();
-    const workflow = (await workflowResponse.json()) as { id: string };
-    trackRevisionOwner("workflow", workflow.id);
-    const inputId = randomUUID();
-    const outputId = randomUUID();
-    const graphResponse = await request.put(`/api/workflows/${workflow.id}`, {
-      data: {
-        nodes: [
-          {
-            id: inputId,
-            kind: "input",
-            actionId: null,
-            objectTypeId: objectType.id,
-            label: "简历",
-            x: 0,
-            y: 0,
-          },
-          {
-            id: outputId,
-            kind: "output",
-            actionId: null,
-            objectTypeId: objectType.id,
-            label: "输出",
-            x: 400,
-            y: 0,
-          },
-        ],
-        edges: [
-          {
-            id: randomUUID(),
-            sourceNodeId: inputId,
-            sourcePort: "value",
-            targetNodeId: outputId,
-            targetPort: "value",
-          },
-        ],
-      },
-    });
-    expect(graphResponse.ok()).toBeTruthy();
+      owners,
+    );
 
     let runRequests = 0;
-    await page.route(`**/api/workflows/${workflow.id}/run`, async (route) => {
+    await page.route(`**/api/workflows/${graph.workflowId}/run`, async (route) => {
       runRequests += 1;
       await route.fulfill({ status: 500, body: "不应发起运行" });
     });
 
-    await page.goto(`/workflows/${workflow.id}`);
-    await expect(page.locator(".react-flow__node")).toHaveCount(2);
+    await page.goto(`/workflows/${graph.workflowId}`);
+    await expect(page.locator(".react-flow__node")).toHaveCount(graph.nodes.length);
     await page.getByRole("button", { name: "运行", exact: true }).click();
 
     const fileInput = page.getByLabel("简历文件");

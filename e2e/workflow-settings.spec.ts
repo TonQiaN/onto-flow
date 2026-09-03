@@ -1,6 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { expect, test, type APIRequestContext } from "@playwright/test";
-import { cleanupByPrefix, cleanupRevisions, type RevisionOwnerKind } from "./helpers";
+import {
+  cleanupByPrefix,
+  cleanupRevisions,
+  createAction,
+  createObjectType,
+  createSkill,
+  createTool,
+  createWorkflow as createWorkflowEntity,
+  inputPort,
+  outputPort,
+  type RevisionOwner,
+  uniqueSuffix,
+} from "./helpers";
 
 /**
  * 工作流设置——三层设置的中间层（ADR-0016）：工作流指令、五个插件开关的覆盖、MCP 子集、
@@ -11,16 +23,13 @@ import { cleanupByPrefix, cleanupRevisions, type RevisionOwnerKind } from "./hel
  */
 const PREFIX = "e2e-工作流设置-";
 
-const EXECUTE_MODULE = `export default async function execute(args: { input: string }) {
-  return { echo: args.input };
-}
-`;
-
 interface Fixture {
-  suffix: number;
+  suffix: string;
   objectTypeId: string;
   skillId: string;
   skillName: string;
+  /** 不加入任何工作流技能集：用来验证候选被集合收窄 */
+  outsiderSkillName: string;
   toolId: string;
   toolName: string;
   toolPublicName: string;
@@ -41,106 +50,80 @@ interface WorkflowDetail {
   edges: unknown[];
 }
 
-const owners: Array<{ kind: RevisionOwnerKind; id: string }> = [];
+const owners: RevisionOwner[] = [];
 
 /** 一套夹具：对象类型、技能、Tool，以及预载该技能并可见该 Tool 的 Action */
 async function createFixture(request: APIRequestContext): Promise<Fixture> {
-  const suffix = Date.now();
-  const modelRes = await request.get("/api/models");
-  expect(modelRes.ok()).toBeTruthy();
-  const model = ((await modelRes.json()) as Array<{ id: string }>)[0];
-  expect(model).toBeDefined();
+  const suffix = uniqueSuffix();
 
-  const typeRes = await request.post("/api/object-types", {
-    data: { name: `${PREFIX}文本-${suffix}`, kind: "text", description: "工作流设置验收" },
-  });
-  expect(typeRes.ok()).toBeTruthy();
-  const objectTypeId = ((await typeRes.json()) as { id: string }).id;
-  owners.push({ kind: "object_type", id: objectTypeId });
+  const objectTypeId = await createObjectType(
+    request,
+    { name: `${PREFIX}文本-${suffix}`, description: "工作流设置验收" },
+    owners,
+  );
 
   const skillName = `${PREFIX}技能-${suffix}`;
-  const skillRes = await request.post("/api/skills", {
-    data: {
+  const skillId = await createSkill(
+    request,
+    {
       name: skillName,
       description: "设置验收用技能",
       content: "# 设置验收\n\n只在 e2e 里出现。",
     },
-  });
-  expect(skillRes.ok()).toBeTruthy();
-  const skillId = ((await skillRes.json()) as { id: string }).id;
-  owners.push({ kind: "skill", id: skillId });
+    owners,
+  );
+
+  // 同前缀再建一个技能，但不放进任何工作流的技能集：候选收窄的否定断言拿它当靶子
+  const outsiderSkillName = `${PREFIX}集合外技能-${suffix}`;
+  await createSkill(
+    request,
+    {
+      name: outsiderSkillName,
+      description: "不在任何工作流技能集里",
+      content: "# 集合外\n\n不应出现在画布检查器的候选里。",
+    },
+    owners,
+  );
 
   const toolName = `${PREFIX}Tool-${suffix}`;
   const toolPublicName = `e2e_wf_settings_${suffix}`;
-  const toolRes = await request.post("/api/tools", {
-    data: {
-      name: toolName,
-      publicName: toolPublicName,
-      description: "设置验收用 Tool",
-      parameters: {
-        type: "object",
-        properties: { input: { type: "string" } },
-        required: ["input"],
-      },
-      code: EXECUTE_MODULE,
-    },
-  });
-  expect(toolRes.ok()).toBeTruthy();
-  const toolId = ((await toolRes.json()) as { id: string }).id;
-  owners.push({ kind: "tool", id: toolId });
+  const toolId = await createTool(
+    request,
+    { name: toolName, publicName: toolPublicName, description: "设置验收用 Tool" },
+    owners,
+  );
 
   const actionName = `${PREFIX}Action-${suffix}`;
-  const actionRes = await request.post("/api/actions", {
-    data: {
+  const actionId = await createAction(
+    request,
+    {
       name: actionName,
       description: "预载技能并看见 Tool",
-      prompt: "读输入写输出",
-      rule: "",
-      modelId: model!.id,
-      reasoningEffort: "low",
-      maxReentries: 0,
-      onExhausted: "fail",
-      ports: [
-        {
-          direction: "input",
-          name: "输入",
-          objectTypeId,
-          position: 0,
-          artifactPath: null,
-          exitName: null,
-        },
-        {
-          direction: "output",
-          name: "输出",
-          objectTypeId,
-          position: 0,
-          artifactPath: "out.md",
-          exitName: null,
-        },
-      ],
+      ports: [inputPort("输入", objectTypeId), outputPort("输出", objectTypeId, "out.md")],
       preloadSkillIds: [skillId],
       toolIds: [toolId],
     },
-  });
-  expect(actionRes.ok()).toBeTruthy();
-  const action = (await actionRes.json()) as {
-    id: string;
+    owners,
+  );
+
+  // 写入口如实收下预载与可见 Tool（⊆ 校验放在工作流保存与运行受理两处）
+  const action = (await (await request.get(`/api/actions/${actionId}`)).json()) as {
     preloadSkillIds: string[];
     toolIds: string[];
   };
   expect(action.preloadSkillIds).toEqual([skillId]);
   expect(action.toolIds).toEqual([toolId]);
-  owners.push({ kind: "action", id: action.id });
 
   return {
     suffix,
     objectTypeId,
     skillId,
     skillName,
+    outsiderSkillName,
     toolId,
     toolName,
     toolPublicName,
-    actionId: action.id,
+    actionId,
     actionName,
   };
 }
@@ -199,18 +182,8 @@ function actionGraph(fx: Fixture) {
   };
 }
 
-async function createWorkflow(
-  request: APIRequestContext,
-  name: string,
-  extra: Record<string, unknown> = {},
-): Promise<string> {
-  const res = await request.post("/api/workflows", {
-    data: { name, description: "工作流设置验收", ...extra },
-  });
-  expect(res.ok()).toBeTruthy();
-  const id = ((await res.json()) as { id: string }).id;
-  owners.push({ kind: "workflow", id });
-  return id;
+async function createWorkflow(request: APIRequestContext, name: string): Promise<string> {
+  return createWorkflowEntity(request, { name, description: "工作流设置验收" }, owners);
 }
 
 async function getDetail(request: APIRequestContext, id: string): Promise<WorkflowDetail> {
@@ -466,8 +439,8 @@ test.describe("工作流设置", () => {
       .locator("label")
       .filter({ has: page.getByText(fx.toolName, { exact: true }) });
     await expect(toolRow.getByRole("checkbox")).toBeChecked();
-    // 种子技能不在这个工作流的技能集里，画布侧的候选看不到它
-    await expect(page.getByText("集采计划编制规范", { exact: true })).toHaveCount(0);
+    // 同前缀建出来但没放进技能集的那个技能，画布侧的候选看不到它
+    await expect(page.getByText(fx.outsiderSkillName, { exact: true })).toHaveCount(0);
   });
 
   test("受理时冻结三层设置：直通工作流的运行带 settingsSnapshot，运行详情显示「设置快照」", async ({

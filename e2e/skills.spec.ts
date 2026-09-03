@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { cleanupByPrefix, cleanupRevisions, DATA_DIR } from "./helpers";
+import { cleanupByPrefix, cleanupRevisions, createSkill, DATA_DIR, uniqueSuffix } from "./helpers";
 
+/**
+ * Skill 库。`db:seed` 只种平台基线，业务技能一律由用例自建 `e2e-` 前缀夹具，
+ * afterEach 经 cleanupByPrefix + cleanupRevisions 收走。
+ */
 const PREFIX = "e2e-技能-";
 
 /** 技能目录投影根（src/server/skill-library.ts）：data/skills/<slug>/ 是指向 .versions/ 下版本目录的链接 */
@@ -37,23 +41,29 @@ test.describe("Skill 库", () => {
     created.length = 0;
   });
 
-  test("列表显示种子 Skill「集采计划编制规范」", async ({ page }) => {
+  test("自建 Skill 出现在列表并显示名称与描述", async ({ page, request }) => {
+    const name = `${PREFIX}列表-${uniqueSuffix()}`;
+    const description = `e2e 列表描述 ${name}`;
+    created.push({ kind: "skill", id: await createSkill(request, { name, description }) });
+
     await page.goto("/skills");
-    await expect(
-      page.getByRole("heading", { name: "集采计划编制规范", exact: true }),
-    ).toBeVisible();
+    const card = page
+      .locator("li")
+      .filter({ has: page.getByRole("heading", { name, exact: true }) });
+    await expect(card).toHaveCount(1);
+    await expect(card.getByText(description)).toBeVisible();
     // 第一批的「强制注入」语义已经不存在：页面上不能再出现这个说法（ADR-0016）
     await expect(page.getByText("强制注入")).toHaveCount(0);
   });
 
   test("新建 → 出现在列表 → 编辑描述 → 删除消失", async ({ page, request }) => {
-    const name = `${PREFIX}${Date.now()}`;
+    const name = `${PREFIX}${uniqueSuffix()}`;
     await page.goto("/skills");
 
     // 新建
     await page.getByRole("button", { name: "新建 Skill" }).click();
     await expect(page.getByRole("heading", { name: "新建 Skill" })).toBeVisible();
-    await page.getByPlaceholder("如：集采计划编制规范").fill(name);
+    await page.getByPlaceholder("如：简历评分规范").fill(name);
     await page.getByPlaceholder("一句话说明这个 Skill 的用途").fill("e2e 初始描述");
     await page.getByPlaceholder("Skill 全文…").fill("# e2e 测试内容\n仅供测试。");
     await page.getByRole("button", { name: "保存", exact: true }).click();
@@ -89,12 +99,12 @@ test.describe("Skill 库", () => {
     page,
     request,
   }) => {
-    const name = `${PREFIX}资源-${Date.now()}`;
+    const name = `${PREFIX}资源-${uniqueSuffix()}`;
     const fileContent = `e2e 资源文件 ${Date.now()}\n`;
     await page.goto("/skills");
 
     await page.getByRole("button", { name: "新建 Skill" }).click();
-    await page.getByPlaceholder("如：集采计划编制规范").fill(name);
+    await page.getByPlaceholder("如：简历评分规范").fill(name);
     await page.getByPlaceholder("Skill 全文…").fill("# 带资源文件的技能\n看 references/guide.md。");
 
     // 上传走隐藏的 <input type=file>；默认路径是文件名，改成带子目录的相对路径
