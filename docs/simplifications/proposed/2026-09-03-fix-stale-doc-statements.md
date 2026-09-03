@@ -7,12 +7,13 @@
 六处点名式陈述今天已经不成立，且都是 `rg` 一次就能判定的。
 
 **① `AGENTS.md:116`：「`src/rules.test.ts` scans source text for … `handle()` and its **four
-exemptions** …」** 实际是**两个**：`src/rules.test.ts:64`
-`const EXEMPT = ["src/app/api/runs/[id]/events/route.ts", "src/app/api/models/route.ts"];`，而
-`AGENTS.md:136` 自己那句已经写的是「**Two** do not」，`.github/REVIEW.md:46` 也是「仅有的两个例外」。这是
-`AGENTS.md` **内部自相矛盾**：第 1 批把四→三（[删掉采购演示与归档链](../done/2026-09-03-delete-procurement-demo-and-archive-chain.md)）、
-第 4 批把三→二（[拆散监控台](../done/2026-09-03-dismantle-monitor-console.md)）时都改了 Conventions 那句，
-**两次都漏了 Checks 这句**。同句还漏列了第 0b 批新增的记录树骨架断言（`src/rules.test.ts:408-456`）。
+exemptions** …」** 实际数量与它对不上，且同句漏列了第 0b 批新增的记录树骨架断言
+（`src/rules.test.ts:408-456`）。数量那一半已由杂项清理 [#29](https://github.com/TonQiaN/onto-flow/pull/29)
+落地：`api/models/route.ts` 归入 `handle()` 后白名单只剩 SSE 一条，`AGENTS.md:116` 改「one exemption」、
+`:136` 改「One does not」、`.github/REVIEW.md:46` 改「仅有的例外」，三处同一提交。历史上第 1 批把四→三
+（[删掉采购演示与归档链](../done/2026-09-03-delete-procurement-demo-and-archive-chain.md)）、第 4 批把三→二
+（[拆散监控台](../done/2026-09-03-dismantle-monitor-console.md)）时都只改了 Conventions 那句、漏了 Checks
+这句——#29 一并修正。**本记录剩下的只有枚举漏列那一半。**
 
 **② `AGENTS.md:121`：「`runs.spec.ts` synthesizes its own runs, **events** and usage」**
 
@@ -55,7 +56,8 @@ rule the moment the code stops obeying it」，以及「never as if the code alr
 
 ## 提议
 
-- `AGENTS.md:116`：「four exemptions」→「two exemptions」；枚举补上 `docs/simplifications/` 记录树骨架。
+- `AGENTS.md:116`：数量已由 #29 改为「one exemption」，本记录只在同句枚举里补上 `docs/simplifications/`
+  记录树骨架断言。
 - `AGENTS.md:121`：删掉「events」——改成「`runs.spec.ts` synthesizes its own runs, rounds and usage」
   （它确实插 `run_node_rounds`，见 `e2e/runs.spec.ts:421`）。
 - `AGENTS.md:129`：把「the one sanctioned … is `parallel-runs.spec.ts`」改成 spec 无关的规则陈述（零
@@ -66,7 +68,7 @@ rule the moment the code stops obeying it」，以及「never as if the code alr
 - `CONTEXT.md:198-201`：把这半句纳入头注的豁免范围，或写成「（ADR-0010 之后；今天 Action 仍被工作流节点
   引用）」。
 - `docs/DESIGN-V2.md:200`：把「自动跟随」移到运行页语境，或整条阶段二改写为现状（与阶段三同款）。
-- `.github/REVIEW.md:46` 与 `:98` 已正确，无需改；`src/rules.test.ts` 无需改（白名单本身就是二）。
+- `.github/REVIEW.md:46` 已随 #29 改正，`:98` 本就正确，无需改；`src/rules.test.ts` 无需改（白名单已随 #29 缩成一条）。
 
 ## 放弃了什么
 
@@ -76,7 +78,7 @@ rule the moment the code stops obeying it」，以及「never as if the code alr
 
 ## 验收
 
-`rg -n "four exemptions|one sanctioned run-starting" AGENTS.md` 无结果；`npx vitest run src/rules.test.ts`
+`rg -n "four exemptions|two exemptions|one sanctioned run-starting" AGENTS.md` 无结果；`npx vitest run src/rules.test.ts`
 绿（记录树骨架门禁与 `handle()` 白名单反向断言都在里面）；`rg -n "run_events" e2e/` 仍无结果（用来复核第
 ② 句改对了）；`npm run check`。纯文档，不碰四处高代价接缝。
 
