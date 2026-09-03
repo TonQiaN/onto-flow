@@ -58,8 +58,10 @@ interface SummaryModelRow {
  * 每次查询从 runs.imports 的 invocation 里 json_extract 推导（见 RUN_SOURCE）；每行的用量 left join
  * run_nodes 求和。summary 按同一组筛选**不分页**聚合：runs 数的是筛选集里 distinct 的运行，
  * 所以零用量的运行（免费的输入→输出工作流、首次模型调用前就失败的运行）也算得上；token 与费用
- * 从按 run_id 预聚合的 node_usage 子查询 left join 过来——内连接会把无用量的运行整行挤掉，
- * 汇总里的运行数就会小于列表的 total。
+ * 与每行同源，从按 run_id 预聚合的 run_nodes 子查询求和——run_nodes 是节点用量的权威汇总
+ * （node_usage 插入瞬时失败时那一 chunk 只经内存回退折进 run_nodes，不会补出 node_usage 行）；
+ * 只有 byModel 必须按模型拆，来自 node_usage 的预聚合，因此它各行之和在极少数回退场景下可能略小于
+ * tokens。两处都用 left join——内连接会把无用量的运行整行挤掉，汇总里的运行数就会小于列表的 total。
  */
 export async function GET(request: Request) {
   return handle(() => {
@@ -128,23 +130,25 @@ export async function GET(request: Request) {
       .offset((page - 1) * pageSize)
       .all();
 
-    // 子查询先把 node_usage 收成一行一运行，再 left join；不先收敛的话一次运行的多条用量明细
+    // 子查询先把 run_nodes 收成一行一运行，再 left join；不先收敛的话一次运行的多个节点
     // 会把 runs 行复制成多份，count(distinct) 还对但任何非去重统计都会翻倍。
     const totals = db.get<SummaryTotalsRow>(sql`
       select
         count(distinct ${runs.id}) as runs,
-        coalesce(sum(u.tokens), 0) as tokens,
-        coalesce(sum(u.cost), 0) as cost
+        coalesce(sum(n.tokens), 0) as tokens,
+        coalesce(sum(n.cost), 0) as cost
       from runs
       left join (
         select run_id,
-          sum(${USAGE_TOKENS}) as tokens,
-          sum(node_usage.cost) as cost
-        from node_usage group by run_id
-      ) u on u.run_id = ${runs.id}
+          sum(run_nodes.input_tokens + run_nodes.output_tokens +
+              run_nodes.cache_read_tokens + run_nodes.cache_write_tokens) as tokens,
+          sum(run_nodes.cost) as cost
+        from run_nodes group by run_id
+      ) n on n.run_id = ${runs.id}
       ${whereSql}
     `);
 
+    // byModel 是唯一必须按模型拆的口径，只能来自 node_usage（run_nodes 不分模型）。
     const byModel = db.all<SummaryModelRow>(sql`
       select
         u.provider_id as providerId,

@@ -146,9 +146,26 @@ describe("运行历史 API 的用量汇总", () => {
       0.5,
       101,
     );
+    // summary 的 token / 费用与每行同源，都从 run_nodes 求和（node_usage 只供 byModel 拆模型）：
+    // 给 run-1 的两个节点行配上与明细一致的费用，给 run-2 补一个节点行。
+    sqlite.exec(
+      "UPDATE run_nodes SET cost = 0.1 WHERE id = 'node-row-1'; UPDATE run_nodes SET cost = 0.02 WHERE id = 'node-row-2'; " +
+        "INSERT INTO run_nodes (id, run_id, node_id, label, status, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, cost) VALUES ('node-row-3', 'run-2', 'node-1', '一', 'success', 5, 5, 0, 0, 0, 0.5)",
+    );
     // run-3：零用量（免费的输入→输出工作流），必须仍被算进 summary.runs
     // 没有 invocation 的一行：coalesce 让它推导成 workflow
     insertRun("run-3", "workflow-2", "success", "另一个工作流", null, 200);
+  });
+
+  it("summary 的 token / 费用从 run_nodes 求和：node_usage 缺一条明细时汇总不掉账", async () => {
+    // 模拟 node_usage 插入瞬时失败、只经内存回退折进 run_nodes 的那一 chunk：删掉一条明细
+    sqlite.exec("DELETE FROM node_usage WHERE id = 'u2'");
+    const { body } = await get("");
+    expect(body.summary.tokens).toBe(50);
+    expect(body.summary.cost).toBeCloseTo(0.62, 10);
+    // byModel 只能按 node_usage 拆，这时略小于 tokens——接口注释说明了这一点
+    const byModelTokens = body.summary.byModel.reduce((sum, row) => sum + row.tokens, 0);
+    expect(byModelTokens).toBe(47);
   });
 
   it("runs 数的是筛选集里 distinct 的运行，零用量的运行也算，且多条用量明细不重复计数", async () => {

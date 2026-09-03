@@ -1002,9 +1002,15 @@ test.describe("运行列表筛选", () => {
 
   test("时间范围筛选：起止同选今天时只剩今天开始的那条运行", async ({ page }) => {
     await page.goto(`/runs?workflowId=${listFixture.workflowId}`);
+    // 先等表格按载荷渲染出来：goto 在 load 就返回，dev 模式下 React 此时可能还没水合，
+    // 直接 fill 的 change 事件会被没挂上的 handler 丢掉，URL 永远不会变（CI 撞到过）。
+    await expectTableMatchesPayload(page);
     const today = localDate(listFixture.apiStartedAt);
 
+    // 两个日期各等一次 URL 落地再填下一个：两次 router.replace 挤在同一瞬间时，
+    // 后一次可能在前一次的导航尚未提交时被吞掉（CI 与本机高负载下都撞到过），人手不会这么快。
     await page.getByTestId("runs-filter-from").fill(today);
+    await page.waitForURL((url) => url.searchParams.has("from"));
     await page.getByTestId("runs-filter-to").fill(today);
     await page.waitForURL((url) => url.searchParams.has("from") && url.searchParams.has("to"));
 

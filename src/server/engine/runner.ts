@@ -901,6 +901,10 @@ async function executeRun(
                 const at = new Date();
                 state.status = "cancelled";
                 updateRunNode(runId, state.node.id, { status: "cancelled", finishedAt: at });
+                // 这里必须**无条件**改写，不能跟 action.ts 一样加 `status = 'running'` 条件：
+                // 反向次序下 action.ts 已经把这一轮收口成 success，取消才到（`closeRunningRounds`
+                // 因此找不到 running 的行），只有这一处能把轮次行拉回 cancelled。漏掉它，回放就会
+                // 在一段成功的会话上叠一个取消的节点（ADR-0018）。
                 settleRound({
                   runId,
                   nodeId: state.node.id,
