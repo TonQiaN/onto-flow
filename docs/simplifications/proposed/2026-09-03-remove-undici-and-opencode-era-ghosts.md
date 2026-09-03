@@ -43,7 +43,7 @@ src/app/monitor/health/page.tsx:263  「每个执行中的节点独占一个会�
 `src/server/monitor/types.ts:61` 与 `src/app/monitor/lib.ts:15,72` 沿用同一说法。今天
 `listOrphanRuns`（`health.ts:126-127`）比的是 `runs.status='running'` 与
 `globalThis.ontoflowRunProcesses`（`health.ts:73-78`），**一次运行一个子进程、句柄整轮存活**
-（`src/server/engine/runner.ts:468,472` 才 delete），根本不存在「两个节点之间的无路由窗口」；「串行引擎」
+（`src/server/engine/runner.ts:468,472` 才 delete），根本不存在「两个节点之间的无路由窗口」（真实存在的窗口在受理与 `launchRun` 之间，见提议）；「串行引擎」
 还直接顶撞 `AGENTS.md:179`「Runs execute in parallel」与 `docs/DESIGN.md:57`「就绪节点并行、并发上限 10」。
 
 **生产消费者：** `undici` 零；`longHaulFetch` / 每工作区事件泵所指的代码不存在；`health.ts` 的三处注释与
@@ -60,9 +60,14 @@ stops obeying it。`AGENTS.md`「Stance: no compatibility layers」覆盖 `undic
 - `package.json` 删 `undici` 一行，`npm install` 更新 lockfile。
 - `AGENTS.md:205` 与 `.github/REVIEW.md:105` 的五例清单里删掉 `longHaulFetch` 与「每工作区事件泵」，剩三
   例（`SUM` 汇总、`LIKE` 转义、静默 tick 收流），两处**同一提交**改。
-- `src/server/monitor/health.ts:122-124` 注释改写为今天的判据（`runs.status='running'` ∖
-  `ontoflowRunProcesses`；一次运行一个子进程，因此**不存在**正常的瞬时孤儿），`:151` 的 `reason` 改成
-  「进程内已无对应的运行子进程」；`src/server/monitor/types.ts:61` 与 `src/app/monitor/lib.ts:15,72` 同步。
+- `src/server/monitor/health.ts:122-124` 注释改写为今天的判据与**真实的**瞬时窗口：判据是
+  `runs.status='running'` ∖ `ontoflowRunProcesses`；窗口不在「两个节点之间」，而在**受理与启动之间**——
+  `startResolvedRun` 在受理事务里就提交了 `running` 行（`runner.ts:423`），而 `ontoflowRunProcesses` 要到
+  `launchRun` 结束才登记句柄（`runner.ts:640,646`），中间建工作区、起子进程的几秒里这次运行会被判成孤儿
+  （Codex 对 #28 的复审指出，首版误写成「不存在正常的瞬时孤儿」）。所以注释保留「瞬时出现属正常，持续存在
+  才是真孤儿」这半句，只把机制改对；`:151` 的 `reason` 改成「进程内没有它的子进程句柄：可能刚受理尚未启动，
+  或进程重启遗留」；`src/server/monitor/types.ts:61` 与 `src/app/monitor/lib.ts:15,72` 同步。备选：让判据
+  同时排除 `ontoflowActiveRuns` 里的运行，窗口就真的消失——但那是改健康页的判据而非注释，留给实施 PR 决定。
 - `src/rules.test.ts` 无对应断言，不需要改；CI workflow 不需要改。
 
 ## 放弃了什么

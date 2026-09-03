@@ -61,12 +61,15 @@ database onto `globalThis.ontoflowDb` and creates every directory it needs itsel
 
 八个文件改用 `createTestDb()` / `resetTestDb()`：
 
-- `settings.test.ts`、`engine/events.test.ts`、`folders.test.ts`、`resolve.test.ts`、
-  `api/runs/route.test.ts`：直接替换，无父行依赖问题（`resolve.test.ts` 本来就建全套父行）。
-- `engine/action.test.ts`：替换，顺手删掉 `action_skills` 的建表与清表两行。
-- `engine/runner.test.ts`、`monitor/cleanup.test.ts`：这两个今天只建 `runs` 不建 `workflows`，打开真 FK
-  后要补一行 `workflows` 夹具（约每文件 +5 行）；`cleanup.test.ts` 补齐后**新增一条断言「删 run 级联清空
-  run_nodes / run_events / node_usage」**。
+- 打开真 FK 之后**每个转换的文件都要先种父行**，不是只有两个（Codex 对 #28 的复审逐个点名）：
+  `engine/events.test.ts` 给 `run-1` 写 `run_events` / `node_usage` 却没有 `runs` 行；`engine/action.test.ts`
+  给同一个不存在的 run 插 `run_nodes`；`api/runs/route.test.ts` 插 `runs` 却没有它引用的 `workflows` 行；
+  `engine/runner.test.ts`、`monitor/cleanup.test.ts` 只建 `runs` 不建 `workflows`。五个文件各补一段
+  `workflows` →（`runs`）→ 子表的父行夹具（约每文件 +5 到 +10 行）；`resolve.test.ts` 本来就建全套父行、
+  `settings.test.ts` / `folders.test.ts` 不碰带外键的表，这三个直接替换。
+- `engine/action.test.ts`：替换时顺手删掉 `action_skills` 的建表与清表两行。
+- `monitor/cleanup.test.ts` 补齐父行后**新增一条断言「删 run 级联清空 run_nodes / run_events /
+  node_usage」**——这正是手写 DDL 漏掉外键后从没验到过的。
 - `test-db.ts` 的 `resetTestDb` 补 `DELETE FROM run_node_rounds;`。
 
 连带要改：`.github/REVIEW.md` §8 第 4 条今天写「服务层测试先把内存库挂到 `globalThis.ontoflowDb` 再
@@ -97,4 +100,4 @@ database onto `globalThis.ontoflowDb` and creates every directory it needs itsel
 本就依赖孤儿行，会由「静默通过」变成「插入失败」——那是真 bug 被揭出来，不是回归，但要在同一 PR 里判定
 并修。
 
-预估净删约 250 行（−296 删除，+45 父行夹具与断言）；风险等级：中。
+预估净删约 220 行（−296 删除，+75 父行夹具与断言）；风险等级：中。
