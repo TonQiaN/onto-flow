@@ -318,12 +318,15 @@
 （`MAX_REENTRIES` 常量，`src/app/actions/` 的编辑器同值校验），超出 400；但嵌套 / 重叠的回边可以
 让一个下游 Action 被多个环体反复重置，单个目标的上限管不住它的总轮次，所以引擎再设**每节点每次
 运行的总轮次上限** `MAX_NODE_ROUNDS = 100`（与 `MAX_REENTRIES` 同源，`src/lib/graph.ts`）：给某节点
-分配的下一轮次号超过它时不再重入，而是**在调度循环里当作一次节点失败抛出**——走 `firstError`
-那条既有路径（不是直接调 `failWholeRun()`：它只改数据库行，既不置 `firstError` / `cancelled`
-也不抛，内存里的 pending 节点会继续启动、完成门禁照跑、`writeTerminalState()` 还会把这次失败改写成
-success），于是不再启动新节点、仍在跑的轮次收口、pending 节点补 skipped、运行以「节点「X」重入总轮次
-超过上限」失败。`runner.test.ts` 加一条嵌套回边把同一节点推过上限的用例：运行 failed、错误含上限、
-上限触发后没有任何新节点开始、无行残留 running；读侧 128 的上限因此永远读得下。
+分配的下一轮次号超过它时不再重入，而是走**重入耗尽 `onExhausted: "fail"` 同一条路径**：被封顶的
+**目标**节点的 `run_nodes` 写 failed + `finishedAt` + error「重入总轮次超过上限 100」（不新增轮次行），
+触发回边的来源节点保持 success，然后把带目标节点标识的错误记入调度闭包的 `firstError`（不是直接调
+`failWholeRun()`：它只改数据库行、不停调度；也不能在 `onNodeSuccess(来源)` 里直接抛——task catch
+会把错误记到来源节点头上、连它已成功的轮次一起写成 failed，回放与错误归属都错），于是不再启动
+新节点、仍在跑的轮次收口、pending 节点补 skipped、运行以目标节点的错误失败。`runner.test.ts` 加一条
+嵌套回边把同一节点推过上限的用例：运行 failed 且错误含上限与目标节点名、目标节点 failed、来源节点
+及其最后一轮仍是 success、上限触发后没有任何新节点开始、无行残留 running；读侧 128 的上限因此
+永远读得下。
 DESIGN.md 的 Action 载荷行与引擎 spec 同步。
 
 **保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
