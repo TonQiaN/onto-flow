@@ -355,8 +355,10 @@ interface RunGraph {
 }
 ```
 
-`startResolvedRun` 从 `resolved.nodeRows`（kind / label / x / y / actionId / objectTypeId）与
-`resolved.nodes` 的端口构造它，与 `runs` 行同一事务写入。`GET /api/runs/[id]` 返回它。
+`startResolvedRun` 从 `resolved.nodeRows` 取几何与标识（kind / x / y / actionId / objectTypeId），从
+`resolved.nodes` 取 **label** 与端口——`resolveWorkflow` 会把 `workflow_nodes.label` 替换成 Action
+当前的名字，画布上的名字必须与执行的定义、`run_nodes.label` 一致，不能用行里的旧名——与 `runs` 行
+同一事务写入。`GET /api/runs/[id]` 返回它。
 
 **页面 `/runs/[id]`**（重写 `src/app/runs/[id]/page.tsx`，三段式）
 
@@ -388,8 +390,9 @@ interface RunGraph {
   `t = now` 跟随，往回拖即暂停跟随，「跟随」按钮回到现在；已结束默认 `t = finishedAt`。
 - **时间轴**（画布下方）：每个节点一行（行来自 `run_nodes`，按 `startedAt` 排序；行名可点击，打开
   该节点的抽屉——这也是早于本批、画布为空的运行进入抽屉的入口），一轮一段（段来自
-  `run_node_rounds`；左 = 相对 `startedAt` 偏移，宽 = 时长；没有轮次行的节点这一行没有段），事件按
-  `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
+  `run_node_rounds`；左 = 相对 `startedAt` 偏移，宽 = 时长，但**有最小可见宽度与点击热区**——输入 /
+  输出节点与被跳过的轮次是零时长行，纯按时长画就是零宽、点不到；定位仍用精确时刻；没有轮次行的
+  节点这一行没有段），事件按 `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
 - **抽屉**（点节点打开，右侧）：错误置顶；「输入输出」「快照」两页签读**光标所在那一轮**的
   `run_node_rounds` 行；「轨迹」页签对任何运行都一样——调 trajectory 接口拿该节点**全部**会话的轨迹
   （接口本就按节点读各轮 JSONL，不依赖轮次表），光标所在轮的会话 id 只用来定位到对应会话并高亮，
