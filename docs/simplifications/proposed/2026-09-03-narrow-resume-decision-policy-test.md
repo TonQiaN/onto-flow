@@ -14,6 +14,9 @@
   `:753`「缺少任一评审到汇总的结论边时在运行受理前失败」、`:785`「重复一位评审冒充缺失评审时在运行受理前
   失败」、`:800`「任一评审缺少岗位或简历来源边时在运行受理前失败」。**而且是最脆的一种写法**——
   `seed-resume.ts` 里换个变量名或换行就红，行为没变。
+  但要分清两件事：`resume-match.test.ts` 那三条是拿**自造的**错图验拒绝逻辑，从不评估种子造出的那张图；
+  三类 digest 也不含图的连通性。所以「种子实际接线是对的」今天只有这条正则在钉——收窄时只能换写法，
+  不能删（Codex 对 #28 的复审指出了这一点）。
 - `it("要求评委处理证据缺口…")`（`:20-33`）里有三条断言钉的是 Tool 源码的实现细节：
   `toContain("const __name = <T>(target: T, _value: string): T => target")`、
   `toContain("const expected = path.resolve(root, ${JSON.stringify(RESUME_MATCH_RESULT_ARTIFACT)});")`、
@@ -38,28 +41,39 @@ both values」），审阅者更新 pin 时短语被删掉也不会红。
 
 ## 提议
 
-- 删第三个 `it()`（拓扑正则，`:41-56`）与第二个 `it()` 里那三条 Tool 源码正则（`:26-30`）。
-- 保留文件并补一句头注释，说明它只钉「sha256 re-pin 之后仍必须成立的语义短语」，拓扑归
-  `resume-match.test.ts`、Tool 实现归 `RESUME_MATCH_VALIDATOR_TOOL_SHA256`。
-- 文件名与 `seed-resume.ts` 的关系不变，仍留在 `scripts/`（`vitest.config.ts` 的 `include` 已含
+- 第二个 `it()` 里那三条 Tool 源码正则（`:26-30`）删掉——它们逐字都在 `RESUME_MATCH_VALIDATOR_TOOL_SHA256`
+  盖住的 `code` 里。
+- 第三个 `it()`（拓扑，`:31-49`）**换写法、不删**：把 `scripts/seed-resume.ts` 里模块级的 `CRITICS`
+  （`:513`）、`desiredNodes`（`:738`）、`desiredEdges`（`:764`）连同 `nodeId` / `edgeId` / `edge` 这些纯
+  函数拆到无副作用的 `scripts/seed-resume-graph.ts`（不 import `@/db`，不读写 `data/`），`seed-resume.ts`
+  从它 import；测试改 import 同一个模块，对**数据**而不是源码文本断言：`CRITICS` 六个 key 各对应一个
+  Action 节点；每个评委节点都有来自解析节点两个端口（`RESUME_MATCH_PARSED_JOB_PORT` /
+  `RESUME_MATCH_PARSED_RESUME_PORT`）的入边；汇总节点在 `RESUME_MATCH_REPORT_CRITICS_PORT` 上恰有六条入边、
+  来源两两不同且覆盖全部评委；再跑一遍 `validateGraph`（`src/lib/graph.ts`）要求零问题。换变量名、换行、
+  改布局坐标都不会红，接错一条边会。
+- 保留文件并补一句头注释：它钉两类 sha256 re-pin 管不到的东西——裁决语义短语，与种子实际接线；Tool 实现归
+  `RESUME_MATCH_VALIDATOR_TOOL_SHA256`。文件仍在 `scripts/`（`vitest.config.ts` 的 `include` 已含
   `scripts/**/*.test.ts`）。
-- 连带：无 `AGENTS.md` / REVIEW / DESIGN / CI 改动。
+- 连带：无 `AGENTS.md` / REVIEW / DESIGN / CI 改动；`seed-resume.ts` 的行为与三类 digest 的 pin 值一字不动
+  （拆模块只搬定义，不改任何节点、边、Action 字段）。
 
 ## 放弃了什么
 
-一层「改错了种子的接线会在单测里立刻红」的早期反馈——现在最早的反馈点后移到 `resume-match.test.ts`
-（同样免费、同样在 `npm test` 里），只是不再在 `seed-resume.ts` 的源码层面拦。
+「钉 Tool 实现细节」这一层——某人改了 `run_python` 校验器里 `if (candidate !== expected)` 的写法，单测不再
+第一时间红，要等 seed 时 `RESUME_MATCH_VALIDATOR_TOOL_SHA256` 不匹配抛错。那本来就是记录在案的钉法。
+另外多一个文件：读种子要同时看 `seed-resume-graph.ts`。
 
 ## 验收
 
 `npx vitest run scripts/resume-decision-policy.test.ts src/server/resume-match.test.ts`；`npm run check`。
-**不需要**跑 `seed-resume.ts`（它写 `data/`，且本候选不改种子一行），也不需要付费冒烟——三类 digest 的
-pin 值一字未动，`resume-match-validator-integrity.ts` 的受理校验路径不变。
+**不需要**跑 `seed-resume.ts`（它写 `data/`），也不需要付费冒烟——三类 digest 的 pin 值一字未动，
+`resume-match-validator-integrity.ts` 的受理校验路径不变；拆模块后 `npx tsx scripts/seed-resume.ts` 在本地
+跑一次确认仍 idempotent（不花钱，只写库与 `data/samples/`）。故意在 `seed-resume-graph.ts` 里删掉一条
+评委→汇总的边，新断言必须红。
 
 ## 风险
 
-如果哪天有人真的把某条评委→汇总的边接错，`resume-match.test.ts` 是靠**构造错误图**验拒绝，而不是验种子
-造出的图是对的——理论上存在「种子错了、拒绝逻辑对了、两个测试都绿、付费入口在受理时才 422」的窗口。这个
-窗口的代价是一次 422，不是一次错误的付费运行，可接受。
+低。`seed-resume-graph.ts` 必须保持无副作用（不 import `@/db`、不碰文件系统），否则测试一 import 就会去种
+真库——用「文件顶部不出现 `@/db` / `node:fs`」这一条肉眼核对即可，不值一条 rules 断言。
 
-预估净删 25 行；风险等级：低。
+预估净删约 10 行（删 Tool 源码正则与拓扑正则约 −25，语义断言与模块拆分的 import 约 +15）；风险等级：低。

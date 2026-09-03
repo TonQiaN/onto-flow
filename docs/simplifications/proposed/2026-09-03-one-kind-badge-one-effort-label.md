@@ -48,7 +48,7 @@ src/components/canvas/node-model.ts:18  export const EFFORT_LABEL
   在 `shared.tsx` 里 re-export——后者会让「仅本目录使用」那句话变成半真）。
 - `Kind` 与 `PortKind` 收成一个名字（保留 `node-model.ts` 的 `PortKind`）；`KIND_STYLE` + `KindBadge`
   移到 `src/components/library/entity-card.tsx`（与
-  [四段库页原语归位](2026-09-04-library-page-primitives-to-shared.md) 同一个新文件，两条合并实施更省事），
+  [四段库页原语归位](2026-09-03-library-page-primitives-to-shared.md) 同一个新文件，两条合并实施更省事），
   两处调用点改 import；`shrink-0` 保留（多一个 flex 约束对 `object-types/page.tsx:254` 的卡片无害）。
 - 连带：`src/app/object-types/page.tsx:23` 的 import 来源变化；`src/app/workflows/[id]/types.ts:9,53` 的
   `PortKind` 引用不变；`AGENTS.md:29` 描述 `src/components/canvas/` 的那行可加半句说明它也是配色 / 文案

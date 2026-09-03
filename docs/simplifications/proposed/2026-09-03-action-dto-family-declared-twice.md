@@ -53,7 +53,7 @@ import 了 `@/app/actions/action-editor` 的 `ActionEditor`，而 `:23-28` 把 `
 
 连带要改：`src/app/workflows/[id]/types.ts:1-3` 抬头改写（它不再是这些类型的家）；
 `src/app/actions/shared.tsx:1` 的「仅本目录使用」改写，或整个文件收缩到只剩 `KindBadge` 相关（若与
-[Kind / EFFORT_LABEL 各只留一份](2026-09-04-one-kind-badge-one-effort-label.md) 一起做则整文件可删）；
+[Kind / EFFORT_LABEL 各只留一份](2026-09-03-one-kind-badge-one-effort-label.md) 一起做则整文件可删）；
 `docs/DESIGN-V2.md` 第五节共享模块清单加一行。e2e、`src/rules.test.ts`、`.github/REVIEW.md` 无需改。
 
 ## 放弃了什么

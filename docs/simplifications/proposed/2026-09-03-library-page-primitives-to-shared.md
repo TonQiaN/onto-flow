@@ -51,7 +51,7 @@ page grows its own **tree, toolbar, folder picker, or revision panel**」。四�
   可加一条「四个库页面里不出现 `function FolderBadge|RefCount|folderRefFrom|formatUsedBy`」的文本扫描
   ——那要与 REVIEW.md 一起加，属本候选的可选项。
 - e2e 一行不改（断言全在 DOM 文本与 API 载荷上）。
-- 与 [Kind / EFFORT_LABEL 各只留一份](2026-09-04-one-kind-badge-one-effort-label.md) 共用同一个
+- 与 [Kind / EFFORT_LABEL 各只留一份](2026-09-03-one-kind-badge-one-effort-label.md) 共用同一个
   `entity-card.tsx`，两条一起实施更省事。
 
 ## 放弃了什么

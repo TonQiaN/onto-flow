@@ -66,7 +66,7 @@ server 侧的 `SORT_KEYS` / `SortKey` / `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE` �
 「mirrored client-side in `src/app/tools/tool-form.ts`」改写为「一份在 `src/lib/`，两侧共用」；
 `.github/REVIEW.md` §6 最后两条与 §4 的「没有第二处写死 30 / 100」同步；`src/rules.test.ts:140` 的边界
 断言不受影响（`@/lib` 从来不在禁止清单里）。与
-[删掉 writers/json-schema.ts 垫片](2026-09-04-drop-writers-json-schema-shim.md) 一起落地时，
+[删掉 writers/json-schema.ts 垫片](2026-09-03-drop-writers-json-schema-shim.md) 一起落地时，
 `AGENTS.md:169` 的点名一次改到位。
 
 ## 放弃了什么

@@ -46,7 +46,7 @@ e2e/helpers.ts:396     const graph = buildLinearGraph(input);   ← createWorkfl
   路由一律 `import { writeTool } from "@/server/writers/tool"`；该文件的注册副作用
   `registerEntityWriter × 5` 与 `rules.test.ts:276` 的「每种 `EntityKind` 一个注册写入器」断言不受影响）
 - **唯一的 unused dependency**：`undici`（见
-  [删掉 opencode 时代的残留](2026-09-04-remove-undici-and-opencode-era-ghosts.md)）
+  [删掉 opencode 时代的残留](2026-09-03-remove-undici-and-opencode-era-ghosts.md)）
 
 **生产消费者：** 上列 12 条全部为零；两个桶的再导出无人经桶引用。
 **测试 / 文档消费者：** [DESIGN-V3](../../DESIGN-V3.md) 第 5 批一句、`AGENTS.md:111` 一句、
@@ -61,10 +61,10 @@ e2e/helpers.ts:396     const graph = buildLinearGraph(input);   ← createWorkfl
    **推荐 `true`**：本仓没有对外发布面，「本文件自用还挂 export」是噪声而非信号；真要收紧，收紧的方式是
    删 `export` 关键字，那是 100 处一次性提交，不该由 knip 天天报。
 2. **删除动作分派到各领域记录**，本记录只做统计与门禁：harness 侧的 `removeRunDir` / `composition.ts:40`
-   / `ToolExecute` 归 [harness 死导出与无主人的可选项](2026-09-04-harness-dead-exports-and-unowned-options.md)；
+   / `ToolExecute` 归 [harness 死导出与无主人的可选项](2026-09-03-harness-dead-exports-and-unowned-options.md)；
    客户端侧的 `RunDetailResponse` / `STATUS_DOT` / `portSignature` / `ENTITY_KIND_*` 与库桶 14 条归
-   [清掉第 3、4 批之后的死导出](2026-09-04-remove-dead-ui-exports-after-batches-3-4.md)；
-   `hasEntityWriter` 归 [两份私有 Result 收敛](2026-09-04-converge-result-on-writeresult.md)。
+   [清掉第 3、4 批之后的死导出](2026-09-03-remove-dead-ui-exports-after-batches-3-4.md)；
+   `hasEntityWriter` 归 [两份私有 Result 收敛](2026-09-03-converge-result-on-writeresult.md)。
 3. **本记录自己做的**：`src/server/writers/index.ts:23-28` 的 6 条再导出、`src/lib/values.ts:20
    portValueToDisplay`、`src/server/references.ts:86 entityLabel` / `:101 entityName`。
 4. **然后**把 `npm run knip` 加进 `.github/workflows/ci.yml` 的 `check` 作业（**只加步骤，不改作业名**

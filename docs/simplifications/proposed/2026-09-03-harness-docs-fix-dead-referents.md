@@ -53,7 +53,7 @@ src/app/tools/tool-form.ts:146-147     ← 只剩给 Tool 作者的模板注释
 ——这两个 `ToolContext` 字段（`src/server/harness/tool-contract.ts:82,84`、`tool-plugin.ts:248-249`）今天
 零生产消费者，但 [ADR-0017](../../adr/0017-tool-is-a-contract.md) 把它们定为契约面，**本记录不提议删**，
 只把散文改成中性陈述（该字段的处置见
-[knip 归零](2026-09-04-knip-to-zero-then-gate.md) 的「已考察」段）。
+[knip 归零](2026-09-03-knip-to-zero-then-gate.md) 的「已考察」段）。
 **测试 / 文档消费者：** `catalog.test.ts` 只钉包名与版本，不钉这四句。
 
 **打败了哪条已记录的理由：** `docs/harness/AGENTS.md:26`「组文档不是目录的复述……改决定时两边一起改，别

@@ -39,15 +39,15 @@ agent-workflow-studio 整段搬过来的上游形状，**从来没有本仓库�
 
 - 上表的死代码全删。
 - 过度导出的一批去掉 `export` 关键字（不改行数，只让 knip 归零，见
-  [knip 归零](2026-09-04-knip-to-zero-then-gate.md)）。
+  [knip 归零](2026-09-03-knip-to-zero-then-gate.md)）。
 - `RUN_SESSIONS_SUBDIR` 搬到 `workspace.ts`（那里本就住着其余六个 `RUN_*_SUBDIR`），`composition.ts` 与
   `trajectory.ts` 两边引它，`scripts/smoke-capabilities.ts` 同引；`trajectory.test.ts` / `e2e/runs.spec.ts`
   保持字面量（测试自建路径是刻意的）。搬到 `workspace.ts` 而不是让 `trajectory.ts` 引 `composition.ts`，
   是为了不把 `@/lib/workflow-settings`（`composition.ts:27-31` 引它）拉进轨迹模块的依赖图。
 - `undici` 依赖与 `longHaulFetch` 幽灵另记一份：
-  [删掉 opencode 时代的残留](2026-09-04-remove-undici-and-opencode-era-ghosts.md)。
+  [删掉 opencode 时代的残留](2026-09-03-remove-undici-and-opencode-era-ghosts.md)。
 - `docs/DESIGN.md:247`「运行详情、历史 API、**画布运行条**与轨迹」里的「画布运行条」在第 3 批已删，
-  归 [清掉第 3、4 批之后的死导出](2026-09-04-remove-dead-ui-exports-after-batches-3-4.md) 一并改。
+  归 [清掉第 3、4 批之后的死导出](2026-09-03-remove-dead-ui-exports-after-batches-3-4.md) 一并改。
 
 ## 放弃了什么
 

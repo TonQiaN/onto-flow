@@ -6,7 +6,7 @@
 
 `AGENTS.md:211` 立了一条硬规则：
 
-> [README.md](README.md) … it duplicates the startup and test commands from the Commands block above and
+> `README.md` … it duplicates the startup and test commands from the Commands block above and
 > restates behavior the engine spec owns, **so change README, that block, and the spec together or change
 > none of them.**
 
@@ -38,7 +38,7 @@
 `npm run fmt:check`；`README.md:125-127` 的 CI 描述补 lint 与 fmt:check，并提一句门禁工具链是 oxc
 （ADR-0019）。`AGENTS.md:211` 与 `.github/REVIEW.md:108` 不改。
 
-**B（去重）**：删掉 README「测试」整段与 CI 那段的命令细节，只留一句「门禁命令见 [AGENTS.md](AGENTS.md)
+**B（去重）**：删掉 README「测试」整段与 CI 那段的命令细节，只留一句「门禁命令见 [AGENTS.md](../../../AGENTS.md)
 的 Commands / Checks」；同时把 `AGENTS.md:211` 与 `.github/REVIEW.md:108` 改成「README 不复述命令」——
 这条「两处表示同一事实」的规则从此不需要人来守。
 

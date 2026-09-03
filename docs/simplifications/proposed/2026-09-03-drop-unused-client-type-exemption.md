@@ -65,7 +65,7 @@ are still exemptions, **so fixing one means shrinking the list**」。`handle()`
 ## 放弃了什么
 
 将来客户端想直接复用某个服务端类型时，得先把它挪到 `src/lib/`（就是
-[轨迹展示类型移进 src/lib/](2026-09-04-trajectory-view-types-to-lib.md) 走的路），不能就地开一个
+[轨迹展示类型移进 src/lib/](2026-09-03-trajectory-view-types-to-lib.md) 走的路），不能就地开一个
 `import type`。这多一步；好处是「客户端与 `@/server` 之间只有 `src/lib/` 一条通路」变成无例外的真命题。
 
 ## 验收

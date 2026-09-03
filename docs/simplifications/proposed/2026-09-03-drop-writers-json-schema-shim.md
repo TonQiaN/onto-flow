@@ -36,7 +36,7 @@ compatibility layers」，为「调用方不变」而留的转出层正是这一
 - `AGENTS.md:169` 的「in `src/server/writers/json-schema.ts`」改成 `src/server/harness/tool-schema.ts`，
   保留它旁边那句「(mirrored client-side in `src/app/tools/tool-form.ts`)」。
 - `rg -n "json-schema" .github/REVIEW.md` 若有命中同改。
-- **与 [把纯常量与纯校验搬进 src/lib/](2026-09-04-share-pure-validators-in-lib.md) 的关系**：那份提议把
+- **与 [把纯常量与纯校验搬进 src/lib/](2026-09-03-share-pure-validators-in-lib.md) 的关系**：那份提议把
   `objectSchemaProblem` 的**形状半边**搬进 `src/lib/json-schema-shape.ts`，由 `harness/tool-schema.ts`
   调它再加上游 `assertObjectJsonSchema`。两份都落地时，本条的 import 终点是
   `@/server/harness/tool-schema`（writer 侧仍要上游断言那半边），`AGENTS.md:169` 的点名一次改到位；
