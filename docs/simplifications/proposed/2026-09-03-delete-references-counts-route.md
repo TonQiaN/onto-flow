@@ -28,7 +28,7 @@ $ rg -an 'references/counts|/counts' src/components src/app --glob '!src/app/api
 - 删 `docs/DESIGN-V2.md:80` 那一行。
 - `refCounts` / `listEntities` 保留（`list.ts:160`、`folders.ts:69`、`orphans()` 还在用）。
 - `src/rules.test.ts` 无需改（该路由不在任何白名单里；`force-dynamic` 断言是遍历现存文件）。
-  `AGENTS.md` 不提这条路由，不用改。
+  `AGENTS.md:15` 仓库布局里的聚合计数「36 route handlers」改成 35（Codex 对 #28 的复审指出，否则那句立刻过时）。
 
 ## 放弃了什么
 
