@@ -1,0 +1,39 @@
+{
+  // lint 门禁（ADR-0019）：oxlint + oxlint-tsgolint 类型感知。运行方式只有 `npm run lint`，
+  // typeAware / maxWarnings 写在这里而不是 CLI，编辑器插件与 CI 才会跑同一套。
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "react", "nextjs", "import"],
+  "options": {
+    "typeAware": true,
+    "maxWarnings": 0
+  },
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    // better-sqlite3 是同步的：`await db.…` 等待的不是 thenable，这条把 AGENTS.md 那句机械化。
+    "typescript/await-thenable": "error",
+    // 引擎、SSE 与页面取数里的异步必须显式 `void` 或处理，不允许悄悄丢掉。
+    "typescript/no-floating-promises": "error",
+    "typescript/no-misused-promises": "error",
+    "react/rules-of-hooks": "error",
+    "react/exhaustive-deps": "error",
+    // React Compiler 规则族关闭：仓库的取数模式（AGENTS.md：`"use client"` + useEffect 里 fetch）
+    // 在 effect 里同步写 loading 态，被 set-state-in-effect 判为级联渲染；采用 Compiler 的编程模型
+    // 是另一个决定，不在门禁里顺手做。rules-of-hooks / exhaustive-deps 不在此列，照常生效。
+    "react/set-state-in-effect": "off",
+    "react/purity": "off",
+    "react/refs": "off",
+    "react/immutability": "off",
+    "react/preserve-manual-memoization": "off"
+  },
+  "ignorePatterns": [
+    "_reference/",
+    "data/",
+    ".data/",
+    ".next/",
+    "node_modules/",
+    "playwright-report/",
+    "test-results/"
+  ]
+}

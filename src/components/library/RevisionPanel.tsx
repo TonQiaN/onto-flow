@@ -73,6 +73,16 @@ function asRecord(value: unknown): Rec | null {
     : null;
 }
 
+/**
+ * 定义里的字段类型是 unknown：排序键与展示文本只接受标量，对象走到这里说明字段形状不对，
+ * 按空串处理而不是让 [object Object] 参与比较。
+ */
+function textOf(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
 /** 只取存在的键：缺席的键保持缺席，才能如实报「新增/删除」而不是「修改成空」 */
 function pick(src: Rec, keys: readonly string[]): Rec {
   const out: Rec = {};
@@ -102,14 +112,14 @@ function comparePorts(a: unknown, b: unknown): number {
   const pa = typeof ra.position === "number" ? ra.position : 0;
   const pb = typeof rb.position === "number" ? rb.position : 0;
   if (pa !== pb) return pa - pb;
-  return String(ra.name ?? "").localeCompare(String(rb.name ?? ""));
+  return textOf(ra.name).localeCompare(textOf(rb.name));
 }
 
 /** 图的节点/连线同样是集合，落库顺序无语义，两边都按 id 定序 */
 function compareById(a: unknown, b: unknown): number {
   const ra = asRecord(a) ?? {};
   const rb = asRecord(b) ?? {};
-  return String(ra.id ?? "").localeCompare(String(rb.id ?? ""));
+  return textOf(ra.id).localeCompare(textOf(rb.id));
 }
 
 /** 短哈希（FNV-1a，8 位十六进制）：只用来判断两份文件内容是否相同 */
@@ -138,8 +148,8 @@ function projectSkillFiles(value: unknown): unknown[] {
       return { path: rec.path, size, hash: shortHash(encoded) };
     })
     .sort((a, b) => {
-      const pa = String(asRecord(a)?.path ?? "");
-      const pb = String(asRecord(b)?.path ?? "");
+      const pa = textOf(asRecord(a)?.path);
+      const pb = textOf(asRecord(b)?.path);
       return pa.localeCompare(pb);
     });
 }
@@ -197,7 +207,7 @@ interface DiffRow {
 function formatValue(v: unknown): string {
   if (typeof v === "string") return v;
   if (v === undefined) return "";
-  return JSON.stringify(v, null, 2) ?? String(v);
+  return JSON.stringify(v, null, 2) ?? textOf(v);
 }
 
 /** 对象扁平化成 path → 值：`ports[0].name`、`model.displayName` */

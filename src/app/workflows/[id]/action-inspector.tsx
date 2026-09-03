@@ -69,7 +69,7 @@ export function ActionInspector({
   // 画布的 Action 清单是进页面时拉的，编辑前先对齐服务端最新定义
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const res = await fetch(`/api/actions/${target.action.id}`, {
           cache: "no-store",

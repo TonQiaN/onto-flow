@@ -11,7 +11,8 @@ function payloadSummary(payload: Record<string, unknown> | null): string {
   try {
     text = JSON.stringify(payload);
   } catch {
-    text = String(payload);
+    // 走到这里说明 payload 有环或含 BigInt；String() 只会给出 [object Object]，不如直说
+    text = "（payload 无法序列化）";
   }
   return text.length > SUMMARY_LIMIT ? `${text.slice(0, SUMMARY_LIMIT)}…` : text;
 }

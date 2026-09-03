@@ -20,7 +20,7 @@ import {
   type RunNodeRow,
   type RunRow,
 } from "@/app/runs/lib";
-import { ConnectionBadge, Dot, MonitorEmpty, MonitorErrorBar, Num, StatusChip } from "../ui";
+import { ConnectionBadge, Dot, MonitorEmpty, MonitorErrorBar, Num } from "../ui";
 import { useMonitorStream, type LiveSession } from "../use-monitor-stream";
 
 const EVENT_LIMIT = 600;
@@ -218,7 +218,8 @@ function eventSummary(row: RunEventRow): string {
   try {
     return JSON.stringify(payload);
   } catch {
-    return String(payload);
+    // 走到这里说明 payload 有环或含 BigInt；String() 只会给出 [object Object]，不如直说
+    return "（payload 无法序列化）";
   }
 }
 
@@ -399,7 +400,7 @@ function CancelRunPanel({ session }: { session: LiveSession }) {
   useEffect(() => {
     if (!confirming) return;
     let disposed = false;
-    (async () => {
+    void (async () => {
       try {
         const res = await fetch(`/api/runs/${session.runId}`, {
           cache: "no-store",

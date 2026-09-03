@@ -27,6 +27,7 @@ describe("集采计划归档路径", () => {
     expect(PURCHASE_PLAN_PATH_HELPERS_SOURCE).toContain("purchasePlanBackupLocation");
     expect(PURCHASE_PLAN_PATH_HELPERS_SOURCE).not.toContain("import_node");
 
+    // oxlint-disable-next-line typescript/no-implied-eval -- 测的就是「嵌入 Tool 的那份源码字符串本身可执行」，只能把它装回函数
     const invoke = new Function(
       "path",
       "dataDir",

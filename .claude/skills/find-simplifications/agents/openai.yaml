@@ -1,0 +1,3 @@
+interface:
+  display_name: "Find Simplifications"
+  short_description: "Survey the repo for evidence-backed simplification candidates"

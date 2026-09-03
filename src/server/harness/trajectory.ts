@@ -1494,10 +1494,18 @@ function detail(
   format: "text" | "json",
   scrubRoots: string[],
 ): TrajectoryDetail {
-  const raw = format === "json" ? stringify(value) : String(value ?? "");
+  const raw = format === "json" ? stringify(value) : textOf(value);
   const scrubbed = scrubPhysicalPaths(raw, scrubRoots);
   const clipped = bound(scrubbed, MAX_DETAIL_CHARS);
   return { label, content: clipped.content, format, truncated: clipped.truncated };
+}
+
+/** text 详情只该收到标量；对象是调用方给错了格式，退回 JSON 文本而不是 [object Object]。 */
+function textOf(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return stringify(value);
 }
 
 function stringify(value: unknown): string {
@@ -1534,7 +1542,7 @@ function scrubPhysicalPaths(value: string, roots: string[]): string {
   }
   // 兜住工具或插件返回的其它本机绝对路径；相对产物路径不受影响。
   scrubbed = scrubbed.replace(
-    /(?:\/Users|\/home|\/private\/var|\/var\/folders|\/tmp)\/[\w@%+.,~()\[\]{}=\-\/\\]+/g,
+    /(?:\/Users|\/home|\/private\/var|\/var\/folders|\/tmp)\/[\w@%+.,~()[\]{}=\-/\\]+/g,
     "<本地路径>",
   );
   scrubbed = scrubbed.replace(/[A-Za-z]:\\[^\s<>"']+/g, "<本地路径>");

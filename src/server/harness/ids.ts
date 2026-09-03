@@ -33,7 +33,7 @@ export function assertSafeName(kind: string, value: string): void {
     value.startsWith(".") ||
     value === ".." ||
     /[/\\]/.test(value) ||
-    // eslint 无关：显式匹配控制字符，它们在文件名里是货真价实的坑
+    // oxlint-disable-next-line no-control-regex -- 显式匹配控制字符：它们在文件名里是货真价实的坑
     /[\u0000-\u001f\u007f]/.test(value) ||
     value.length > 120;
   if (bad) {

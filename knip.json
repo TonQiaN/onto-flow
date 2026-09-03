@@ -1,0 +1,12 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/server/harness/runner.ts",
+    "src/server/harness/boot.ts",
+    "src/server/harness/rpc/*.ts",
+    "scripts/*.ts"
+  ],
+  "project": ["src/**/*.{ts,tsx,css}", "scripts/**/*.ts", "e2e/**/*.ts"],
+  "ignoreDependencies": ["@deepseek-ai/*"],
+  "ignoreBinaries": ["mkfifo", "pdfinfo"]
+}

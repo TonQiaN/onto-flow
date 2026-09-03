@@ -1,7 +1,8 @@
 # 合并门槛：pull_request 与 push(main) 都跑。两个作业都不需要模型凭据，
 # 不花钱——含 Action 节点的运行只在 smoke.yml（按需 / 定时，非门槛）里跑。
 #
-# check：typecheck → vitest → build。vitest 里的 src/server/harness/composition-boot.test.ts
+# check：typecheck → lint（oxlint + tsgolint 类型感知）→ fmt:check（oxfmt）→ vitest → build。作业名是分支保护
+# 认的必过检查名，不改名，只加步骤。vitest 里的 src/server/harness/composition-boot.test.ts
 # 会真起一个 harness 子进程 boot 默认组合（不调模型）；ubuntu 上 dsh 的 bash 沙箱梯级是
 # npm 分发的 landlock-run，boot 会把它加载起来但不执行任何命令——围栏本身只由付费冒烟（macOS）真跑。
 # e2e：db:push + db:seed 建一份干净的 data/ontoflow.db，playwright.config 自起 dev server。
@@ -29,6 +30,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run fmt:check
       - run: npm test
       - run: npm run build
 

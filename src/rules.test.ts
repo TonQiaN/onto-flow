@@ -376,7 +376,7 @@ describe("AGENTS.md · The harness seam · Pin @deepseek-ai versions exactly", (
 });
 
 describe("AGENTS.md · Decisions and the glossary · skills 双树", () => {
-  it("「.claude/skills/ and .codex/skills/ hold byte-identical copies of all four skills」", () => {
+  it("「.claude/skills/ and .codex/skills/ hold byte-identical copies of all five skills」", () => {
     const claude = path.join(ROOT, ".claude", "skills");
     const codex = path.join(ROOT, ".codex", "skills");
     const listing = (root: string): string[] =>
@@ -391,5 +391,56 @@ describe("AGENTS.md · Decisions and the glossary · skills 双树", () => {
         !fs.readFileSync(path.join(claude, file)).equals(fs.readFileSync(path.join(codex, file))),
     );
     expect(differing).toEqual([]);
+  });
+});
+
+describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录树", () => {
+  /**
+   * 「A simplification candidate is one record under docs/simplifications/ (proposed / done /
+   * rejected, skeleton pinned by src/rules.test.ts)」：状态目录、文件名与骨架按
+   * docs/simplifications/README.md 机械核对，状态行必须与所在目录一致，rejected 必须带理由。
+   */
+  const ROOT_DIR = path.join(ROOT, "docs", "simplifications");
+  const STATES = ["proposed", "done", "rejected"] as const;
+  const SECTIONS = ["## 问题", "## 提议", "## 放弃了什么", "## 验收", "## 风险"];
+
+  it("只有三个状态目录，记录文件名是 yyyy-mm-dd-slug.md", () => {
+    const entries = fs.readdirSync(ROOT_DIR, { withFileTypes: true });
+    const dirs = entries
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+    expect(dirs).toEqual([...STATES].sort());
+    const files = entries.filter((e) => e.isFile()).map((e) => e.name);
+    expect(files).toEqual(["README.md"]);
+    for (const state of STATES) {
+      const bad = fs
+        .readdirSync(path.join(ROOT_DIR, state))
+        .filter((name) => name !== ".gitkeep")
+        .filter((name) => !/^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/.test(name));
+      expect(bad, state).toEqual([]);
+    }
+  });
+
+  it("每份记录：首行「# 简化：」、第 3 行状态与目录一致、rejected 带理由、五节齐全", () => {
+    const problems: string[] = [];
+    for (const state of STATES) {
+      const dir = path.join(ROOT_DIR, state);
+      for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
+        const lines = read(path.join(dir, name)).split("\n");
+        const where = `${state}/${name}`;
+        if (!lines[0]?.startsWith("# 简化：")) problems.push(`${where}: 首行不是「# 简化：」`);
+        const status = lines[2] ?? "";
+        const expected =
+          state === "rejected" ? /^状态: rejected — \S.*$/ : new RegExp(`^状态: ${state}$`);
+        if (!expected.test(status)) problems.push(`${where}: 第 3 行状态「${status}」与目录不符`);
+        for (const section of SECTIONS) {
+          if (!lines.includes(section)) problems.push(`${where}: 缺「${section}」`);
+        }
+        if (state === "done" && !lines.includes("## 落地"))
+          problems.push(`${where}: 缺「## 落地」`);
+      }
+    }
+    expect(problems).toEqual([]);
   });
 });
