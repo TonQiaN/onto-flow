@@ -38,9 +38,9 @@ src/
 | /api/internal/resume-matches | POST | 「简历匹配评分」工作流调用入口；body 严格为 `{ job: PortValue(file), resume: PortValue(file) }`，调用方先经 `/api/uploads` 取得两个值；202 返回 `runId`、`statusUrl`、`historyUrl`，不暴露工作流或节点 id |
 | /api/internal/resume-matches/[id] | GET | 只查询由该入口 POST 受理并在 run 元数据中留下来源证明的运行（同名工作流经通用入口启动仍为 404）；running/failed/cancelled 时 `result=null`，success 时读取完成门禁写入 `run_results` 的精确 JSON，再次严格校验并核对完成证据里的内容 SHA-256 后返回；工作区/事件清理不影响结果，删除 run 才级联删除 |
 | /api/runs?workflowId=&status=&source=&from=&to=&page=&pageSize= | GET | 运行列表信封 `{ items, total, page, pageSize, summary }`，`items` 按 `startedAt` 倒序、每行带 `source`（受理来源）与 `nodesTotal` / `nodesDone` 进度（导航「运行中」面板与列表页共用）。七个参数：`status` 四值之一、`source` 匹配 `^[a-z][a-z0-9-]*$`、`from` / `to` 是 epoch 毫秒整数且窗口左闭右开（`startedAt ∈ [from, to)`），非法一律 400；`page` / `pageSize` 与五个库同一套（默认 30、上限 100，`parsePageQuery`）。`summary = { runs, tokens, cost, byModel: [{ providerId, modelId, tokens, cost }] }` 按同一组筛选**不分页**聚合：`runs` 数筛选集里 distinct 的运行（零用量的运行也算，因此等于 `total`），token 与费用与每行同源，来自按 `run_id` 预聚合的 `run_nodes` 子查询 left join（权威汇总；`node_usage` 插入瞬时失败的 chunk 只折进 `run_nodes`），只有 `byModel` 来自 `node_usage` 的预聚合、可能略小于 `tokens`——两处内连接都会把无用量的运行挤掉 |
-| /api/runs/[id] | GET, DELETE | GET：`{ run, nodes, rounds }`——run 是全列，含受理时冻结的 `settingsSnapshot`（`global` / `workflow` / `effective` 三层，见「三层设置与快照」）与 `graph`（受理时冻结的图，ADR-0018；早于该列的运行是空图 `{version:1,nodes:[],edges:[]}`，形状与校验见 `src/lib/run-graph.ts`），`nodes` 是 run_nodes 全量（节点的最新状态），`rounds` 是 run_node_rounds 的**骨架**全量（每个节点的每一次执行一行：轮次、会话、起止、终态、出口、错误；回放只读它。`inputs` / `outputs` / `snapshot` 三列不在这里——`select` 时就不取，抽屉按轮单取下面那条路由）；DELETE：删除单个已结束运行（run_nodes / run_node_rounds / run_events / node_usage / run_results 外键级联，连同运行目录），running 时 409 |
+| /api/runs/[id] | GET, DELETE | GET：`{ run, nodes, rounds }`——run 是全列，含受理时冻结的 `settingsSnapshot`（`global` / `workflow` / `effective` 三层，见「三层设置与快照」）与 `graph`（受理时冻结的图，ADR-0018；早于该列的运行是空图 `{version:1,nodes:[],edges:[]}`，形状与校验见 `src/lib/run-graph.ts`），`nodes` 是 run_nodes 的**骨架**全量（节点的最新状态与累计用量），`rounds` 是 run_node_rounds 的**骨架**全量（每个节点的每一次执行一行：轮次、会话、起止、终态、出口、错误；回放只读它）。两边的 `inputs` / `outputs` / `snapshot` 都不在这里——`select` 时就不取（`listNodeSkeletons` / `listRoundSkeletons`，`src/server/run-rounds.ts`），`run_nodes` 上那三列本就是最新一轮的副本，抽屉按轮单取下面那条路由；DELETE：删除单个已结束运行（run_nodes / run_node_rounds / run_events / node_usage / run_results 外键级联，连同运行目录），running 时 409 |
 | /api/runs/[id]/files?path= | GET | 只读预览已结束运行目录内的 UTF-8 文本文件（执行中 409；路径收敛在该 run 的 run_dir 内；256KB 按完整字符截断，二进制或非法 UTF-8 为 415）；运行详情看输入与产物正文的唯一通道（ADR-0012） |
-| /api/runs/[id]/events | GET | SSE：`event: snapshot`（`{ run, nodes, rounds }` 全量，与 GET /api/runs/[id] 同一形状——`rounds` 同样只有骨架，重载荷不跟着每 500ms 一帧反复下发；三者任一变化就重发）、`event: log`（run_events 增量，行带 `sessionId`，据此把事件归到轮）、`event: end`（终态且静默三拍后关闭）；连接即发一次 snapshot，事件从 id=0 起逐条回放再跟增量 |
+| /api/runs/[id]/events | GET | SSE：`event: snapshot`（`{ run, nodes, rounds }` 全量，与 GET /api/runs/[id] 同一形状——`nodes` 与 `rounds` 同样只有骨架，重载荷不跟着每 500ms 一帧反复下发；三者任一变化就重发）、`event: log`（run_events 增量，行带 `sessionId`，据此把事件归到轮）、`event: end`（终态且静默三拍后关闭）；连接即发一次 snapshot，事件从 id=0 起逐条回放再跟增量 |
 | /api/runs/[id]/nodes/[nodeId]/trajectory | GET | 按需读取该 Action 各轮会话 JSONL，返回按回合与步骤组织的系统、用户、上下文、模型及工具折叠轨迹；工作区已清理时返回可展示的 unavailable 结果 |
 | /api/runs/[id]/nodes/[nodeId]/rounds/[round] | GET | 这一轮的重载荷 `{ inputs, outputs, snapshot }`（ADR-0018）：抽屉的「输入输出」「快照」页签打开或换轮时按需取一轮，取过的轮缓存在页面里。轮次非负整数否则 400，没有这一轮 404；被事件清理置空的列返回 null，与「这一轮本就没有」同一形状 |
 | /api/uploads | POST | multipart 单文件 → 存 `data/uploads/<uuid>/<原名>`，返回 PortValue(file) |
@@ -90,7 +90,15 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   终态，被批量跳过的 pending 节点各补一行零时长 `skipped`。Action 侧的成功收口带条件 `status = 'running'`
 （`settleRoundIfRunning`）：取消可能在它等最后一次 sessionOutput / closeSession 时到达，先到的终态赢。重入把整个环体一起推进，但轮次号按**节点**
   取自己的下一个未用值（`NodeState.usedRound + 1`）：嵌套或重叠的回边会让内环已经跑过第 N 轮的节点被
-  外环再次重置，一律取「触发重入那个节点的轮次 + 1」就会撞唯一键。**重入还要等受影响的节点全部收束**：
+  外环再次重置，一律取「触发重入那个节点的轮次 + 1」就会撞唯一键。分配下一个轮次号时还按
+  `MAX_NODE_ROUNDS`（100，`src/lib/graph.ts`，与 `MAX_REENTRIES` 同源同值）收口：`maxReentries`
+  管的是单个回边目标被打回几次，管不住总轮次——嵌套 / 重叠环体各自在限额内重入，夹在中间的下游
+  节点会被反复重置，轮次一路涨到轨迹面板读不下（一轮一个会话目录，`MAX_SESSION_FILES` = 128）。
+  超限与重入耗尽走同一条路径、落在**目标**节点上：目标的 `run_nodes` 写 failed 与时刻，错误进
+  调度闭包的 `firstError`，于是不再启动新节点、在跑的各自按本轮收口、pending 的补 skipped，
+  运行以这条文案 failed。不新增轮次行（被拒绝的是这次重入，没有哪一轮真的开过），触发回边的
+  来源节点保持 success。不能改成直接调 `failWholeRun()`：它只改数据库行，不置 `firstError`
+  也不抛，内存里的调度会继续、完成门禁照跑，`writeTerminalState` 最后把这次失败改写成 success。**重入还要等受影响的节点全部收束**：
   回边满足时先排队（`pendingReentries`），受影响节点里一个都不在跑了才执行重置，挂起期间它们也不许被调度。
   环体扇出时一条快分支满足回边、另一条慢分支还在跑，直接重置会让调度器用同一个节点 id 启动慢分支的下一轮、
   顶掉正在跟踪的 promise：那次执行完成时写进的是已经代表下一轮的状态（outputs 与出口结算到新一轮头上），

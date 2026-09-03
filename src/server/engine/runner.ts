@@ -19,6 +19,7 @@ import { db, runNodes, runResults, runs } from "@/db";
 import {
   classifyEdges,
   downstreamOf,
+  MAX_NODE_ROUNDS,
   validateGraph,
   type ResolvedNode,
   type ValidationIssue,
@@ -779,6 +780,28 @@ async function executeRun(
       // accept：保留最后一轮的成功结果，回边不再跟进，循环自然收束。
       return;
     }
+    // 每节点总轮次上限：`maxReentries` 管的是单个回边目标被打回几次，管不住总轮次——
+    // 嵌套 / 重叠的环体各自在限额内重入，夹在中间的下游节点会被反复重置，轮次一路涨到
+    // 轨迹面板读不下（一轮一个会话目录）。先整体检查再动手，不留下重置了一半的环体。
+    //
+    // 超限与上面的重入耗尽同一条路径，落在**目标**节点上：目标的 run_nodes 写 failed 与
+    // 这一刻，错误记进调度闭包的 firstError，于是调度循环不再启动新节点、在跑的各自按本轮
+    // 收口、pending 的由 writeTerminalState 补 skipped，运行以这条文案 failed。
+    // 不新增轮次行——被拒绝的是这次重入，没有哪一轮真的开过；触发回边的来源节点保持 success，
+    // 它那一轮确实成功了，把错误记到它头上会连它已收束的轮次一起写成 failed。
+    // 也不能在这里直接调 failWholeRun——它只改数据库行，不置这个闭包的 firstError 也不抛，
+    // 内存里的调度会照常继续，完成门禁照跑，writeTerminalState 最后还会把这次失败改写成 success。
+    if ([...affected].some((id) => (states.get(id)?.usedRound ?? -1) + 1 >= MAX_NODE_ROUNDS)) {
+      const message = `节点「${target.node.label}」重入总轮次超过上限 ${MAX_NODE_ROUNDS}`;
+      target.status = "failed";
+      updateRunNode(runId, target.node.id, {
+        status: "failed",
+        error: message,
+        finishedAt: new Date(),
+      });
+      firstError ??= message;
+      return;
+    }
     // 整个环体一起进下一轮：只给被回流的节点加轮次的话，环里其他节点会用
     // 同一个产物路径把上一轮的东西覆盖掉，逐轮回看就没了依据。
     // 轮次号按**节点**取自己的下一个未用值，不是一律 target.round + 1：嵌套 / 重叠回边
@@ -819,6 +842,8 @@ async function executeRun(
       }
       pendingReentries.splice(index, 1);
       applyReentry(entry);
+      // 上限判失败后不再兑现后面的重入：这一刻起整条运行只等在跑的节点收束。
+      if (firstError !== null) return;
     }
   };
 
@@ -954,6 +979,9 @@ async function executeRun(
         // 先兑现已经等到环体收束的重入，再挑就绪节点——顺序反了，这一圈会漏掉刚解冻的节点，
         // 而且下面的 running.size === 0 会在还有重入待执行时把整个运行判成结束。
         applyPendingReentries();
+      }
+      // 重入可能刚判出总轮次超限——那是一次节点失败，从这一刻起同样不再启动新节点。
+      if (firstError === null) {
         for (const state of pickReady()) {
           if (running.size >= MAX_CONCURRENT_NODES) break;
           state.status = "running";

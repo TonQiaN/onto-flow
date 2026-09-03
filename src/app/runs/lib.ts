@@ -106,17 +106,19 @@ export interface NodeUsage {
   cost: number;
 }
 
-/** run_nodes 表行 */
+/**
+ * run_nodes 行的**骨架**：节点的最新状态与累计用量。
+ *
+ * 没有 `inputs` / `outputs` / `snapshot`——那三列是最新一轮的副本，与轮次行上的同名列
+ * 同一份内容，跟着每一帧 snapshot 下发等于把同一份大对象推两遍；抽屉又只认光标所在
+ * 那一轮的值，按轮单取（`/api/runs/[id]/nodes/[nodeId]/rounds/[round]`）。
+ */
 export interface RunNodeRow extends NodeUsage {
   id: string;
   runId: string;
   nodeId: string;
   label: string;
   status: NodeStatus;
-  /** 运行快照：本次执行实际使用的完整配置，可能为 null（输入/输出节点无快照） */
-  snapshot?: unknown;
-  inputs?: Record<string, unknown> | null;
-  outputs?: Record<string, unknown> | null;
   sessionId?: string | null;
   error?: string | null;
   startedAt: string | number | null;

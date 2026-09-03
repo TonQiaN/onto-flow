@@ -337,6 +337,26 @@ describe("visualsAt：活动与退化", () => {
     expect(legacy.nodes.a!.activity).toBeNull();
   });
 
+  it("早于轮次表的失败 / 取消运行：没有轮次行就没有终态覆盖，节点仍是等待", () => {
+    // 覆盖若不看「有没有轮次行」，同一批历史会裂成两副面孔：当时失败的画成失败、
+    // 当时成功的画成等待。没有轮次行就一律等待，是同一条规则。
+    const v = visualsAt({
+      run: makeRun(graph([]), { status: "failed", error: "整运行失败" }),
+      nodes: [
+        nodeRow("a", { status: "failed", error: "节点失败", startedAt: at(0), finishedAt: at(10) }),
+        nodeRow("b", { status: "cancelled", startedAt: at(0), finishedAt: at(10) }),
+      ],
+      rounds: [],
+      events: [],
+      t: at(3600),
+    });
+    expect(v.nodes.a!.status).toBe("pending");
+    expect(v.nodes.a!.error).toBeNull();
+    expect(v.nodes.b!.status).toBe("pending");
+    expect(v.totals.byStatus.pending).toBe(2);
+    expect(v.totals.done).toBe(0);
+  });
+
   it("早于轮次表的运行没有轮次行，节点恒为等待", () => {
     const v = visualsAt({
       run: makeRun(graph([])),

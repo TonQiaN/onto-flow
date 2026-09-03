@@ -581,11 +581,11 @@ test.describe("运行页", () => {
       await expect(canvasNode(page, node.id)).toHaveCount(1);
     }
 
-    // 轮次行只带骨架：重载荷（输入输出与快照）按轮另取，不跟着每一帧 snapshot 走
-    for (const round of detail.rounds) {
-      expect(Object.keys(round)).not.toContain("inputs");
-      expect(Object.keys(round)).not.toContain("outputs");
-      expect(Object.keys(round)).not.toContain("snapshot");
+    // 轮次行与节点行都只带骨架：重载荷（输入输出与快照）按轮另取，不跟着每一帧 snapshot 走
+    for (const row of [...detail.rounds, ...detail.nodes]) {
+      expect(Object.keys(row)).not.toContain("inputs");
+      expect(Object.keys(row)).not.toContain("outputs");
+      expect(Object.keys(row)).not.toContain("snapshot");
     }
 
     // 时间轴：行来自 run_nodes，段来自 run_node_rounds（甲两轮、乙一轮）

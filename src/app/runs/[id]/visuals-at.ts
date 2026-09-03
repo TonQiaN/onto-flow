@@ -6,9 +6,11 @@
  * - 节点取**在 `t` 之前最后开始的那一轮**（同一毫秒开始的取轮次号大的）：`startedAt > t` 等待、
  *   `startedAt ≤ t < finishedAt` 运行中、`finishedAt ≤ t` 取该轮终态；
  *   没有任何轮次行的节点恒为等待（早于轮次表的运行整张图都是等待）。
- * - 在此之上叠加**节点终态覆盖**：`run_nodes` 为 failed / cancelled 且其 `finishedAt ≤ t`
- *   时按该终态画——重入耗尽（最后一轮成功、节点在耗尽时刻翻失败）、整运行失败、
- *   取消都落在这条规则上，它们不属于任何一轮。
+ * - 在此之上叠加**节点终态覆盖**：**该节点有轮次行**、`run_nodes` 为 failed / cancelled 且其
+ *   `finishedAt ≤ t` 时按该终态画——重入耗尽（最后一轮成功、节点在耗尽时刻翻失败）、整运行
+ *   失败、取消都落在这条规则上，它们不属于任何一轮。「有轮次行」是前提：早于轮次表的运行
+ *   一行轮次都没有，覆盖会把当时失败的运行画成失败、当时成功的运行画成等待，同一条历史被
+ *   分成两副面孔；一律等待才是同一条规则。
  * - 连线在上游那一轮已成功收束、且该轮 `exitName` 与连线源端口的出口一致时激活；
  *   轮次没有具名出口（含输入节点）时该节点的全部输出端口生效。
  * - 活动只认 `session_id` 属于当前轮、且 `ts ≤ t` 的事件；事件被清理后退化为轮次级。
@@ -161,6 +163,9 @@ export function visualsAt({ run, nodes, rounds, events, t }: VisualsAtInput): Ru
     else eventsBySession.set(event.sessionId, [event]);
   }
 
+  // 有没有轮次行是终态覆盖的前提，先收一遍：早于轮次表的运行一行都没有，整张图恒为等待
+  const nodesWithRounds = new Set(rounds.map((round) => round.nodeId));
+
   const visuals: Record<string, CanvasNodeVisual> = {};
   const currentRounds = new Map<string, RunNodeRoundRow | null>();
   const byStatus = emptyByStatus();
@@ -182,10 +187,13 @@ export function visualsAt({ run, nodes, rounds, events, t }: VisualsAtInput): Ru
       error = roundEnded ? current.error : null;
     }
 
-    // 节点终态覆盖：取消、整运行失败、重入耗尽都不属于任何一轮，按 run_nodes 的终态与时刻叠加
+    // 节点终态覆盖：取消、整运行失败、重入耗尽都不属于任何一轮，按 run_nodes 的终态与时刻叠加。
+    // 只对有轮次行的节点生效——没有轮次行的节点恒为等待，否则早于轮次表的失败运行会被画成
+    // 失败、成功运行却画成等待，同一批历史两副面孔。
     const nodeFinished = row ? toMillis(row.finishedAt) : null;
     if (
       row &&
+      nodesWithRounds.has(nodeId) &&
       (row.status === "failed" || row.status === "cancelled") &&
       nodeFinished != null &&
       nodeFinished <= t
