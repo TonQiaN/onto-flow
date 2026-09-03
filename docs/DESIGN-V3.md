@@ -17,6 +17,7 @@
 | 3 运行页：`graph` 列、只读画布、回放、抽屉；编辑器剥离跟随 | `cleanup/3-run-page` | #23 | 待合并（stacked 于 #22） |
 | 4 监控台收口为系统健康一页 | `cleanup/4-monitor-health-only` | #24 | 待合并（stacked 于 #23） |
 | 3b 回边重入等待环体收束（第 3 批附加） | `cleanup/3b-reentry-waits-for-loop-body` | #25 | 待合并（stacked 于 #24） |
+| 3c 轮次重载荷按轮另取、maxReentries 上限（第 3 批附加） | `cleanup/3c-round-payload-on-demand` | #26 | 待合并（stacked 于 #25） |
 | 5 `find-simplifications` 第一轮 | `cleanup/5-simplifications-round-1` | — | 未开始 |
 
 顺序 0 → 0a → 0b → 1 → 2 → 3 → 4 → 5；1 与 2 互不依赖，可并行开发、按序合并；3 依赖 2；
@@ -400,7 +401,7 @@ interface RunGraph {
   输出节点与被跳过的轮次是零时长行，纯按时长画就是零宽、点不到；定位仍用精确时刻；没有轮次行的
   节点这一行没有段），事件按 `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
 - **抽屉**（点节点打开，右侧）：错误置顶；「输入输出」「快照」两页签读**光标所在那一轮**的
-  `run_node_rounds` 行；「轨迹」页签对任何运行都一样——调 trajectory 接口拿该节点**全部**会话的轨迹
+  `run_node_rounds` 行（重载荷按轮单取，见上面的数据路径）；「轨迹」页签对任何运行都一样——调 trajectory 接口拿该节点**全部**会话的轨迹
   （接口本就按节点读各轮 JSONL，不依赖轮次表），光标所在轮的会话 id 只用来定位到对应会话并高亮，
   没有轮次行就不定位、整份可检索地展示。复用
   `agent-trajectory.tsx`、`port-value-view.tsx`、`snapshot-view.tsx`；轨迹组件加 `cursorMs`

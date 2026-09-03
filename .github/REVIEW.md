@@ -37,6 +37,7 @@
 - [ ] 没有新增第五种删除保护。四种是：四个可被引用库经 `usedByNames()` 答 409；workflow DELETE 的运行中守卫；folder DELETE 的重名守卫；run DELETE 经 `monitor/cleanup.ts` 的 `deleteRun` 拒绝运行中
 - [ ] 没有手写引用 join：`src/server/references.ts` 是唯一 join 引用关系的模块；Skill / Tool 的引用方是**工作流**（`workflow_skills` / `workflow_tools`，detail「技能集」/「Tool 集」，href 指向工作流设置页），Action 的预载与可见 Tool 不是引用、不进删除保护
 - [ ] 破坏性路径仍只在 `src/server/monitor/cleanup.ts`；没有第二处删 `run_events` / `runs` / `data/runs/<id>`
+- [ ] 轮次行与节点行的线上形态没变（A round row has a skeleton and a payload）：`/api/runs/[id]` 与 SSE `snapshot` 帧的 `nodes` 与 `rounds` 都只有骨架，且是 `listNodeSkeletons` / `listRoundSkeletons`（`src/server/run-rounds.ts`）在 `select` 时就不取重载荷，不是取回来再删（`run_nodes` 上那三列是最新一轮的副本，带上就是把同一份大对象推两遍）；`src/app/runs/lib.ts` 的 `RunNodeRow` 是对应的骨架类型；`inputs` / `outputs` / `snapshot` 只经 `/api/runs/[id]/nodes/[nodeId]/rounds/[round]` 按轮出去，抽屉在页签打开或换轮时取一轮并缓存，停在轨迹页签一条都不发
 - [ ] 清理的保留分层没变（A round row has a skeleton and a payload）：events 目标删 `run_events` 并把 `run_node_rounds` **与 `run_nodes`** 的 `inputs` / `outputs` / `snapshot` 一起置空（后者是最新一轮的副本，漏了就仍整行经 `/api/runs/[id]` 返回），**不删行**；置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不是「该运行有够龄事件行」——免费的输入→输出运行与首个事件前就失败的 Action 没有事件行，同样要被置空并计进预览；runs 目标与 `deleteRun` 才随 `runs` 级联删掉整行；预览与真做用同一份统计（被置空的轮次行数 / 节点行数，以及级联的轮次行数）
 - [ ] 文件夹路径一律用 `isFolderEntityKind` 守门；工作流没有进文件夹（ADR-0005）
 
@@ -61,6 +62,7 @@
 - [ ] 运行绝不停留在 `running`：新增的终态路径与 `executeRun` / `cancelRun` / `failWholeRun` / `reconcileOrphanRuns` 一致；`cancelled` 与 `failed` 仍是两个终态，前者 `run.error` 为 null
 - [ ] 轮次行也绝不停留在 `running`（A run never stays `running`, and neither does a round）：上面四条路径加 `runner.ts` 对 `runActionNode` 抛出的 catch，都经 `engine/rounds.ts` 把仍 running 的 `run_node_rounds` 行收口成对应终态，并给被批量跳过的 pending 节点各补一行零时长 `skipped`；`runActionNode` 的骨架行 insert 仍是函数第一条语句，排在任何会抛的准备步骤之前，它的成功收口仍走带 `status = 'running'` 条件的 `settleRoundIfRunning`（取消赶在收束前落下时先到的终态赢），而 `runner.ts` 取消分支那次改写仍是**无条件**的 `settleRound`（反向次序：成功先落、取消后到，`closeRunningRounds` 找不到 running 的行，只有这一处能把轮次行拉回 cancelled）——两处条件性相反是有意的，节点与轮次的终态必须一致
 - [ ] 重入的轮次号按**节点**取自己的下一个未用值（`NodeState.usedRound + 1`），没有回到「触发重入那个节点的轮次 + 1」——嵌套 / 重叠回边会据此撞 `(run_id, node_id, round)` 唯一键；输入 / 输出 / 被跳过的节点同样各占一行轮次（ADR-0018）
+- [ ] 每节点总轮次仍封在 `MAX_NODE_ROUNDS`（100，`src/lib/graph.ts`）：检查在分配下一个轮次号处、对整个受影响集合先查后动；超限与重入耗尽同一条路径、落在**目标**节点上——目标的 `run_nodes` 写 failed + finishedAt + error，错误进调度闭包的 `firstError`，不新增轮次行，触发回边的来源节点保持 success（记到来源头上会把它已成功的那一轮一起写成 failed）；**不是**直接调 `failWholeRun()`（它只改数据库行，不置 `firstError` 也不抛，内存里的调度会继续、完成门禁照跑、`writeTerminalState` 最后把这次失败改写成 success）
 - [ ] 重入仍等环体收束（The workflow graph is not a DAG）：回边满足时只排队（`pendingReentries`），受影响节点里还有在 `running` 表里的就不重置，挂起期间 `pickReady` 也不放它们开跑；重入次数在真正重置时才计；取消与整运行失败让排队中的重入作废。直接在回边满足处重置正在跑的节点 = 串轮 + 运行可能在会话仍在飞时被判结束
 - [ ] 子进程收束失败时运行被隔离（留在 `activeRuns`、保留进程句柄），预览 / 清理 / 删除 / 新运行容量 fail-closed
 - [ ] 看一次运行只有 `/runs/<id>`（ADR-0018）：它只读受理时冻结的 `runs.graph`，不回查 `workflow_nodes` / `workflow_edges`；编辑器没有运行条、并行切换器与 `?runId=` 深链，发起后跳运行页；导航「运行中」面板每一路深链 `/runs/<id>`

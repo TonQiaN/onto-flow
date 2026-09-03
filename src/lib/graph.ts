@@ -36,6 +36,24 @@ export interface ResolvedNode {
   onExhausted?: "fail" | "accept";
 }
 
+/**
+ * 重入上限的写边界上限。一轮开一个会话目录，而 `readAgentTrajectory` 读到第
+ * `MAX_SESSION_FILES`（128，src/server/harness/trajectory.ts）个就抛——上限再高，
+ * 轨迹页签会整块打不开。留出余量封在 100；写边界（`parseActionPayload`）与 Action
+ * 编辑器读同一个常量，客户端不能从 `@/server` 引运行时值，所以它落在这个纯模块里。
+ */
+export const MAX_REENTRIES = 100;
+
+/**
+ * 一个节点在一次运行里允许的总轮次上限。与 `MAX_REENTRIES` 同源同值：一轮开一个会话目录，
+ * `readAgentTrajectory` 读到第 `MAX_SESSION_FILES`（128）个就抛。
+ *
+ * `MAX_REENTRIES` 管的是**单个回边目标**被打回几次，管不住总轮次：嵌套或重叠的环体各自
+ * 在限额内重入，夹在中间的下游 Action 会被反复重置，轮次一路涨到轨迹面板打不开。
+ * 执行器给节点分配下一个轮次号时按这个上限收口整条运行。
+ */
+export const MAX_NODE_ROUNDS = 100;
+
 export interface GraphEdge {
   id: string;
   sourceNodeId: string;

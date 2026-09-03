@@ -28,6 +28,7 @@ import {
   ReferencesPanel,
   RevisionPanel,
 } from "@/components/library";
+import { MAX_REENTRIES } from "@/lib/graph";
 import { estimateTokens } from "@/lib/workflow-settings";
 import {
   type ActionDto,
@@ -222,6 +223,9 @@ export function ActionEditor({
     if (!name.trim()) return "名称不能为空";
     if (!prompt.trim()) return "Prompt 不能为空";
     if (!modelId) return "请选择模型";
+    if (!Number.isSafeInteger(maxReentries) || maxReentries < 0 || maxReentries > MAX_REENTRIES) {
+      return `重入上限必须是 0 到 ${MAX_REENTRIES} 之间的整数`;
+    }
     for (const [label, ports] of [
       ["输入", inputPorts],
       ["输出", outputPorts],
@@ -595,6 +599,7 @@ export function ActionEditor({
                   <input
                     type="number"
                     min={0}
+                    max={MAX_REENTRIES}
                     value={maxReentries}
                     onChange={(e) => setMaxReentries(Number(e.target.value))}
                     className="w-20 rounded-md border border-zinc-300 px-3 py-1.5 text-sm focus:border-zinc-500 focus:outline-none"
@@ -609,7 +614,8 @@ export function ActionEditor({
                   </select>
                 </div>
                 <p className="mt-1 text-xs text-zinc-400">
-                  只有被回边指向的 Action 需要它。0 表示不可重入，画布上就连不出回边。
+                  只有被回边指向的 Action 需要它。0 表示不可重入，画布上就连不出回边； 上限{" "}
+                  {MAX_REENTRIES}——一轮开一个会话，轨迹面板读不下更多。
                 </p>
               </div>
               {initial && refCount > 0 && (

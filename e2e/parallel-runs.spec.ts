@@ -27,15 +27,21 @@ interface RunDetail {
     /** 受理时冻结的图（ADR-0018）：运行页只读它 */
     graph: { nodes: Array<{ id: string }>; edges: unknown[] };
   };
+  /** 节点行只带骨架：这一轮的输入输出与快照按轮另取（ADR-0018） */
   nodes: Array<{
     nodeId: string;
     status: string;
     error: string | null;
-    outputs: Record<
-      string,
-      { kind: string; text?: string; file?: { path: string; name: string } }
-    > | null;
   }>;
+  rounds: Array<{ nodeId: string; round: number }>;
+}
+
+/** 一轮的重载荷，`GET /api/runs/[id]/nodes/[nodeId]/rounds/[round]` 的响应 */
+interface RoundPayload {
+  outputs: Record<
+    string,
+    { kind: string; text?: string; file?: { path: string; name: string } }
+  > | null;
 }
 
 /** 直接读 OS 进程表；run.startedAt 只代表受理，不能证明实际 harness 执行重叠。 */
@@ -169,7 +175,14 @@ test.describe("并行运行", () => {
       const index = runIds.indexOf(runId);
       const outputNode = detail.nodes.find((n) => n.nodeId === outputNodeId);
       expect(outputNode?.status, `${label} 输出节点状态`).toBe("success");
-      const value = outputNode?.outputs?.value;
+      // 产物值不在节点骨架里，按轮取：免费的直通运行只有第 0 轮。
+      const outputRound = detail.rounds.find((r) => r.nodeId === outputNodeId);
+      expect(outputRound, `${label} 输出节点轮次行`).toBeTruthy();
+      const payloadRes = await request.get(
+        `/api/runs/${runId}/nodes/${outputNodeId}/rounds/${outputRound!.round}`,
+      );
+      expect(payloadRes.ok(), `${label} 轮次重载荷通道`).toBeTruthy();
+      const value = ((await payloadRes.json()) as RoundPayload).outputs?.value;
       expect(value?.kind, `${label} 直通值应为文件引用`).toBe("file");
       expect(value?.file?.name, `${label} 物化文件按节点名命名`).toBe("输入.md");
       const fileRes = await request.get(
@@ -192,7 +205,14 @@ test.describe("并行运行", () => {
     const secondRunId = runIds[1];
     const firstDetail = details.get(firstRunId)!;
     const secondDetail = details.get(secondRunId)!;
-    const secondValue = secondDetail.nodes.find((n) => n.nodeId === outputNodeId)!.outputs!.value;
+    const secondRound = secondDetail.rounds.find((r) => r.nodeId === outputNodeId)!;
+    const secondValue = (
+      (await (
+        await request.get(
+          `/api/runs/${secondRunId}/nodes/${outputNodeId}/rounds/${secondRound.round}`,
+        )
+      ).json()) as RoundPayload
+    ).outputs!.value;
     const crossRun = await request.get(
       `/api/runs/${firstRunId}/files?path=${encodeURIComponent(secondValue.file!.path)}`,
     );

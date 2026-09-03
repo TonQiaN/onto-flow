@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as schema from "../../db/schema";
+import { MAX_NODE_ROUNDS } from "../../lib/graph";
 import type { PortValue } from "../../lib/values";
 import type { ResolvedActionDefinition, ResolvedWorkflow } from "../resolve";
 import type { SettingsDocument } from "../settings";
@@ -1914,6 +1915,106 @@ describe("冻结图与轮次行", () => {
     expect(closed.finishedAt).not.toBeNull();
     expect(closed.error).toBe("进程重启，运行被中断");
   });
+});
+
+describe("每节点总轮次上限", () => {
+  it("嵌套环体把下游节点推过上限时整条运行失败，没有行残留 running", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const graph = nestedLoopWorkflow();
+    // 单个回边目标的 maxReentries 给足：本用例要撞的是**总轮次**上限，不是它。
+    for (const node of graph.nodes) {
+      if (node.kind === "action") node.maxReentries = MAX_NODE_ROUNDS * 2;
+    }
+    controls.resolveWorkflow.mockResolvedValue(graph);
+    // 初审永远不通过：内环一直把改写 / 初审推向下一轮，两个节点的总轮次一路长。
+    const calls = new Map<string, number>();
+    // 复刻 action.ts 的落库：轮次行由它写，来源节点最后一轮到底是不是 success 才验得了。
+    controls.runActionNode.mockImplementation(
+      async (ctx: { runId: string; node: { id: string }; round: number }) => {
+        calls.set(ctx.node.id, (calls.get(ctx.node.id) ?? 0) + 1);
+        const key = { runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round };
+        beginRound({ ...key, sessionId: ctx.node.id, startedAt: new Date() });
+        const settle = (outputs: Record<string, PortValue>, exit: string | null) => {
+          settleRoundIfRunning({
+            ...key,
+            status: "success",
+            finishedAt: new Date(),
+            exitName: exit,
+            outputs: outputs as unknown as Record<string, unknown>,
+          });
+          return { outputs, selectedExit: exit };
+        };
+        if (ctx.node.id === "c-node") {
+          return settle({ 初审意见: { kind: "text", text: "再改" } }, "不通过");
+        }
+        if (ctx.node.id === "d-node") {
+          return settle({ 定稿: { kind: "text", text: "定稿" } }, "通过");
+        }
+        const name = ctx.node.id === "a-node" ? "稿件" : "改稿";
+        return settle({ [name]: { kind: "text", text: name } }, null);
+      },
+    );
+
+    const startedRun = await startRun("workflow-nested-loop", {
+      "input-node": { kind: "text", text: "选题" },
+    });
+    expect(startedRun.ok).toBe(true);
+    if (!startedRun.ok) return;
+    const runId = startedRun.runId;
+
+    await vi.waitFor(
+      () => {
+        const run = sqlite.prepare("select status, error from runs where id = ?").get(runId) as {
+          status: string;
+          error: string | null;
+        };
+        expect(run.status).toBe("failed");
+        expect(run.error).toContain(`重入总轮次超过上限 ${MAX_NODE_ROUNDS}`);
+        // 错误指名被封顶的**目标**节点（内环回边打回的是「改写」）。
+        expect(run.error).toContain("改写");
+      },
+      { timeout: 20_000 },
+    );
+
+    const rows = roundRows(runId);
+    // 上限之内的轮次都留在盘上，一个节点最多 MAX_NODE_ROUNDS 轮。
+    const perNode = new Map<string, number>();
+    for (const row of rows) perNode.set(row.nodeId, (perNode.get(row.nodeId) ?? 0) + 1);
+    expect(Math.max(...perNode.values())).toBe(MAX_NODE_ROUNDS);
+    for (const [nodeId, count] of perNode) {
+      expect([nodeId, count <= MAX_NODE_ROUNDS]).toEqual([nodeId, true]);
+    }
+    // 上限触发后一个新节点都没再开：环内两个 Action 各正好跑满上限，没有第 101 轮。
+    expect(calls.get("b-node")).toBe(MAX_NODE_ROUNDS);
+    expect(calls.get("c-node")).toBe(MAX_NODE_ROUNDS);
+    expect(calls.get("a-node")).toBe(1);
+    // 收口：没有行残留 running，pending 的节点各得一行 skipped，节点终态里也没有 pending。
+    expect(rows.filter((row) => row.status === "running")).toEqual([]);
+    const nodeStates = sqlite
+      .prepare("select node_id as nodeId, status, error from run_nodes where run_id = ?")
+      .all(runId) as Array<{ nodeId: string; status: string; error: string | null }>;
+    expect(
+      nodeStates.filter((row) => row.status === "running" || row.status === "pending"),
+    ).toEqual([]);
+    for (const node of nodeStates.filter((row) => row.status === "skipped")) {
+      expect([node.nodeId, rows.some((row) => row.nodeId === node.nodeId)]).toEqual([
+        node.nodeId,
+        true,
+      ]);
+    }
+    // 只有目标节点被写成 failed，运行页有地方可指。
+    const blamed = nodeStates.filter((row) => row.error?.includes("重入总轮次超过上限"));
+    expect(blamed.map((row) => [row.nodeId, row.status])).toEqual([["b-node", "failed"]]);
+    // 来源节点（触发回边的初审）和它最后一轮的轮次行仍是 success：那一轮确实成功了，
+    // 错误不该记到它头上，更不该把它已收束的轮次改写成 failed。
+    expect(nodeStates.find((row) => row.nodeId === "c-node")?.status).toBe("success");
+    const sourceRounds = rows.filter((row) => row.nodeId === "c-node");
+    expect(sourceRounds.length).toBe(MAX_NODE_ROUNDS);
+    expect(sourceRounds.at(-1)).toMatchObject({ round: MAX_NODE_ROUNDS - 1, status: "success" });
+    expect(sourceRounds.every((row) => row.status === "success")).toBe(true);
+    // 被封顶的目标不新增轮次行：被拒绝的是这次重入，没有哪一轮真的开过。
+    expect(rows.filter((row) => row.nodeId === "b-node").length).toBe(MAX_NODE_ROUNDS);
+  }, 30_000);
 });
 
 describe("回边重入等待环体收束", () => {

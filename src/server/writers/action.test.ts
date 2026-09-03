@@ -1,5 +1,6 @@
 /** Action 写入测试：循环契约与预载技能都要真实持久化，不只进修订 payload。 */
 import { beforeEach, describe, expect, it } from "vitest";
+import { MAX_REENTRIES } from "@/lib/graph";
 import { createTestDb, resetTestDb } from "./test-db";
 
 const { sqlite } = await createTestDb();
@@ -51,6 +52,17 @@ describe("Action 循环字段写入", () => {
     expect(updated.ok).toBe(true);
     if (!updated.ok) return;
     expect(updated.data).toMatchObject({ maxReentries: 5, onExhausted: "fail" });
+  });
+
+  it("重入上限超过 MAX_REENTRIES 被 400 拒绝：轨迹接口读满 128 个会话目录就抛", () => {
+    const created = createAction(payload(MAX_REENTRIES + 1, "fail"));
+    expect(created.ok).toBe(false);
+    if (created.ok) return;
+    expect(created.status).toBe(400);
+    expect(created.error).toContain(String(MAX_REENTRIES));
+
+    const ok = createAction(payload(MAX_REENTRIES, "fail"));
+    expect(ok.ok).toBe(true);
   });
 });
 

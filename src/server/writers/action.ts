@@ -10,6 +10,7 @@ import {
   skills,
   tools,
 } from "@/db";
+import { MAX_REENTRIES } from "@/lib/graph";
 import { recordRevision } from "@/server/revisions";
 import { asObject, parseIdArray, type WriteResult, writeFail, writeOk } from "./types";
 
@@ -182,8 +183,9 @@ export function parseActionPayload(raw: unknown): WriteResult<ActionPayload> {
   const rawReentries = body.maxReentries;
   const maxReentries =
     rawReentries === undefined || rawReentries === null ? 0 : Number(rawReentries);
-  if (!Number.isSafeInteger(maxReentries) || maxReentries < 0) {
-    return writeFail(400, "重入上限必须是非负整数");
+  // 上限封在 MAX_REENTRIES：一轮一个会话目录，轨迹接口读满 128 个就抛（见常量注释）
+  if (!Number.isSafeInteger(maxReentries) || maxReentries < 0 || maxReentries > MAX_REENTRIES) {
+    return writeFail(400, `重入上限必须是 0 到 ${MAX_REENTRIES} 之间的整数`);
   }
   const rawExhausted = body.onExhausted === undefined ? "fail" : body.onExhausted;
   if (rawExhausted !== "fail" && rawExhausted !== "accept") {
