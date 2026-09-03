@@ -1,8 +1,5 @@
 # 用 oxc 工具链而非 ESLint
 
-> 已定、随 [DESIGN-V3](../DESIGN-V3.md) 第 0a / 0b 批落地（PR #19、#20）；在那两批合并前，仓库的门禁
-> 仍只是 `tsc` + vitest + `next build`，`package.json` 里还没有 lint / fmt 脚本。落地时删掉本段。
-
 仓库的 lint 与 format 门禁是 oxlint（`--type-aware`，经 `oxlint-tsgolint`）与 oxfmt，进 CI 的
 `check` 作业与 `npm run check`（typecheck → lint → fmt:check → test）；knip 先作为
 `find-simplifications` skill 的线索工具，误报调零后提为第三道门。不加 git hook，CI 与
