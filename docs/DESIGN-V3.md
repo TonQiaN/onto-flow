@@ -303,11 +303,18 @@
    `<节点id>#<轮次+1>`，见 `engine/action.ts`）。列保持可空只是为了早于本批的历史行；新写入的事件
    没有一条允许为 null，`runner.test.ts` 断言之。
 
-**数据路径**：`GET /api/runs/[id]` 返回 `{ run, nodes, rounds }`；SSE `/api/runs/[id]/events` 的
+**数据路径**：`GET /api/runs/[id]` 返回 `{ run, nodes, rounds }`，SSE `/api/runs/[id]/events` 的
 `snapshot` 帧同样带 `rounds`（轮次行有变化就重发 snapshot，与 `nodes` 同一指纹），`log` 帧就是带
-`sessionId` 的 `run_events` 行。运行状态只从这两处取；抽屉的轨迹页签仍按需调用现有的
+`sessionId` 的 `run_events` 行——但两处的 `rounds` 都**只带骨架列**（轮次、会话、起止、终态、出口、
+错误），不带 `inputs` / `outputs` / `snapshot`：快照含技能集全文，循环运行每轮一份，SSE 每 500 ms
+的轮询一有变化就整份重发，会把页面与服务端一起拖慢。抽屉打开某一轮时另行
+`GET /api/runs/[id]/nodes/[nodeId]/rounds/[round]` 取这一轮的重载荷（`handle()` 里，404 为无此轮，
+置空过的列返回 null）。运行状态只从这两处取；抽屉的轨迹页签仍按需调用现有的
 `GET /api/runs/[id]/nodes/[nodeId]/trajectory`（会话 JSONL 是轨迹的权威源，事件表里没有它），
-这条接口保留不动。
+这条接口保留不动。`readAgentTrajectory` 最多读 128 个会话目录（`MAX_SESSION_FILES`），超过即抛，
+而 `maxReentries` 今天没有上限——写边界收口：`parseActionPayload` 把 `maxReentries` 限在 `0..100`
+（`MAX_REENTRIES` 常量，`src/app/actions/` 的编辑器同值校验），超出 400，与读侧的上限保持
+「读得下所有轮」的余量；DESIGN.md 的 Action 载荷行同步。
 
 **保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
 重载荷（`inputs` / `outputs` / `snapshot`；快照含 prompt、rule、渲染后的提示与技能集全文，循环运行
