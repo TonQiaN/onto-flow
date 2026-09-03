@@ -254,20 +254,23 @@
    `snapshot`）、结束时 update 终态、`finishedAt`、`exitName`、`outputs`、`error`。**必须有它的原因**：
    `run_nodes` 一个节点只有一行，回边重入会覆盖它的 `startedAt` / `finishedAt` / `outputs` /
    `sessionId` / `snapshot`，只看 `run_nodes` 回放不出「第 1 轮走了打回、第 2 轮走了通过」。
-   `run_nodes` 继续作为节点的**最新状态**行（列表、汇总、快照页签都读它），不再承担轮次历史。
+   `run_nodes` 继续作为节点的**最新状态**行（运行列表与汇总读它；抽屉的三个页签一律读光标所在轮的
+   轮次行，不读它），不再承担轮次历史。
    **每个节点的每一次执行都是一行，不只 Action**：输入节点、输出节点在 `runner.ts` 里直接落成
    success，被跳过的节点落成 skipped，它们从不进 `action.ts`，但 `reenter()` 重置的是回边下游的
    **所有**节点——评审循环里输出节点会在打回的那轮被跳过、在通过的那轮成功，同一节点两次转换。
    所以 `runner.ts` 在给任何节点写 success / skipped 时同样 insert 一行轮次（`sessionId` /
    `inputs` / `outputs` / `snapshot` 为 null，`startedAt` = `finishedAt` = 落态时刻，`round` 随重置递增），
    Action 节点的轮次行由 `action.ts` 写。回放只看轮次行，`run_nodes` 只提供终态覆盖；早于本批的运行
-   没有轮次行，节点恒为等待——同一条规则，没有旧数据分支。**每条终态路径都要收口轮次行**：一轮正常结束由 `action.ts` 写终态；`cancelRun`、
+   没有轮次行，节点恒为等待——同一条规则，没有旧数据分支。**每条终态路径都要收口轮次行**：一轮正常结束由 `action.ts` 写终态；`runActionNode` 抛出（超时、
+   缺结构化输出、声明的产物不在盘上、会话关闭失败）时 `runner.ts` 的 catch 把 `run_nodes` 写成 failed，
+   同一处也要把这一轮的轮次行写成 failed 并补 `finishedAt` 与 error；`cancelRun`、
    `failWholeRun`、`reconcileOrphanRuns` 今天直接改 `run_nodes`，本批同时把该运行里仍为 running 的轮次
    行写成对应终态（cancelled / failed）并补 `finishedAt`，否则回放里会有一段永远在跑的会话；这三条
    路径还会把仍为 pending 的 `run_nodes` 批量改成 skipped（`runner.ts` 与 `reconcile.ts`），它们同样
    要为每个这样的节点 insert 一行零时长的 skipped 轮次（`startedAt` = `finishedAt` = 落态时刻），
-   否则回放到末尾这些节点还是等待。`runner.test.ts` 为四条路径各补一条断言（收口 running 的行 +
-   为 pending 的节点写 skipped 行）。**重入耗尽**（`onExhausted: "fail"`）不是一轮：`reenter()`
+   否则回放到末尾这些节点还是等待。`runner.test.ts` 为五条路径各补一条断言（正常结束、Action 抛出、cancel、failWholeRun、
+   reconcile：收口 running 的行 + 为 pending 的节点写 skipped 行）。**重入耗尽**（`onExhausted: "fail"`）不是一轮：`reenter()`
    把 `run_nodes` 写成 failed 时必须同时把 `run_nodes.finishedAt` 写成耗尽时刻并留下 error，回放据此
    在最后一轮成功之后的那个时刻把节点翻成失败（见下面的推导规则）。
 3. `run_events.session_id: text`：`events.ts` 的通用落库从 `ctx.sessionId` 写入；`action.ts` 里
