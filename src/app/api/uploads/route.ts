@@ -9,8 +9,7 @@ export const dynamic = "force-dynamic";
 
 /** multipart 边界与头部的宽限；真正的文件上限仍由解析后的 File.size 复核。 */
 const MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
-export const MAX_UPLOAD_REQUEST_BYTES =
-  MAX_FILE_INPUT_BYTES + MAX_MULTIPART_OVERHEAD_BYTES;
+export const MAX_UPLOAD_REQUEST_BYTES = MAX_FILE_INPUT_BYTES + MAX_MULTIPART_OVERHEAD_BYTES;
 
 /** 无 Content-Length / 伪造小长度时也逐块硬停，不能先让 formData 把任意大请求吃进内存。 */
 async function readRequestBodyWithinLimit(
@@ -43,10 +42,7 @@ export async function POST(request: Request) {
   // { error } 的 4xx/5xx，不再把未捕获异常直接抛给 Next
   return handle(async () => {
     const contentLength = Number(request.headers.get("content-length"));
-    if (
-      Number.isFinite(contentLength) &&
-      contentLength > MAX_UPLOAD_REQUEST_BYTES
-    ) {
+    if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_REQUEST_BYTES) {
       return jsonError(413, "单个上传文件不能超过 32 MiB");
     }
     const body = await readRequestBodyWithinLimit(request.body);

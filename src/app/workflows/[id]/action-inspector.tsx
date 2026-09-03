@@ -91,26 +91,16 @@ export function ActionInspector({
     };
   }, [target.action.id]);
 
-  const candidateSkills = useMemo(
-    () => pickBySet(skills, sets.skillIds),
-    [skills, sets.skillIds],
-  );
-  const candidateTools = useMemo(
-    () => pickBySet(tools, sets.toolIds),
-    [tools, sets.toolIds],
-  );
+  const candidateSkills = useMemo(() => pickBySet(skills, sets.skillIds), [skills, sets.skillIds]);
+  const candidateTools = useMemo(() => pickBySet(tools, sets.toolIds), [tools, sets.toolIds]);
   /** 已预载 / 已可见却不在工作流集合里的项目名：库页改出来的越界，画布上只能提示 */
   const strayPreloads = useMemo(() => {
     const nameById = new Map(skills.map((s) => [s.id, s.name]));
-    return outsideSet(fresh.preloadSkillIds, sets.skillIds).map(
-      (id) => nameById.get(id) ?? id,
-    );
+    return outsideSet(fresh.preloadSkillIds, sets.skillIds).map((id) => nameById.get(id) ?? id);
   }, [fresh.preloadSkillIds, sets.skillIds, skills]);
   const strayTools = useMemo(() => {
     const nameById = new Map(tools.map((t) => [t.id, t.name]));
-    return outsideSet(fresh.toolIds, sets.toolIds).map(
-      (id) => nameById.get(id) ?? id,
-    );
+    return outsideSet(fresh.toolIds, sets.toolIds).map((id) => nameById.get(id) ?? id);
   }, [fresh.toolIds, sets.toolIds, tools]);
 
   if (!ready) {

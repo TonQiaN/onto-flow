@@ -19,11 +19,11 @@ describe("并行产物标记", () => {
   });
 
   it("混入其他运行标记时失败", () => {
-    expect(
-      checkParallelMarker(`结果：${markers[1]} / ${markers[2]}`, markers[1], markers),
-    ).toEqual({
-      ok: false,
-      error: "产物混入了其他运行的标记——工作区串号！",
-    });
+    expect(checkParallelMarker(`结果：${markers[1]} / ${markers[2]}`, markers[1], markers)).toEqual(
+      {
+        ok: false,
+        error: "产物混入了其他运行的标记——工作区串号！",
+      },
+    );
   });
 });

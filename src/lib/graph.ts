@@ -130,10 +130,7 @@ export function classifyEdges(
   return { backEdgeIds };
 }
 
-export function validateGraph(
-  nodes: ResolvedNode[],
-  edges: GraphEdge[],
-): ValidationIssue[] {
+export function validateGraph(nodes: ResolvedNode[], edges: GraphEdge[]): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
 
@@ -176,9 +173,7 @@ export function validateGraph(
   }
 
   // 输入端口可以接多条入线（那就是汇总），但不能一条都没有：没有入线的口永远喂不上。
-  const incoming = new Set(
-    edges.map((e) => `${e.targetNodeId} ${e.targetPort}`),
-  );
+  const incoming = new Set(edges.map((e) => `${e.targetNodeId} ${e.targetPort}`));
   for (const node of nodes) {
     for (const port of node.inputs) {
       if (!incoming.has(`${node.id} ${port.name}`)) {

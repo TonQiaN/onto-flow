@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  packChunkRuns,
-  type SessionEvent,
-} from "@deepseek-ai/dsh-session";
+import { packChunkRuns, type SessionEvent } from "@deepseek-ai/dsh-session";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   encodeSessionSegment,
@@ -32,19 +29,21 @@ describe("Action 会话轨迹", () => {
         "user/message",
         3,
         104,
-        userMessage(
-          '<skill_content name="skill-abc123">核对规范正文</skill_content>',
-          { kind: "skill-invocation", name: "skill-abc123", form: "instructions" },
-        ),
+        userMessage('<skill_content name="skill-abc123">核对规范正文</skill_content>', {
+          kind: "skill-invocation",
+          name: "skill-abc123",
+          form: "instructions",
+        }),
       ),
       event(
         "user/message",
         4,
         104,
-        userMessage(
-          '<skill_content name="skill-unknown">别的正文</skill_content>',
-          { kind: "skill-invocation", name: "skill-unknown", form: "instructions" },
-        ),
+        userMessage('<skill_content name="skill-unknown">别的正文</skill_content>', {
+          kind: "skill-invocation",
+          name: "skill-unknown",
+          form: "instructions",
+        }),
       ),
       event("step/end", 5, 141, { turn: 1, step: 1 }),
       event("turn/end", 6, 142, { turn: 1, reason: { kind: "completed" } }),
@@ -61,7 +60,9 @@ describe("Action 会话轨迹", () => {
     expect(injections[0]?.lane).toBe("input");
     expect(injections[0]?.details[0]?.content).toContain("核对规范正文");
     // 手势本身仍是用户输入行，不被改写。
-    expect(named.records.find((record) => record.kind === "user")?.summary).toContain("/skill-abc123");
+    expect(named.records.find((record) => record.kind === "user")?.summary).toContain(
+      "/skill-abc123",
+    );
 
     const bare = projectSession(parsed, 1, "/Users/example/private/run");
     expect(bare.records.filter((r) => r.kind === "context").map((r) => r.label)).toEqual([
@@ -157,9 +158,7 @@ describe("Action 会话轨迹", () => {
     ]);
     expect(session.records.some((record) => record.kind === "user")).toBe(true);
     expect(
-      session.records.some(
-        (record) => record.kind === "context" && record.label === "工作区指令",
-      ),
+      session.records.some((record) => record.kind === "context" && record.label === "工作区指令"),
     ).toBe(true);
     const assistant = session.records.find((record) => record.kind === "assistant");
     expect(assistant).toMatchObject({
@@ -253,18 +252,15 @@ describe("Action 会话轨迹", () => {
         cacheWriteTokens: 0,
       },
     });
-    expect(running?.details.find((detail) => detail.label === "回答")?.content).toBe(
-      "新 attempt",
-    );
-    expect(running?.details.map((detail) => detail.content).join("\n")).not.toContain(
-      "旧 attempt",
-    );
+    expect(running?.details.find((detail) => detail.label === "回答")?.content).toBe("新 attempt");
+    expect(running?.details.map((detail) => detail.content).join("\n")).not.toContain("旧 attempt");
     expect(running?.details.find((detail) => detail.label === "时序")?.content).toContain(
       '"firstTokenAt": 104',
     );
-    expect(
-      partial.records.find((record) => record.label === "模型请求重试 #1"),
-    ).toMatchObject({ state: "error", summary: "上游暂时不可用" });
+    expect(partial.records.find((record) => record.label === "模型请求重试 #1")).toMatchObject({
+      state: "error",
+      summary: "上游暂时不可用",
+    });
 
     const settled = projectSession(
       parseSessionJsonl(
@@ -303,12 +299,7 @@ describe("Action 会话轨迹", () => {
         text: "尚未完成",
       }),
     ];
-    const crashed = projectSession(
-      parseSessionJsonl(jsonl(...openEvents)),
-      1,
-      "",
-      false,
-    );
+    const crashed = projectSession(parseSessionJsonl(jsonl(...openEvents)), 1, "", false);
     expect(crashed).toMatchObject({
       status: "interrupted",
       finishedAt: 104,
@@ -397,11 +388,7 @@ describe("Action 会话轨迹", () => {
       startedAt: 110,
       finishedAt: 115,
     });
-    expect(tool?.details.map((detail) => detail.label)).toEqual([
-      "参数",
-      "结果",
-      "展示元数据",
-    ]);
+    expect(tool?.details.map((detail) => detail.label)).toEqual(["参数", "结果", "展示元数据"]);
     expect(tool?.details[0]).toMatchObject({ format: "json", truncated: false });
   });
 
@@ -445,9 +432,7 @@ describe("Action 会话轨迹", () => {
 
     const session = projectSession(parseSessionJsonl(content), 1);
     const tool = session.records.find((record) => record.kind === "tool");
-    expect(tool?.details.find((value) => value.label === "结果")?.content).toContain(
-      "[图片]",
-    );
+    expect(tool?.details.find((value) => value.label === "结果")?.content).toContain("[图片]");
     const attachment = tool?.details.find((value) => value.label === "结果附件");
     expect(attachment).toMatchObject({ format: "json", truncated: false });
     expect(JSON.parse(attachment?.content ?? "null")).toEqual([
@@ -538,11 +523,13 @@ describe("Action 会话轨迹", () => {
     });
     expect(result.available).toBe(true);
     if (!result.available) throw new Error("测试夹具应有轨迹");
-    expect(result.sessions.map(({ id, status, finishedAt }) => ({
-      id,
-      status,
-      finishedAt,
-    }))).toEqual([
+    expect(
+      result.sessions.map(({ id, status, finishedAt }) => ({
+        id,
+        status,
+        finishedAt,
+      })),
+    ).toEqual([
       { id: "node-a", status: "interrupted", finishedAt: 101 },
       { id: "node-a#2", status: "running", finishedAt: null },
     ]);
@@ -553,10 +540,7 @@ describe("Action 会话轨迹", () => {
       "缺少合法 header",
     );
 
-    const base = jsonl(
-      header("node-a", 100),
-      event("turn/start", 0, 101, { turn: 1 }),
-    );
+    const base = jsonl(header("node-a", 100), event("turn/start", 0, 101, { turn: 1 }));
     const halfTail = `${base}{"type":"assistant/chunk"`;
     expect(parseSessionJsonl(halfTail).events).toHaveLength(1);
 
@@ -570,26 +554,23 @@ describe("Action 会话轨迹", () => {
     )}\n`;
     expect(() => parseSessionJsonl(badCommitted)).toThrow("第 3 行不是合法 JSON");
 
-    const gap = jsonl(
-      header("node-a", 100),
-      event("turn/start", 1, 101, { turn: 1 }),
-    );
+    const gap = jsonl(header("node-a", 100), event("turn/start", 1, 101, { turn: 1 }));
     expect(() => parseSessionJsonl(gap)).toThrow("事件 seq 不连续");
 
     const futureVersion = jsonl({ ...header("node-a", 100), version: 999 });
     expect(() => parseSessionJsonl(futureVersion)).toThrow("版本不受支持");
     expect(() =>
-      parseSessionJsonl(
-        jsonl({ type: "session", version: 0, id: "node-a", createdAt: 100 }),
-      ),
+      parseSessionJsonl(jsonl({ type: "session", version: 0, id: "node-a", createdAt: 100 })),
     ).toThrow("缺少合法 header");
   });
 
   it("未知 required event 失败关闭，未知 ignorable event 可以跳过", () => {
-    const required = jsonl(
-      header("node-a", 100),
-      { type: "future/required", seq: 0, time: 101, data: {} },
-    );
+    const required = jsonl(header("node-a", 100), {
+      type: "future/required",
+      seq: 0,
+      time: 101,
+      data: {},
+    });
     expect(() => parseSessionJsonl(required)).toThrow("未知 required event");
 
     const ignorable = jsonl(
@@ -720,12 +701,7 @@ function header(id: string, createdAt: number, cwd?: string): Record<string, unk
   };
 }
 
-function event(
-  type: string,
-  seq: number,
-  time: number,
-  data: unknown,
-): Record<string, unknown> {
+function event(type: string, seq: number, time: number, data: unknown): Record<string, unknown> {
   return { type, seq, time, data };
 }
 
@@ -845,7 +821,10 @@ describe("上下文压缩轨迹", () => {
               id: "checkpoint",
               source: { kind: "plugin", plugin: "compact", compactionId: "c-1" },
               content: [
-                { type: "text", text: "This is an automatically generated checkpoint.\n\n<compacted-summary>" },
+                {
+                  type: "text",
+                  text: "This is an automatically generated checkpoint.\n\n<compacted-summary>",
+                },
                 { type: "text", text: summaryText },
                 { type: "text", text: "</compacted-summary>" },
               ],
@@ -999,7 +978,9 @@ describe("上下文压缩轨迹", () => {
               role: "user",
               id: "checkpoint",
               source: { kind: "plugin", plugin: "compact", compactionId: "c-elsewhere" },
-              content: [{ type: "text", text: "<compacted-summary>旧对话摘要</compacted-summary>" }],
+              content: [
+                { type: "text", text: "<compacted-summary>旧对话摘要</compacted-summary>" },
+              ],
             },
             { op: "replace", start: 1, end: 1 },
             [1],

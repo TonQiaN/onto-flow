@@ -61,9 +61,7 @@ export function parseListQuery(url: string): ListQuery {
 
   const sizeRaw = Number.parseInt(sp.get("pageSize") ?? "", 10);
   const pageSize =
-    Number.isFinite(sizeRaw) && sizeRaw > 0
-      ? Math.min(sizeRaw, MAX_PAGE_SIZE)
-      : DEFAULT_PAGE_SIZE;
+    Number.isFinite(sizeRaw) && sizeRaw > 0 ? Math.min(sizeRaw, MAX_PAGE_SIZE) : DEFAULT_PAGE_SIZE;
 
   return { q, folderId, locate, sort, page, pageSize };
 }
@@ -136,19 +134,13 @@ export function selectLibraryPage(opts: {
     const assigned = db
       .selectDistinct({ entityId: entityFolders.entityId })
       .from(entityFolders)
-      .where(
-        and(
-          eq(entityFolders.entityKind, kind),
-          inArray(entityFolders.folderId, subtree),
-        ),
-      );
+      .where(and(eq(entityFolders.entityKind, kind), inArray(entityFolders.folderId, subtree)));
     conditions.push(inArray(columns.id, assigned));
   }
 
   const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-  const total =
-    db.select({ n: count() }).from(table).where(where).get()?.n ?? 0;
+  const total = db.select({ n: count() }).from(table).where(where).get()?.n ?? 0;
 
   const allRefCounts = refCounts(kind);
 
@@ -165,8 +157,7 @@ export function selectLibraryPage(opts: {
       .all() as Array<{ id: string; name: string }>;
     rows.sort(
       (a, b) =>
-        (allRefCounts[b.id] ?? 0) - (allRefCounts[a.id] ?? 0) ||
-        a.name.localeCompare(b.name, "zh"),
+        (allRefCounts[b.id] ?? 0) - (allRefCounts[a.id] ?? 0) || a.name.localeCompare(b.name, "zh"),
     );
     if (query.locate !== null) {
       const rank = rows.findIndex((r) => r.id === query.locate);
@@ -187,12 +178,9 @@ export function selectLibraryPage(opts: {
       // 反查页码需要完整有序 id 清单（库规模小，全量可接受）；
       // 切片与反查用同一份清单，保证目标必落在返回页内
       const allIds = (
-        db
-          .select({ id: columns.id })
-          .from(table)
-          .where(where)
-          .orderBy(orderBy)
-          .all() as Array<{ id: string }>
+        db.select({ id: columns.id }).from(table).where(where).orderBy(orderBy).all() as Array<{
+          id: string;
+        }>
       ).map((r) => r.id);
       const rank = allIds.indexOf(query.locate);
       if (rank >= 0) page = Math.floor(rank / query.pageSize) + 1;

@@ -64,22 +64,8 @@ const PORT_KEYS = [
   "artifactPath",
   "exitName",
 ] as const;
-const NODE_KEYS = [
-  "id",
-  "kind",
-  "actionId",
-  "objectTypeId",
-  "label",
-  "x",
-  "y",
-] as const;
-const EDGE_KEYS = [
-  "id",
-  "sourceNodeId",
-  "sourcePort",
-  "targetNodeId",
-  "targetPort",
-] as const;
+const NODE_KEYS = ["id", "kind", "actionId", "objectTypeId", "label", "x", "y"] as const;
+const EDGE_KEYS = ["id", "sourceNodeId", "sourcePort", "targetNodeId", "targetPort"] as const;
 
 function asRecord(value: unknown): Rec | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -165,13 +151,10 @@ function normalizeDefinition(kind: EntityKind, value: unknown): unknown {
   const out = pick(rec, DEFINITION_KEYS[kind]);
   if (kind === "action" && Array.isArray(out.ports))
     out.ports = projectItems(out.ports, PORT_KEYS).sort(comparePorts);
-  if (kind === "skill" && Array.isArray(out.files))
-    out.files = projectSkillFiles(out.files);
+  if (kind === "skill" && Array.isArray(out.files)) out.files = projectSkillFiles(out.files);
   if (kind === "workflow") {
-    if (Array.isArray(out.nodes))
-      out.nodes = projectItems(out.nodes, NODE_KEYS).sort(compareById);
-    if (Array.isArray(out.edges))
-      out.edges = projectItems(out.edges, EDGE_KEYS).sort(compareById);
+    if (Array.isArray(out.nodes)) out.nodes = projectItems(out.nodes, NODE_KEYS).sort(compareById);
+    if (Array.isArray(out.edges)) out.edges = projectItems(out.edges, EDGE_KEYS).sort(compareById);
   }
   return out;
 }
@@ -218,11 +201,7 @@ function formatValue(v: unknown): string {
 }
 
 /** 对象扁平化成 path → 值：`ports[0].name`、`model.displayName` */
-function flatten(
-  value: unknown,
-  prefix: string,
-  out: Map<string, unknown>,
-): Map<string, unknown> {
+function flatten(value: unknown, prefix: string, out: Map<string, unknown>): Map<string, unknown> {
   if (Array.isArray(value)) {
     if (value.length === 0) {
       out.set(prefix || "(root)", "[]");
@@ -237,8 +216,7 @@ function flatten(
       out.set(prefix || "(root)", "{}");
       return out;
     }
-    for (const [k, v] of entries)
-      flatten(v, prefix ? `${prefix}.${k}` : k, out);
+    for (const [k, v] of entries) flatten(v, prefix ? `${prefix}.${k}` : k, out);
     return out;
   }
   out.set(prefix || "(root)", value);
@@ -264,8 +242,7 @@ function diffDefinitions(before: unknown, after: unknown): DiffRow[] {
     const va = formatValue(a.get(path));
     const vb = formatValue(b.get(path));
     if (hasA && hasB) {
-      if (va !== vb)
-        rows.push({ path, type: "changed", before: va, after: vb });
+      if (va !== vb) rows.push({ path, type: "changed", before: va, after: vb });
     } else if (hasB) {
       rows.push({ path, type: "added", before: "", after: vb });
     } else {
@@ -327,9 +304,7 @@ function DiffRowView({ row }: { row: DiffRow }) {
   return (
     <li className={`rounded-md border px-3 py-2 ${style.className}`}>
       <div className="flex items-center gap-2">
-        <span className="rounded bg-white/70 px-1 text-[10px]">
-          {style.label}
-        </span>
+        <span className="rounded bg-white/70 px-1 text-[10px]">{style.label}</span>
         <span className="truncate font-mono text-xs">{row.path}</span>
       </div>
       <div className="mt-1.5 space-y-1.5">
@@ -388,10 +363,9 @@ export function RevisionPanel({
     setDetails({});
     try {
       const [listRes, currentRes] = await Promise.all([
-        fetch(
-          `/api/revisions?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`,
-          { cache: "no-store" },
-        ),
+        fetch(`/api/revisions?kind=${encodeURIComponent(kind)}&id=${encodeURIComponent(id)}`, {
+          cache: "no-store",
+        }),
         fetch(`${ENTITY_KIND_API[kind]}/${encodeURIComponent(id)}`, {
           cache: "no-store",
         }),
@@ -401,16 +375,10 @@ export function RevisionPanel({
         setRevisions(null);
         return;
       }
-      const data = (await listRes.json()) as
-        | RevisionSummary[]
-        | RevisionListResponse;
+      const data = (await listRes.json()) as RevisionSummary[] | RevisionListResponse;
       setRevisions(Array.isArray(data) ? data : (data.items ?? []));
       // 当前定义先归一成与修订 payload 同一形状再入 state，diff 才有可比性
-      setCurrent(
-        currentRes.ok
-          ? currentDefinition(kind, await currentRes.json())
-          : null,
-      );
+      setCurrent(currentRes.ok ? currentDefinition(kind, await currentRes.json()) : null);
     } catch {
       setError("网络错误，无法加载修订历史");
       setRevisions(null);
@@ -461,9 +429,7 @@ export function RevisionPanel({
         setError(await readError(res));
         return;
       }
-      setRevisions((prev) =>
-        (prev ?? []).map((r) => (r.id === revId ? { ...r, ...body } : r)),
-      );
+      setRevisions((prev) => (prev ?? []).map((r) => (r.id === revId ? { ...r, ...body } : r)));
     } catch {
       setError("网络错误，修订未更新");
     } finally {
@@ -475,10 +441,9 @@ export function RevisionPanel({
     setBusyId(revId);
     setError(null);
     try {
-      const res = await fetch(
-        `/api/revisions/${encodeURIComponent(revId)}/restore`,
-        { method: "POST" },
-      );
+      const res = await fetch(`/api/revisions/${encodeURIComponent(revId)}/restore`, {
+        method: "POST",
+      });
       if (!res.ok) {
         setError(await readError(res));
         return;
@@ -542,24 +507,16 @@ export function RevisionPanel({
                     className="min-w-0 flex-1 text-left"
                   >
                     <div className="flex items-center gap-2">
-                      <span className="font-mono text-xs text-zinc-500">
-                        {isOpen ? "▾" : "▸"}
-                      </span>
-                      <span className="text-sm font-medium text-zinc-900">
-                        v{rev.versionNo}
-                      </span>
+                      <span className="font-mono text-xs text-zinc-500">{isOpen ? "▾" : "▸"}</span>
+                      <span className="text-sm font-medium text-zinc-900">v{rev.versionNo}</span>
                       {rev.pinned && (
                         <span className="rounded border border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">
                           已固定
                         </span>
                       )}
-                      <span className="text-xs text-zinc-400">
-                        {formatTime(rev.createdAt)}
-                      </span>
+                      <span className="text-xs text-zinc-400">{formatTime(rev.createdAt)}</span>
                     </div>
-                    <p className="mt-0.5 pl-5 text-xs text-zinc-500">
-                      {rev.note || "（无备注）"}
-                    </p>
+                    <p className="mt-0.5 pl-5 text-xs text-zinc-500">{rev.note || "（无备注）"}</p>
                   </button>
                   <div className="flex shrink-0 gap-2">
                     <button
@@ -605,9 +562,7 @@ export function RevisionPanel({
                       type="button"
                       disabled={busy}
                       onClick={() =>
-                        void patch(rev.id, { note: noteDraft }).then(() =>
-                          setNoteEditId(null),
-                        )
+                        void patch(rev.id, { note: noteDraft }).then(() => setNoteEditId(null))
                       }
                       className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs text-white hover:bg-zinc-700 disabled:opacity-50"
                     >
@@ -626,7 +581,8 @@ export function RevisionPanel({
                 {confirmId === rev.id && (
                   <div className="mt-2 flex items-center gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                     <span className="flex-1">
-                      确认回滚到 v{rev.versionNo}？当前定义会被这一版覆盖（回滚动作本身也会另存一版修订）。
+                      确认回滚到 v{rev.versionNo}
+                      ？当前定义会被这一版覆盖（回滚动作本身也会另存一版修订）。
                     </span>
                     <button
                       type="button"
@@ -651,13 +607,9 @@ export function RevisionPanel({
                     {!details[rev.id] ? (
                       <p className="text-xs text-zinc-400">加载该版本内容…</p>
                     ) : !current ? (
-                      <p className="text-xs text-zinc-400">
-                        当前定义不可读，无法比较。
-                      </p>
+                      <p className="text-xs text-zinc-400">当前定义不可读，无法比较。</p>
                     ) : !diffCache || diffCache.length === 0 ? (
-                      <p className="text-xs text-zinc-500">
-                        与当前定义一致，无差异。
-                      </p>
+                      <p className="text-xs text-zinc-500">与当前定义一致，无差异。</p>
                     ) : (
                       <>
                         <p className="mb-2 text-xs text-zinc-500">

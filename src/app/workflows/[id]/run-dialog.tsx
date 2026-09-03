@@ -145,26 +145,18 @@ export function RunDialog({
                       }}
                       className="block w-full text-xs text-zinc-600 file:mr-3 file:rounded-md file:border-0 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-xs file:text-white hover:file:bg-zinc-700"
                     />
-                    {f.uploading && (
-                      <p className="mt-1 text-xs text-zinc-400">上传中…</p>
-                    )}
+                    {f.uploading && <p className="mt-1 text-xs text-zinc-400">上传中…</p>}
                     {f.file?.kind === "file" && (
-                      <p className="mt-1 text-xs text-emerald-600">
-                        已上传：{f.file.file.name}
-                      </p>
+                      <p className="mt-1 text-xs text-emerald-600">已上传：{f.file.file.name}</p>
                     )}
                   </div>
                 ) : (
                   <textarea
                     value={f.text}
                     disabled={submitting}
-                    onChange={(e) =>
-                      patch(spec.nodeId, { text: e.target.value, error: null })
-                    }
+                    onChange={(e) => patch(spec.nodeId, { text: e.target.value, error: null })}
                     rows={spec.kind === "json" ? 5 : 4}
-                    placeholder={
-                      spec.kind === "json" ? "输入 JSON…" : "输入文本…"
-                    }
+                    placeholder={spec.kind === "json" ? "输入 JSON…" : "输入文本…"}
                     className={`mt-1.5 w-full rounded-md border px-3 py-2 font-mono text-xs focus:outline-none ${
                       f.error
                         ? "border-red-400 focus:border-red-500"
@@ -172,9 +164,7 @@ export function RunDialog({
                     }`}
                   />
                 )}
-                {f.error && (
-                  <p className="mt-1 text-xs text-red-600">{f.error}</p>
-                )}
+                {f.error && <p className="mt-1 text-xs text-red-600">{f.error}</p>}
               </div>
             );
           })}

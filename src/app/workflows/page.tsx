@@ -36,9 +36,7 @@ type WorkflowItem = WorkflowRow & WithLibraryMeta;
 
 export default function WorkflowsPage() {
   return (
-    <Suspense
-      fallback={<p className="p-8 text-sm text-zinc-400">加载工作流…</p>}
-    >
+    <Suspense fallback={<p className="p-8 text-sm text-zinc-400">加载工作流…</p>}>
       <WorkflowsLibrary />
     </Suspense>
   );
@@ -46,8 +44,7 @@ export default function WorkflowsPage() {
 
 function WorkflowsLibrary() {
   const router = useRouter();
-  const { q, sort, page, highlight, setQ, setSort, setPage } =
-    useLibraryQuery();
+  const { q, sort, page, highlight, setQ, setSort, setPage } = useLibraryQuery();
 
   const [data, setData] = useState<ListEnvelope<WorkflowItem> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -139,8 +136,7 @@ function WorkflowsLibrary() {
   }
 
   async function remove(workflow: WorkflowItem) {
-    if (!window.confirm(`确认删除工作流「${workflow.name}」？该操作不可恢复。`))
-      return;
+    if (!window.confirm(`确认删除工作流「${workflow.name}」？该操作不可恢复。`)) return;
     setRowError((prev) => ({ ...prev, [workflow.id]: "" }));
     try {
       const res = await fetch(`/api/workflows/${workflow.id}`, {
@@ -238,10 +234,7 @@ function WorkflowsLibrary() {
                     运行中
                   </span>
                 )}
-                <div
-                  className="flex shrink-0 gap-1"
-                  onClick={(e) => e.stopPropagation()}
-                >
+                <div className="flex shrink-0 gap-1" onClick={(e) => e.stopPropagation()}>
                   <button
                     type="button"
                     onClick={() => setDetail(workflow)}
@@ -277,9 +270,7 @@ function WorkflowsLibrary() {
               </div>
 
               {rowError[workflow.id] && (
-                <p className="mt-2 text-xs text-red-600">
-                  {rowError[workflow.id]}
-                </p>
+                <p className="mt-2 text-xs text-red-600">{rowError[workflow.id]}</p>
               )}
             </div>
           ))}
@@ -297,9 +288,7 @@ function WorkflowsLibrary() {
             className="w-96 rounded-lg border border-zinc-200 bg-white p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2 className="text-base font-semibold text-zinc-900">
-              新建工作流
-            </h2>
+            <h2 className="text-base font-semibold text-zinc-900">新建工作流</h2>
             <input
               autoFocus
               value={createName}
@@ -387,8 +376,7 @@ function WorkflowDrawer({
         workflow?: { name?: string; description?: string };
       };
       if (body.workflow?.name !== undefined) setName(body.workflow.name);
-      if (body.workflow?.description !== undefined)
-        setDescription(body.workflow.description);
+      if (body.workflow?.description !== undefined) setDescription(body.workflow.description);
     } catch {
       // 拉取失败保持当前表单
     }
@@ -436,20 +424,14 @@ function WorkflowDrawer({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/30"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
       <div
         className="flex h-full w-full max-w-xl flex-col bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
           <h2 className="text-base font-semibold text-zinc-900">工作流信息</h2>
-          <button
-            onClick={onClose}
-            className="text-sm text-zinc-400 hover:text-zinc-600"
-          >
+          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-600">
             关闭
           </button>
         </div>
@@ -475,9 +457,7 @@ function WorkflowDrawer({
           {tab === "basic" && (
             <>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  名称
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">名称</span>
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -485,9 +465,7 @@ function WorkflowDrawer({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  描述
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">描述</span>
                 <input
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -517,9 +495,7 @@ function WorkflowDrawer({
             </>
           )}
 
-          {tab === "refs" && (
-            <ReferencesPanel kind="workflow" id={workflow.id} />
-          )}
+          {tab === "refs" && <ReferencesPanel kind="workflow" id={workflow.id} />}
 
           {tab === "revisions" && (
             <RevisionPanel

@@ -69,7 +69,8 @@ describe("技能磁盘投影", () => {
     const slug = skillSlug(skill);
     const dir = path.join(SKILL_LIBRARY_DIR, slug);
     const versionsDir = path.join(SKILL_LIBRARY_DIR, ".versions");
-    const versionsOf = () => fs.readdirSync(versionsDir).filter((name) => name.startsWith(`${slug}-`));
+    const versionsOf = () =>
+      fs.readdirSync(versionsDir).filter((name) => name.startsWith(`${slug}-`));
 
     materializeSkill(skill);
     const first = path.basename(fs.readlinkSync(dir));

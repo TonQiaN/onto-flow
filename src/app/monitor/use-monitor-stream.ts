@@ -29,23 +29,13 @@ import type {
   SessionActivity,
 } from "@/server/monitor/types";
 
-export type {
-  LiveSession,
-  LogItem,
-  MonitorOverview,
-  OverviewPoint,
-  SessionActivity,
-};
+export type { LiveSession, LogItem, MonitorOverview, OverviewPoint, SessionActivity };
 
 const STREAM_URL = "/api/monitor/stream";
 const DEFAULT_LOG_LIMIT = 400;
 const RECONNECT_DELAY_MS = 1500;
 
-export type MonitorConnectionState =
-  | "connecting"
-  | "open"
-  | "reconnecting"
-  | "closed";
+export type MonitorConnectionState = "connecting" | "open" | "reconnecting" | "closed";
 
 export interface MonitorConnection {
   state: MonitorConnectionState;
@@ -79,11 +69,9 @@ const NODE_STATUSES: readonly NodeStatus[] = [
   "cancelled",
 ];
 
-const isDict = (v: unknown): v is Dict =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
+const isDict = (v: unknown): v is Dict => typeof v === "object" && v !== null && !Array.isArray(v);
 
-const num = (v: unknown): number =>
-  typeof v === "number" && Number.isFinite(v) ? v : 0;
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
@@ -103,21 +91,21 @@ function asOverview(raw: unknown): MonitorOverview | null {
   if (!isDict(raw)) return null;
   const live = isDict(raw.live) ? raw.live : {};
   const today = isDict(raw.today) ? raw.today : {};
-  const series: OverviewPoint[] = (
-    Array.isArray(raw.series) ? raw.series : []
-  ).flatMap((item: unknown) => {
-    if (!isDict(item)) return [];
-    return [
-      {
-        hourISO: str(item.hourISO),
-        hourMs: num(item.hourMs),
-        runs: num(item.runs),
-        failed: num(item.failed),
-        tokens: num(item.tokens),
-        cost: num(item.cost),
-      },
-    ];
-  });
+  const series: OverviewPoint[] = (Array.isArray(raw.series) ? raw.series : []).flatMap(
+    (item: unknown) => {
+      if (!isDict(item)) return [];
+      return [
+        {
+          hourISO: str(item.hourISO),
+          hourMs: num(item.hourMs),
+          runs: num(item.runs),
+          failed: num(item.failed),
+          tokens: num(item.tokens),
+          cost: num(item.cost),
+        },
+      ];
+    },
+  );
 
   return {
     live: {
@@ -241,9 +229,7 @@ export function useMonitorStream(options?: {
       setLogs((prev) => {
         const merged = [...prev, ...incoming].sort((a, b) => a.id - b.id);
         const limit = logLimitRef.current;
-        return merged.length > limit
-          ? merged.slice(merged.length - limit)
-          : merged;
+        return merged.length > limit ? merged.slice(merged.length - limit) : merged;
       });
     };
 

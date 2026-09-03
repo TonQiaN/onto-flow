@@ -3,11 +3,7 @@
 import { use } from "react";
 import { Editor } from "./editor";
 
-export default function WorkflowEditorPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default function WorkflowEditorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   return <Editor workflowId={id} />;
 }

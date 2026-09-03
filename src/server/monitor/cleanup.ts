@@ -11,10 +11,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
-import {
-  activeRunExecutionIds,
-  isRunExecutionActive,
-} from "@/server/engine/runner";
+import { activeRunExecutionIds, isRunExecutionActive } from "@/server/engine/runner";
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
 import { dirStat, formatBytes } from "./disk";
 import type { CleanupRequest, CleanupResult, CleanupTarget } from "./types";
@@ -25,10 +22,7 @@ const DAY_MS = 86_400_000;
 export class CleanupError extends Error {}
 
 export function isCleanupTarget(value: unknown): value is CleanupTarget {
-  return (
-    typeof value === "string" &&
-    (CLEANUP_TARGETS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && (CLEANUP_TARGETS as readonly string[]).includes(value);
 }
 
 export function runCleanup(request: CleanupRequest): CleanupResult {
@@ -37,11 +31,7 @@ export function runCleanup(request: CleanupRequest): CleanupResult {
     throw new CleanupError("target 必须是 workspaces / events / runs 之一");
   }
   const beforeDays = request.beforeDays;
-  if (
-    typeof beforeDays !== "number" ||
-    !Number.isInteger(beforeDays) ||
-    beforeDays < 1
-  ) {
+  if (typeof beforeDays !== "number" || !Number.isInteger(beforeDays) || beforeDays < 1) {
     throw new CleanupError("beforeDays 必须是正整数（保留最近 N 天）");
   }
   const dryRun = request.dryRun === true;
@@ -63,11 +53,7 @@ export function runCleanup(request: CleanupRequest): CleanupResult {
  * 删 data/runs/<workflowId>/<runId> 下 N 天前运行的工作区目录，**保留数据库记录**。
  * DB 里查不到的叶子目录按目录 mtime 判断（多半是被删过运行的残留）。
  */
-function cleanWorkspaces(
-  cutoff: number,
-  beforeDays: number,
-  dryRun: boolean,
-): CleanupResult {
+function cleanWorkspaces(cutoff: number, beforeDays: number, dryRun: boolean): CleanupResult {
   const root = path.join(DATA_DIR, "runs");
   const entries = readWorkspaceDirs(root);
   const runRows = db.all<{
@@ -75,9 +61,7 @@ function cleanWorkspaces(
     runDir: string | null;
     startedAt: number;
     status: string;
-  }>(
-    sql`select id, run_dir as runDir, started_at as startedAt, status from runs`,
-  );
+  }>(sql`select id, run_dir as runDir, started_at as startedAt, status from runs`);
   const knownRunIds = new Set(runRows.map((r) => r.id));
   const knownTargets = new Map<string, WorkspaceTarget>();
   const targets = new Map<string, WorkspaceTarget>();
@@ -130,11 +114,7 @@ function cleanWorkspaces(
  * 删 N 天前的 run_events 行（进行中的运行不动）。bytes 是 payload 文本长度的估算，
  * 真删之后跑一次 VACUUM 把空间还给文件系统。
  */
-function cleanEvents(
-  cutoff: number,
-  beforeDays: number,
-  dryRun: boolean,
-): CleanupResult {
+function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): CleanupResult {
   const activeIds = activeRunExecutionIds();
   const activeFilter =
     activeIds.length === 0
@@ -186,11 +166,7 @@ function cleanEvents(
  * 删 N 天前的运行整条记录：run_nodes / run_events / node_usage / run_results 由外键级联清除
  * （db/index.ts 开了 foreign_keys=ON），另外一并删掉它们的工作区目录。
  */
-function cleanRuns(
-  cutoff: number,
-  beforeDays: number,
-  dryRun: boolean,
-): CleanupResult {
+function cleanRuns(cutoff: number, beforeDays: number, dryRun: boolean): CleanupResult {
   const activeIds = activeRunExecutionIds();
   const activeFilter =
     activeIds.length === 0
@@ -330,9 +306,7 @@ function targetFromStoredRunDir(runDir: string | null): WorkspaceTarget | null {
   if (!runDir) return null;
   // runDir 是运行时数据库事实，不是构建输入；下游仍会收敛到 data/runs，禁止 Turbopack
   // 因这个动态值把整个仓库误追踪进服务端产物。
-  return targetFromAbsoluteRunDir(
-    path.resolve(/* turbopackIgnore: true */ process.cwd(), runDir),
-  );
+  return targetFromAbsoluteRunDir(path.resolve(/* turbopackIgnore: true */ process.cwd(), runDir));
 }
 
 /** 把 DB 或目录扫描得来的路径收敛在 data/runs 内，并冻结为同一个清理目标。 */
@@ -346,11 +320,7 @@ function targetFromAbsoluteRunDir(absolutePath: string): WorkspaceTarget {
   }
   const runsRoot = path.join(DATA_DIR, "runs");
   const withinRuns = path.relative(runsRoot, resolved);
-  if (
-    withinRuns === "" ||
-    withinRuns.startsWith("..") ||
-    path.isAbsolute(withinRuns)
-  ) {
+  if (withinRuns === "" || withinRuns.startsWith("..") || path.isAbsolute(withinRuns)) {
     throw new CleanupError("运行目录不在 data/runs 内，已拒绝清理");
   }
   return { relativePath: path.relative(DATA_DIR, resolved), absolutePath: resolved };

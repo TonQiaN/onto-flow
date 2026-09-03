@@ -34,8 +34,7 @@ export async function DELETE(_request: Request, { params }: Params) {
     if (!existing) return jsonError(404, "Action 不存在");
 
     const usedBy = usedByNames("action", id);
-    if (usedBy.length > 0)
-      return jsonError(409, "该 Action 正被工作流引用，无法删除", { usedBy });
+    if (usedBy.length > 0) return jsonError(409, "该 Action 正被工作流引用，无法删除", { usedBy });
 
     db.delete(actions).where(eq(actions.id, id)).run();
     return NextResponse.json({ ok: true });

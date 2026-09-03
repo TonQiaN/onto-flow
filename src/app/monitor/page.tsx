@@ -75,21 +75,15 @@ async function fetchRecentFailures(): Promise<RunListItem[]> {
       return Array.isArray(data) ? (data as RunListItem[]) : [];
     }),
   );
-  const endedAt = (row: RunListItem) =>
-    toMillis(row.finishedAt) ?? toMillis(row.startedAt) ?? 0;
-  return [...failed, ...cancelled]
-    .sort((a, b) => endedAt(b) - endedAt(a))
-    .slice(0, FAILURE_LIMIT);
+  const endedAt = (row: RunListItem) => toMillis(row.finishedAt) ?? toMillis(row.startedAt) ?? 0;
+  return [...failed, ...cancelled].sort((a, b) => endedAt(b) - endedAt(a)).slice(0, FAILURE_LIMIT);
 }
 
 export default function MonitorOverviewPage() {
   const { overview, connection } = useMonitorStream({ logLimit: 1 });
 
   const series = useMemo(
-    () =>
-      overview && overview.series.length > 0
-        ? overview.series
-        : fallbackSeries(),
+    () => (overview && overview.series.length > 0 ? overview.series : fallbackSeries()),
     [overview],
   );
 
@@ -109,8 +103,7 @@ export default function MonitorOverviewPage() {
 
   const today = overview?.today;
   const finished = today ? today.success + today.failed + today.cancelled : 0;
-  const successRate =
-    today && finished > 0 ? (today.success / finished) * 100 : null;
+  const successRate = today && finished > 0 ? (today.success / finished) * 100 : null;
   const loading = overview === null;
 
   // 最近失败：只在「失败/取消计数」或「活跃运行数」变化时重拉
@@ -184,8 +177,7 @@ export default function MonitorOverviewPage() {
               "尚无已结束的运行"
             ) : (
               <>
-                成功率{" "}
-                <Num className="text-zinc-300">{successRate.toFixed(0)}%</Num>
+                成功率 <Num className="text-zinc-300">{successRate.toFixed(0)}%</Num>
                 <span className="ml-2 text-zinc-600">
                   {today?.success ?? 0}/{finished}
                 </span>
@@ -206,10 +198,7 @@ export default function MonitorOverviewPage() {
           value={formatCost(today?.cost ?? 0)}
           tone="emerald"
           hint={
-            <Link
-              href="/monitor/cost"
-              className="underline transition-colors hover:text-zinc-300"
-            >
+            <Link href="/monitor/cost" className="underline transition-colors hover:text-zinc-300">
               成本分析
             </Link>
           }
@@ -280,8 +269,7 @@ export default function MonitorOverviewPage() {
           subtitle="按 node_usage 的消息时间归集"
           right={
             <span className="text-[11px] text-zinc-500">
-              合计{" "}
-              <Num className="text-zinc-300">{formatTokens(totals.tokens)}</Num>
+              合计 <Num className="text-zinc-300">{formatTokens(totals.tokens)}</Num>
               <span className="mx-1.5 text-zinc-700">·</span>
               <Num className="text-zinc-300">{formatCost(totals.cost)}</Num>
             </span>
@@ -315,10 +303,7 @@ export default function MonitorOverviewPage() {
       >
         {failureError ? (
           <div className="p-4">
-            <MonitorErrorBar
-              message={failureError}
-              onRetry={() => void loadFailures(() => true)}
-            />
+            <MonitorErrorBar message={failureError} onRetry={() => void loadFailures(() => true)} />
           </div>
         ) : failures === null ? (
           <p className="px-4 py-10 text-center text-xs text-zinc-600">加载中…</p>

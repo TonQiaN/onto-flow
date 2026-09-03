@@ -17,9 +17,7 @@ import { COMPOSITION_TOGGLE_LABELS } from "@/lib/workflow-settings";
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 function asStrings(value: unknown): string[] {
@@ -173,7 +171,9 @@ export function SettingsSnapshotView({ snapshot }: { snapshot: unknown }) {
                     return (
                       <tr key={key} className="border-t border-zinc-100">
                         <td className="px-3 py-1.5">
-                          <span className="text-zinc-800">{COMPOSITION_TOGGLE_LABELS[key].label}</span>
+                          <span className="text-zinc-800">
+                            {COMPOSITION_TOGGLE_LABELS[key].label}
+                          </span>
                           <span className="ml-2 font-mono text-[11px] text-zinc-400">{key}</span>
                         </td>
                         <td className="px-3 py-1.5">
@@ -240,10 +240,12 @@ export function SettingsSnapshotView({ snapshot }: { snapshot: unknown }) {
             </Row>
             <Row label="指令摘要">
               <span className="font-mono text-xs text-zinc-600">
-                工作流 AGENTS.md {short(snap.workflow.instructionsSha256)} · 默认指令 {short(snap.global.defaultInstructionsSha256)}
+                工作流 AGENTS.md {short(snap.workflow.instructionsSha256)} · 默认指令{" "}
+                {short(snap.global.defaultInstructionsSha256)}
               </span>
               <p className="mt-0.5 text-xs text-zinc-400">
-                正文分别落在运行目录的 workspace/AGENTS.md 与 home/AGENTS.md，这里只记 sha256 前 12 位。
+                正文分别落在运行目录的 workspace/AGENTS.md 与 home/AGENTS.md，这里只记 sha256 前 12
+                位。
               </p>
             </Row>
           </dl>

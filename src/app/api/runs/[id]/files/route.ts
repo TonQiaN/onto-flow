@@ -19,17 +19,10 @@ const PREVIEW_MAX_BYTES = 262_144;
  * 回退；这条路由就是那个唯一的读取通道。路径先经 resolveWithinData 收敛在
  * data/ 内，再要求落在该运行自己的 run_dir 之下——不能拿 A 运行的 id 读 B 的文件。
  */
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
     const { id } = await params;
-    const run = db
-      .select({ runDir: runs.runDir })
-      .from(runs)
-      .where(eq(runs.id, id))
-      .get();
+    const run = db.select({ runDir: runs.runDir }).from(runs).where(eq(runs.id, id)).get();
     if (!run) return jsonError(404, "运行不存在");
     if (!run.runDir) return jsonError(404, "该运行没有工作区目录");
     // Action 执行时可以改名并替换工作区里的任一祖先目录；Node 没有 openat 这类
@@ -107,13 +100,7 @@ export async function GET(
         // 常规文件也允许短读；循环填满所需前缀，尾部未写区域不参与二进制判断。
         let bytesRead = 0;
         while (bytesRead < length) {
-          const count = fs.readSync(
-            fd,
-            buffer,
-            bytesRead,
-            length - bytesRead,
-            bytesRead,
-          );
+          const count = fs.readSync(fd, buffer, bytesRead, length - bytesRead, bytesRead);
           if (count === 0) break;
           bytesRead += count;
         }

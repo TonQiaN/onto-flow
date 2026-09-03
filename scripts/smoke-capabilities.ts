@@ -134,7 +134,9 @@ async function main(): Promise<void> {
   let tool = db.select().from(tools).where(eq(tools.publicName, TOOL_PUBLIC_NAME)).get();
   if (!tool) {
     const id = crypto.randomUUID();
-    db.insert(tools).values({ id, name: `${PREFIX}印章`, ...TOOL_CONTRACT }).run();
+    db.insert(tools)
+      .values({ id, name: `${PREFIX}印章`, ...TOOL_CONTRACT })
+      .run();
     tool = db.select().from(tools).where(eq(tools.id, id)).get()!;
   } else {
     db.update(tools).set(TOOL_CONTRACT).where(eq(tools.id, tool.id)).run();
@@ -159,7 +161,10 @@ async function main(): Promise<void> {
     onExhausted: "fail" as const,
   };
   if (existing) db.update(actions).set(row).where(eq(actions.id, actionId)).run();
-  else db.insert(actions).values({ id: actionId, ...row }).run();
+  else
+    db.insert(actions)
+      .values({ id: actionId, ...row })
+      .run();
   db.delete(actionPorts).where(eq(actionPorts.actionId, actionId)).run();
   db.insert(actionPorts)
     .values({ actionId, direction: "input", name: "题目", objectTypeId: tIn, position: 0 })
@@ -207,13 +212,33 @@ async function main(): Promise<void> {
     .values([
       { id: nIn, workflowId: wf.id, kind: "input", objectTypeId: tIn, label: "题目", x: 0, y: 0 },
       { id: nA, workflowId: wf.id, kind: "action", actionId, label: "报口令", x: 240, y: 0 },
-      { id: nOut, workflowId: wf.id, kind: "output", objectTypeId: tOut, label: "回执", x: 480, y: 0 },
+      {
+        id: nOut,
+        workflowId: wf.id,
+        kind: "output",
+        objectTypeId: tOut,
+        label: "回执",
+        x: 480,
+        y: 0,
+      },
     ])
     .run();
   db.insert(workflowEdges)
     .values([
-      { workflowId: wf.id, sourceNodeId: nIn, sourcePort: "value", targetNodeId: nA, targetPort: "题目" },
-      { workflowId: wf.id, sourceNodeId: nA, sourcePort: "回执", targetNodeId: nOut, targetPort: "value" },
+      {
+        workflowId: wf.id,
+        sourceNodeId: nIn,
+        sourcePort: "value",
+        targetNodeId: nA,
+        targetPort: "题目",
+      },
+      {
+        workflowId: wf.id,
+        sourceNodeId: nA,
+        sourcePort: "回执",
+        targetNodeId: nOut,
+        targetPort: "value",
+      },
     ])
     .run();
 

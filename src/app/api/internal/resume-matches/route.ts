@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { handle } from "@/lib/http";
-import {
-  parseResumeMatchInvocation,
-  startResumeMatch,
-} from "@/server/resume-match";
+import { parseResumeMatchInvocation, startResumeMatch } from "@/server/resume-match";
 import { respond } from "@/server/writers/types";
 
 export const dynamic = "force-dynamic";

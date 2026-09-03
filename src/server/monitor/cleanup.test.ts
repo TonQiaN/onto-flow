@@ -13,11 +13,7 @@ const testPaths = vi.hoisted(() => ({
 vi.mock("@/server/fs-safety", () => ({
   DATA_DIR: testPaths.dataDir,
   resolveWithinData(relPath: string): string {
-    if (
-      relPath.startsWith("/") ||
-      relPath.split(/[\\/]/).includes("..") ||
-      relPath === ""
-    ) {
+    if (relPath.startsWith("/") || relPath.split(/[\\/]/).includes("..") || relPath === "") {
       throw new Error("测试路径越界");
     }
     return `${testPaths.dataDir}/${relPath}`;
@@ -41,9 +37,10 @@ CREATE TABLE node_usage (run_id TEXT NOT NULL);
 `);
 sqlite.pragma("foreign_keys = ON");
 const activeRuns = new Set<string>();
-(globalThis as unknown as { ontoflowDb?: unknown; ontoflowActiveRuns?: Set<string> }).ontoflowDb = drizzle(sqlite, {
-  schema,
-});
+(globalThis as unknown as { ontoflowDb?: unknown; ontoflowActiveRuns?: Set<string> }).ontoflowDb =
+  drizzle(sqlite, {
+    schema,
+  });
 (globalThis as unknown as { ontoflowActiveRuns?: Set<string> }).ontoflowActiveRuns = activeRuns;
 
 const { deleteRun, runCleanup } = await import("./cleanup");
@@ -63,7 +60,9 @@ function storedRunDir(absolutePath: string): string {
 
 beforeEach(() => {
   activeRuns.clear();
-  sqlite.exec("DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM run_results; DELETE FROM runs");
+  sqlite.exec(
+    "DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM run_results; DELETE FROM runs",
+  );
   fs.rmSync(testPaths.dataDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(testPaths.dataDir, "runs"), { recursive: true });
 });
@@ -157,7 +156,9 @@ describe("运行工作区清理", () => {
       .run("run-settling", old, JSON.stringify({ phase: "disposing" }));
     activeRuns.add("run-settling");
 
-    expect(runCleanup({ target: "workspaces", beforeDays: 1, dryRun: true }).affected.count).toBe(0);
+    expect(runCleanup({ target: "workspaces", beforeDays: 1, dryRun: true }).affected.count).toBe(
+      0,
+    );
     expect(runCleanup({ target: "events", beforeDays: 1, dryRun: true }).affected.count).toBe(0);
     expect(runCleanup({ target: "runs", beforeDays: 1, dryRun: true }).affected.count).toBe(0);
     expect(deleteRun("run-settling")).toEqual({
@@ -179,13 +180,7 @@ describe("运行工作区清理", () => {
       .prepare(
         "insert into runs (id, workflow_id, status, run_dir, started_at) values (?, ?, ?, ?, ?)",
       )
-      .run(
-        "run-failed-delete",
-        "workflow-failed-delete",
-        "success",
-        storedRunDir(workspace),
-        old,
-      );
+      .run("run-failed-delete", "workflow-failed-delete", "success", storedRunDir(workspace), old);
     const remove = vi.spyOn(fs, "rmSync").mockImplementationOnce(() => {
       throw new Error("EACCES");
     });
@@ -232,9 +227,7 @@ describe("运行工作区清理", () => {
 
     const deleted = runCleanup({ target: "runs", beforeDays: 1, dryRun: false });
     expect(deleted.affected).toEqual(preview.affected);
-    expect(sqlite.prepare("select id from runs order by id").all()).toEqual([
-      { id: "run-active" },
-    ]);
+    expect(sqlite.prepare("select id from runs order by id").all()).toEqual([{ id: "run-active" }]);
     expect(sqlite.prepare("select run_id as runId from run_results").all()).toEqual([
       { runId: "run-active" },
     ]);

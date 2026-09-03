@@ -21,7 +21,9 @@ import {
 describe("与写入口同一份规则", () => {
   it("公名正则与保留名清单和 src/server/harness/tool-contract.ts 一致", () => {
     expect(TOOL_PUBLIC_NAME_PATTERN.source).toBe(SERVER_PUBLIC_NAME_PATTERN.source);
-    expect([...TOOL_RESERVED_PUBLIC_NAMES].sort()).toEqual([...SERVER_RESERVED_PUBLIC_NAMES].sort());
+    expect([...TOOL_RESERVED_PUBLIC_NAMES].sort()).toEqual(
+      [...SERVER_RESERVED_PUBLIC_NAMES].sort(),
+    );
     expect(TOOL_RESERVED_PUBLIC_NAME_PREFIX).toBe(SERVER_RESERVED_PUBLIC_NAME_PREFIX);
   });
 

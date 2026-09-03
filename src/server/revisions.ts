@@ -13,9 +13,7 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db, revisions, type EntityKind } from "@/db";
 
-export type Result<T> =
-  | { ok: true; data: T }
-  | { ok: false; status: number; error: string };
+export type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
 
 const ok = <T>(data: T): Result<T> => ({ ok: true, data });
 const fail = (status: number, error: string): Result<never> => ({
@@ -40,18 +38,12 @@ export type WriteOutcome =
   | { ok: true; data?: unknown }
   | { ok: false; status: number; error: string };
 
-export type EntityWriter = (
-  id: string,
-  payload: unknown,
-) => WriteOutcome | void;
+export type EntityWriter = (id: string, payload: unknown) => WriteOutcome | void;
 
 const writers = new Map<EntityKind, EntityWriter>();
 
 /** 各库在自己的服务模块顶层调用，声明「这个 kind 怎么写回」 */
-export function registerEntityWriter(
-  kind: EntityKind,
-  writer: EntityWriter,
-): void {
+export function registerEntityWriter(kind: EntityKind, writer: EntityWriter): void {
   writers.set(kind, writer);
 }
 
@@ -65,9 +57,7 @@ function maxVersionNo(kind: EntityKind, entityId: string, conn = db): number {
       v: sql<number>`coalesce(max(${revisions.versionNo}), 0)`,
     })
     .from(revisions)
-    .where(
-      and(eq(revisions.entityKind, kind), eq(revisions.entityId, entityId)),
-    )
+    .where(and(eq(revisions.entityKind, kind), eq(revisions.entityId, entityId)))
     .get();
   return row?.v ?? 0;
 }
@@ -97,10 +87,7 @@ export function recordRevision(
 }
 
 /** 该实体的修订列表，版本号倒序，不含 payload */
-export function listRevisions(
-  kind: EntityKind,
-  entityId: string,
-): RevisionSummary[] {
+export function listRevisions(kind: EntityKind, entityId: string): RevisionSummary[] {
   return db
     .select({
       id: revisions.id,
@@ -112,9 +99,7 @@ export function listRevisions(
       createdAt: revisions.createdAt,
     })
     .from(revisions)
-    .where(
-      and(eq(revisions.entityKind, kind), eq(revisions.entityId, entityId)),
-    )
+    .where(and(eq(revisions.entityKind, kind), eq(revisions.entityId, entityId)))
     .orderBy(desc(revisions.versionNo))
     .all();
 }
@@ -133,8 +118,7 @@ export function patchRevision(
 
   const values: { pinned?: boolean; note?: string } = {};
   if (patch.pinned !== undefined) {
-    if (typeof patch.pinned !== "boolean")
-      return fail(400, "pinned 必须是布尔值");
+    if (typeof patch.pinned !== "boolean") return fail(400, "pinned 必须是布尔值");
     values.pinned = patch.pinned;
   }
   if (patch.note !== undefined) {
@@ -143,12 +127,7 @@ export function patchRevision(
   }
   if (Object.keys(values).length === 0) return ok(existing);
 
-  const row = db
-    .update(revisions)
-    .set(values)
-    .where(eq(revisions.id, revId))
-    .returning()
-    .get();
+  const row = db.update(revisions).set(values).where(eq(revisions.id, revId)).returning().get();
   return ok(row);
 }
 
@@ -174,30 +153,19 @@ export function restoreRevision(
 
   const before = maxVersionNo(rev.entityKind, rev.entityId);
   const outcome = writer(rev.entityId, rev.payload);
-  if (outcome && outcome.ok === false)
-    return fail(outcome.status, outcome.error);
+  if (outcome && outcome.ok === false) return fail(outcome.status, outcome.error);
 
   const note = `回滚到第 ${rev.versionNo} 版`;
   const latest = db
     .select()
     .from(revisions)
-    .where(
-      and(
-        eq(revisions.entityKind, rev.entityKind),
-        eq(revisions.entityId, rev.entityId),
-      ),
-    )
+    .where(and(eq(revisions.entityKind, rev.entityKind), eq(revisions.entityId, rev.entityId)))
     .orderBy(desc(revisions.versionNo))
     .get();
 
   const revision =
     latest && latest.versionNo > before
-      ? db
-          .update(revisions)
-          .set({ note })
-          .where(eq(revisions.id, latest.id))
-          .returning()
-          .get()
+      ? db.update(revisions).set({ note }).where(eq(revisions.id, latest.id)).returning().get()
       : recordRevision(rev.entityKind, rev.entityId, rev.payload, note);
 
   return ok({ revision, restoredFrom: rev.versionNo });

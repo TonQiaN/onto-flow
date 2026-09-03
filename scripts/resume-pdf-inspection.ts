@@ -55,10 +55,9 @@ export function inspectPdfPages(
 ): PdfPageInspection {
   const presentPages = pageImageNumbers(path.join(workspaceDir, "inputs", inputNodeId));
   const present = new Set(presentPages);
-  const missingPages = Array.from(
-    { length: expectedPages },
-    (_value, index) => index + 1,
-  ).filter((page) => !present.has(page));
+  const missingPages = Array.from({ length: expectedPages }, (_value, index) => index + 1).filter(
+    (page) => !present.has(page),
+  );
   return {
     expectedPages,
     presentPages,

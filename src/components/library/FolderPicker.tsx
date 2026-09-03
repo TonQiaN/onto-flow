@@ -91,9 +91,7 @@ export function FolderPicker({
         return;
       }
       const data = (await res.json()) as { folders?: FolderDto[] };
-      setOptions(
-        flattenFolders(Array.isArray(data.folders) ? data.folders : []),
-      );
+      setOptions(flattenFolders(Array.isArray(data.folders) ? data.folders : []));
     } catch {
       setError("网络错误，无法加载文件夹列表");
     }
@@ -106,8 +104,7 @@ export function FolderPicker({
   useEffect(() => {
     if (!open) return;
     const onDocDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node))
-        setOpen(false);
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -131,10 +128,7 @@ export function FolderPicker({
       (r) =>
         hit(r) ||
         rows.some(
-          (o) =>
-            hit(o) &&
-            (o.path.startsWith(`${r.path}/`) ||
-              r.path.startsWith(`${o.path}/`)),
+          (o) => hit(o) && (o.path.startsWith(`${r.path}/`) || r.path.startsWith(`${o.path}/`)),
         ),
     );
   }, [options, trimmed]);
@@ -142,9 +136,7 @@ export function FolderPicker({
   /** 单选即保存；row 为 null = 未归类 */
   const choose = async (row: PickerRow | null) => {
     if (busy) return;
-    const next: FolderRef | null = row
-      ? { id: row.id, name: row.name, path: row.path }
-      : null;
+    const next: FolderRef | null = row ? { id: row.id, name: row.name, path: row.path } : null;
     if ((next?.id ?? null) === (value?.id ?? null)) {
       setOpen(false);
       return;

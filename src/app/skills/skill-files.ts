@@ -75,10 +75,7 @@ export function formatBytes(size: number): string {
 }
 
 /** 上传时的默认路径：目录上传自带相对路径，单文件上传用文件名 */
-export function defaultFilePath(file: {
-  name: string;
-  webkitRelativePath?: string;
-}): string {
+export function defaultFilePath(file: { name: string; webkitRelativePath?: string }): string {
   const relative = file.webkitRelativePath ?? "";
   return relative !== "" ? relative : file.name;
 }

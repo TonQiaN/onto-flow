@@ -25,19 +25,14 @@ export function writeFail<Issue = never>(
 export function respond<T, Issue>(result: WriteResult<T, Issue>): NextResponse {
   return result.ok
     ? NextResponse.json(result.data)
-    : jsonError(
-        result.status,
-        result.error,
-        result.issues ? { issues: result.issues } : undefined,
-      );
+    : jsonError(result.status, result.error, result.issues ? { issues: result.issues } : undefined);
 }
 
 /** 请求体必须是 JSON 对象（非数组、非 null） */
 export function asObject(
   raw: unknown,
 ): { ok: true; body: Record<string, unknown> } | { ok: false } {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
-    return { ok: false };
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return { ok: false };
   return { ok: true, body: raw as Record<string, unknown> };
 }
 

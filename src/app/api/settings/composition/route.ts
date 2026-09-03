@@ -34,7 +34,15 @@ export const dynamic = "force-dynamic";
  * 一行在当前设置下的挂载状态。「会挂载」也覆盖按运行生成的前缀行（MCP、Tool 插件）：
  * 它们的实例数取决于登记与工作流，面板另以 entries 列出本次推导出的每一台。
  */
-type MountedState = "会挂载" | "按运行生成" | "按开关未挂" | "按开关已挂" | "不挂" | "备选" | "库" | "自有";
+type MountedState =
+  | "会挂载"
+  | "按运行生成"
+  | "按开关未挂"
+  | "按开关已挂"
+  | "不挂"
+  | "备选"
+  | "库"
+  | "自有";
 
 function mountedState(row: PluginCatalogRow, mountedIds: ReadonlySet<string>): MountedState {
   if (row.decision === "不挂" || row.decision === "待定") return "不挂";

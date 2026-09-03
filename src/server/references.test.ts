@@ -32,11 +32,29 @@ describe("Skill 与 Tool 的引用方", () => {
 
     // 按工作流名排序（SQLite 二进制序：简 < 采）
     expect(referencesOf("skill", "skill-a")).toEqual([
-      { kind: "workflow", id: wfB, name: "简历", detail: "技能集", href: `/workflows/${wfB}/settings` },
-      { kind: "workflow", id: wfA, name: "采购", detail: "技能集", href: `/workflows/${wfA}/settings` },
+      {
+        kind: "workflow",
+        id: wfB,
+        name: "简历",
+        detail: "技能集",
+        href: `/workflows/${wfB}/settings`,
+      },
+      {
+        kind: "workflow",
+        id: wfA,
+        name: "采购",
+        detail: "技能集",
+        href: `/workflows/${wfA}/settings`,
+      },
     ]);
     expect(referencesOf("tool", "tool-1")).toEqual([
-      { kind: "workflow", id: wfB, name: "简历", detail: "Tool 集", href: `/workflows/${wfB}/settings` },
+      {
+        kind: "workflow",
+        id: wfB,
+        name: "简历",
+        detail: "Tool 集",
+        href: `/workflows/${wfB}/settings`,
+      },
     ]);
     expect(referencesOf("tool", "tool-2")).toEqual([]);
 

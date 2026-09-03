@@ -61,16 +61,8 @@ export function Dot({
 }
 
 /** 等宽数值：所有数字都走它，保证列对齐 */
-export function Num({
-  children,
-  className = "",
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <span className={`font-mono tabular-nums ${className}`}>{children}</span>
-  );
+export function Num({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <span className={`font-mono tabular-nums ${className}`}>{children}</span>;
 }
 
 /** 深色状态胶囊（业务页的 StatusBadge 是浅色系，在控制台里不用） */
@@ -157,13 +149,9 @@ export function MetricCard({
         >
           {loading ? "—" : value}
         </Num>
-        {unit && !loading && (
-          <span className="text-xs text-zinc-500">{unit}</span>
-        )}
+        {unit && !loading && <span className="text-xs text-zinc-500">{unit}</span>}
       </div>
-      <div className="mt-1.5 h-4 text-[11px] text-zinc-500">
-        {loading ? "" : hint}
-      </div>
+      <div className="mt-1.5 h-4 text-[11px] text-zinc-500">{loading ? "" : hint}</div>
     </div>
   );
 }
@@ -187,11 +175,7 @@ export function Panel({
       <header className="flex items-center justify-between gap-4 border-b border-zinc-800 px-4 py-2.5">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-medium text-zinc-200">{title}</h2>
-          {subtitle && (
-            <p className="mt-0.5 truncate text-[11px] text-zinc-500">
-              {subtitle}
-            </p>
-          )}
+          {subtitle && <p className="mt-0.5 truncate text-[11px] text-zinc-500">{subtitle}</p>}
         </div>
         {right && <div className="shrink-0">{right}</div>}
       </header>
@@ -214,9 +198,7 @@ export function MonitorEmpty({
     <div className="rounded-lg border border-dashed border-zinc-800 bg-zinc-900/30 px-6 py-12 text-center">
       <p className="text-sm text-zinc-400">{title}</p>
       {description && (
-        <p className="mx-auto mt-1.5 max-w-md text-xs leading-5 text-zinc-500">
-          {description}
-        </p>
+        <p className="mx-auto mt-1.5 max-w-md text-xs leading-5 text-zinc-500">{description}</p>
       )}
       {action && <div className="mt-4">{action}</div>}
     </div>
@@ -224,13 +206,7 @@ export function MonitorEmpty({
 }
 
 /** 错误横幅（带重试） */
-export function MonitorErrorBar({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry?: () => void;
-}) {
+export function MonitorErrorBar({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-300">
       <Dot tone="red" />
@@ -311,13 +287,7 @@ function niceAxis(max: number): number {
   return 10 * base;
 }
 
-function Grid({
-  max,
-  formatValue,
-}: {
-  max: number;
-  formatValue: (n: number) => string;
-}) {
+function Grid({ max, formatValue }: { max: number; formatValue: (n: number) => string }) {
   return (
     <>
       {[0, 0.5, 1].map((frac) => {
@@ -460,9 +430,9 @@ export function Sparkline({
     points.length > 0
       ? `M ${points[0].x.toFixed(1)} ${(PAD_T + PLOT_H).toFixed(1)} L ${line
           .split(" ")
-          .join(" L ")} L ${points[points.length - 1].x.toFixed(1)} ${(
-          PAD_T + PLOT_H
-        ).toFixed(1)} Z`
+          .join(" L ")} L ${points[points.length - 1].x.toFixed(1)} ${(PAD_T + PLOT_H).toFixed(
+          1,
+        )} Z`
       : "";
 
   return (
@@ -488,20 +458,10 @@ export function Sparkline({
       )}
       {points.map((p, i) => (
         <g key={p.datum.label + String(i)}>
-          <title>
-            {p.datum.title ?? `${p.datum.label} · ${formatValue(p.datum.value)}`}
-          </title>
-          {p.datum.value > 0 && (
-            <circle cx={p.x} cy={p.y} r={2.2} fill={color} />
-          )}
+          <title>{p.datum.title ?? `${p.datum.label} · ${formatValue(p.datum.value)}`}</title>
+          {p.datum.value > 0 && <circle cx={p.x} cy={p.y} r={2.2} fill={color} />}
           {/* 透明热区，方便悬停 */}
-          <rect
-            x={p.x - slot / 2}
-            y={PAD_T}
-            width={slot}
-            height={PLOT_H}
-            fill="transparent"
-          />
+          <rect x={p.x - slot / 2} y={PAD_T} width={slot} height={PLOT_H} fill="transparent" />
           {i % labelEvery === 0 && (
             <text
               x={p.x}
@@ -535,9 +495,7 @@ export function Legend({
             style={{ backgroundColor: item.color }}
           />
           {item.label}
-          {item.value !== undefined && (
-            <Num className="text-zinc-300">{item.value}</Num>
-          )}
+          {item.value !== undefined && <Num className="text-zinc-300">{item.value}</Num>}
         </span>
       ))}
     </div>

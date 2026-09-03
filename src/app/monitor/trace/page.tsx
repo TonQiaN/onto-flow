@@ -37,11 +37,7 @@ async function readError(res: Response): Promise<string> {
 
 export default function MonitorTracePage() {
   return (
-    <Suspense
-      fallback={
-        <div className="px-6 py-5 text-sm text-zinc-500">加载中…</div>
-      }
-    >
+    <Suspense fallback={<div className="px-6 py-5 text-sm text-zinc-500">加载中…</div>}>
       <TraceConsole />
     </Suspense>
   );
@@ -81,31 +77,28 @@ function TraceConsole() {
 
   const runId = wantedId || runs?.[0]?.id || "";
 
-  const loadTrace = useCallback(
-    async (id: string, silent: boolean) => {
-      if (!id) {
-        setTrace(null);
-        setLoading(false);
+  const loadTrace = useCallback(async (id: string, silent: boolean) => {
+    if (!id) {
+      setTrace(null);
+      setLoading(false);
+      return;
+    }
+    if (!silent) setLoading(true);
+    try {
+      const res = await fetch(`/api/monitor/trace/${id}`, { cache: "no-store" });
+      if (!res.ok) {
+        setError(await readError(res));
+        if (!silent) setTrace(null);
         return;
       }
-      if (!silent) setLoading(true);
-      try {
-        const res = await fetch(`/api/monitor/trace/${id}`, { cache: "no-store" });
-        if (!res.ok) {
-          setError(await readError(res));
-          if (!silent) setTrace(null);
-          return;
-        }
-        setTrace((await res.json()) as TracePayload);
-        setError(null);
-      } catch {
-        setError("网络错误，加载 Trace 失败");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [],
-  );
+      setTrace((await res.json()) as TracePayload);
+      setError(null);
+    } catch {
+      setError("网络错误，加载 Trace 失败");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     void loadTrace(runId, false);
@@ -206,16 +199,10 @@ function TraceConsole() {
             <span className="text-zinc-300">{trace.run.workflowName || "（未命名工作流）"}</span>
           </span>
           <Field label="开始">{formatDateTime(trace.run.startedAt)}</Field>
-          <Field label="总耗时">
-            {durationText(trace.run.startedAt, trace.run.finishedAt)}
-          </Field>
+          <Field label="总耗时">{durationText(trace.run.startedAt, trace.run.finishedAt)}</Field>
           <Field label="span">{trace.spans.length}</Field>
-          <Field label="节点">
-            {trace.spans.filter((s) => s.kind === "node").length}
-          </Field>
-          <Field label="工具/步骤">
-            {trace.spans.filter((s) => s.kind === "step").length}
-          </Field>
+          <Field label="节点">{trace.spans.filter((s) => s.kind === "node").length}</Field>
+          <Field label="工具/步骤">{trace.spans.filter((s) => s.kind === "step").length}</Field>
           <Field label="token">{formatTokens(trace.run.tokens)}</Field>
           <Field label="费用">{formatCost(trace.run.cost)}</Field>
         </div>

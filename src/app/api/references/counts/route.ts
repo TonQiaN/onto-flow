@@ -14,8 +14,7 @@ export async function GET(request: Request) {
     if (!isEntityKind(kind)) return jsonError(400, `未知的实体类型：${kind}`);
     const counts = refCounts(kind);
     const out: Record<string, number> = {};
-    for (const entity of listEntities(kind))
-      out[entity.id] = counts[entity.id] ?? 0;
+    for (const entity of listEntities(kind)) out[entity.id] = counts[entity.id] ?? 0;
     return NextResponse.json(out);
   });
 }

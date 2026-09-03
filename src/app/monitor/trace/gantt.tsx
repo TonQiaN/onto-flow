@@ -13,44 +13,45 @@ import { MonitorEmpty, Num } from "../ui";
 import type { SpanStatus, TraceRunInfo, TraceSpan } from "@/server/monitor/types";
 
 /** 状态配色：成功绿 / 失败红 / 取消琥珀 / 跳过灰 / 运行中蓝 / 等待暗灰 */
-const STATUS_STYLE: Record<SpanStatus, { bar: string; dot: string; text: string; label: string }> = {
-  success: {
-    bar: "bg-emerald-500/80",
-    dot: "bg-emerald-400",
-    text: "text-emerald-300",
-    label: "成功",
-  },
-  failed: {
-    bar: "bg-red-500/80",
-    dot: "bg-red-400",
-    text: "text-red-300",
-    label: "失败",
-  },
-  cancelled: {
-    bar: "bg-amber-500/80",
-    dot: "bg-amber-400",
-    text: "text-amber-300",
-    label: "已取消",
-  },
-  skipped: {
-    bar: "bg-zinc-600/70",
-    dot: "bg-zinc-500",
-    text: "text-zinc-400",
-    label: "已跳过",
-  },
-  running: {
-    bar: "bg-sky-500/80",
-    dot: "bg-sky-400",
-    text: "text-sky-300",
-    label: "运行中",
-  },
-  pending: {
-    bar: "bg-zinc-700/70",
-    dot: "bg-zinc-600",
-    text: "text-zinc-500",
-    label: "等待中",
-  },
-};
+const STATUS_STYLE: Record<SpanStatus, { bar: string; dot: string; text: string; label: string }> =
+  {
+    success: {
+      bar: "bg-emerald-500/80",
+      dot: "bg-emerald-400",
+      text: "text-emerald-300",
+      label: "成功",
+    },
+    failed: {
+      bar: "bg-red-500/80",
+      dot: "bg-red-400",
+      text: "text-red-300",
+      label: "失败",
+    },
+    cancelled: {
+      bar: "bg-amber-500/80",
+      dot: "bg-amber-400",
+      text: "text-amber-300",
+      label: "已取消",
+    },
+    skipped: {
+      bar: "bg-zinc-600/70",
+      dot: "bg-zinc-500",
+      text: "text-zinc-400",
+      label: "已跳过",
+    },
+    running: {
+      bar: "bg-sky-500/80",
+      dot: "bg-sky-400",
+      text: "text-sky-300",
+      label: "运行中",
+    },
+    pending: {
+      bar: "bg-zinc-700/70",
+      dot: "bg-zinc-600",
+      text: "text-zinc-500",
+      label: "等待中",
+    },
+  };
 
 const KIND_TAG: Record<TraceSpan["kind"], string> = {
   run: "RUN",
@@ -82,8 +83,7 @@ function layout(spans: TraceSpan[]): Laid[] {
       roots.push(span);
     }
   }
-  const sortFn = (a: TraceSpan, b: TraceSpan) =>
-    a.startMs - b.startMs || a.id.localeCompare(b.id);
+  const sortFn = (a: TraceSpan, b: TraceSpan) => a.startMs - b.startMs || a.id.localeCompare(b.id);
   const out: Laid[] = [];
   const walk = (span: TraceSpan, depth: number) => {
     out.push({ span, depth });
@@ -94,13 +94,7 @@ function layout(spans: TraceSpan[]): Laid[] {
   return out;
 }
 
-export function TraceGantt({
-  run,
-  spans,
-}: {
-  run: TraceRunInfo;
-  spans: TraceSpan[];
-}) {
+export function TraceGantt({ run, spans }: { run: TraceRunInfo; spans: TraceSpan[] }) {
   const [openId, setOpenId] = useState<string | null>(null);
 
   const rows = useMemo(() => layout(spans), [spans]);
@@ -181,10 +175,7 @@ export function TraceGantt({
             const style = styleOf(span.status);
             const open = openId === span.id;
             const left = Math.min((span.startMs / totalMs) * 100, 99.6);
-            const width = Math.min(
-              Math.max((span.durMs / totalMs) * 100, 0.4),
-              100 - left,
-            );
+            const width = Math.min(Math.max((span.durMs / totalMs) * 100, 0.4), 100 - left);
             const absStart = run.startedAt + span.startMs;
             return (
               <div key={span.id} className="border-b border-zinc-800/60 last:border-b-0">

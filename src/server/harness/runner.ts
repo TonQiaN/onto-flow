@@ -16,7 +16,9 @@ async function main(): Promise<void> {
   installFailLoud(HARNESS_BIN_NAME);
   const requested = process.argv[2];
   if (requested === undefined || requested === "" || !existsSync(requested)) {
-    process.stderr.write("用法：runner <运行目录内 cordis.yml 的路径>；组合配置必填，没有内置回退\n");
+    process.stderr.write(
+      "用法：runner <运行目录内 cordis.yml 的路径>；组合配置必填，没有内置回退\n",
+    );
     process.exit(1);
   }
   const ctx = await bootComposition(path.resolve(requested));

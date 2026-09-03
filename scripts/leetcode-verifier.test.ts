@@ -21,11 +21,7 @@ describe("LeetCode 独立验收沙箱", () => {
     const artifact = path.join(workspace, "solution.py");
     const outside = path.join(root, "outside.txt");
     fs.mkdirSync(workspace);
-    fs.writeFileSync(
-      artifact,
-      `open(${JSON.stringify(outside)}, "w").write("escaped")\n`,
-      "utf8",
-    );
+    fs.writeFileSync(artifact, `open(${JSON.stringify(outside)}, "w").write("escaped")\n`, "utf8");
 
     const result = await runSandboxedPythonVerification({
       workspaceRoot: workspace,

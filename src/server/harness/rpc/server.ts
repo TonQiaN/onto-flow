@@ -109,9 +109,7 @@ export class OntoflowRpcServer {
       existing !== undefined &&
       (params.agentOptions !== undefined || params.nodeOptions !== undefined)
     ) {
-      throw new Error(
-        `会话 ${params.sessionId} 已存在，agentOptions/nodeOptions 只在懒创建时生效`,
-      );
+      throw new Error(`会话 ${params.sessionId} 已存在，agentOptions/nodeOptions 只在懒创建时生效`);
     }
     const rec = await this.getOrCreateSession(
       params.sessionId,
@@ -349,6 +347,11 @@ export class OntoflowRpcServer {
   }
 
   private hasAdapterFor(provider: string): boolean {
-    return this.ctx.get("llm")?.listProviders().some((e) => e.id === provider) ?? false;
+    return (
+      this.ctx
+        .get("llm")
+        ?.listProviders()
+        .some((e) => e.id === provider) ?? false
+    );
   }
 }

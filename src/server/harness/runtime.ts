@@ -171,7 +171,8 @@ export class RunProcess {
       ...(options?.nodeOptions === undefined ? {} : { nodeOptions: options.nodeOptions }),
     });
     const messageId = (result as SessionPromptResult)?.messageId;
-    if (typeof messageId !== "string") throw new RunProcessError("session/prompt 响应缺少 messageId");
+    if (typeof messageId !== "string")
+      throw new RunProcessError("session/prompt 响应缺少 messageId");
     return messageId;
   }
 
@@ -314,10 +315,7 @@ export class RunProcess {
       const sessionId = params["sessionId"];
       if (typeof sessionId !== "string") return;
       const event = params["event"] as SessionEvent;
-      this.#eventCountBySession.set(
-        sessionId,
-        (this.#eventCountBySession.get(sessionId) ?? 0) + 1,
-      );
+      this.#eventCountBySession.set(sessionId, (this.#eventCountBySession.get(sessionId) ?? 0) + 1);
       try {
         this.#onSessionEvent?.(sessionId, event);
       } catch (err) {

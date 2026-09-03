@@ -68,7 +68,10 @@ describe("Workflow 节点 id 路径安全", () => {
     expect(created.ok).toBe(true);
     if (!created.ok) return;
 
-    const result = writeWorkflow(created.data.id, { nodes: [inputNode("n".repeat(256))], edges: [] });
+    const result = writeWorkflow(created.data.id, {
+      nodes: [inputNode("n".repeat(256))],
+      edges: [],
+    });
     expect(result).toMatchObject({
       ok: false,
       status: 400,
@@ -130,7 +133,10 @@ describe("Workflow 技能集与 Tool 集", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.data.instructions).toBe("# 共同指令\n产物只写本目录。");
-    expect(result.data.settings).toEqual({ toggles: { webSearch: true }, mcpServers: ["filesystem"] });
+    expect(result.data.settings).toEqual({
+      toggles: { webSearch: true },
+      mcpServers: ["filesystem"],
+    });
 
     expect(loadWorkflowSets(created.data.id)).toEqual({
       skillIds: ["skill-b", "skill-a"],
@@ -138,7 +144,9 @@ describe("Workflow 技能集与 Tool 集", () => {
     });
     expect(
       sqlite
-        .prepare("select skill_id as skillId, position from workflow_skills where workflow_id = ? order by position")
+        .prepare(
+          "select skill_id as skillId, position from workflow_skills where workflow_id = ? order by position",
+        )
         .all(created.data.id),
     ).toEqual([
       { skillId: "skill-b", position: 0 },
@@ -176,20 +184,29 @@ describe("Workflow 技能集与 Tool 集", () => {
 
     // 把被预载的技能移出集合：图缺省，但校验对库里的图做，仍要 400 指名
     const removed = writeWorkflow(created.data.id, { skillIds: [], toolIds: ["tool-1"] });
-    expect(removed).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("预载") });
+    expect(removed).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining("预载"),
+    });
 
     // 只改指令：图原样保留，修订载荷带的是库里当前的图
     const onlySettings = writeWorkflow(created.data.id, { instructions: "# 只改指令" });
     expect(onlySettings.ok).toBe(true);
     expect(
-      sqlite.prepare("select count(*) as c from workflow_nodes where workflow_id = ?").get(created.data.id),
+      sqlite
+        .prepare("select count(*) as c from workflow_nodes where workflow_id = ?")
+        .get(created.data.id),
     ).toEqual({ c: 1 });
     const latest = sqlite
       .prepare(
         "select payload from revisions where entity_kind = 'workflow' and entity_id = ? order by version_no desc limit 1",
       )
       .get(created.data.id) as { payload: string };
-    expect(JSON.parse(latest.payload)).toMatchObject({ instructions: "# 只改指令", nodes: [actionNode(actionId)] });
+    expect(JSON.parse(latest.payload)).toMatchObject({
+      instructions: "# 只改指令",
+      nodes: [actionNode(actionId)],
+    });
 
     // 只给一半图是形状错误
     expect(writeWorkflow(created.data.id, { nodes: [] })).toMatchObject({ ok: false, status: 400 });
@@ -204,18 +221,28 @@ describe("Workflow 技能集与 Tool 集", () => {
       toolIds: ["tool-1"],
     });
     if (!created.ok) throw new Error(created.error);
-    expect(loadWorkflowSets(created.data.id)).toEqual({ skillIds: ["skill-a"], toolIds: ["tool-1"] });
+    expect(loadWorkflowSets(created.data.id)).toEqual({
+      skillIds: ["skill-a"],
+      toolIds: ["tool-1"],
+    });
 
     const result = writeWorkflow(created.data.id, { nodes: [actionNode(actionId)], edges: [] });
     expect(result.ok).toBe(true);
-    expect(loadWorkflowSets(created.data.id)).toEqual({ skillIds: ["skill-a"], toolIds: ["tool-1"] });
+    expect(loadWorkflowSets(created.data.id)).toEqual({
+      skillIds: ["skill-a"],
+      toolIds: ["tool-1"],
+    });
   });
 
   it("技能集里的 id 不存在时 400", () => {
     const created = createWorkflow({ name: "坏引用", description: "" });
     if (!created.ok) throw new Error(created.error);
     const result = writeWorkflow(created.data.id, { skillIds: ["missing"], nodes: [], edges: [] });
-    expect(result).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("missing") });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining("missing"),
+    });
   });
 });
 
@@ -231,7 +258,11 @@ describe("Workflow 设置校验", () => {
     const created = createWorkflow({ name: "设置校验", description: "" });
     if (!created.ok) throw new Error(created.error);
     const result = writeWorkflow(created.data.id, { settings, nodes: [], edges: [] });
-    expect(result).toMatchObject({ ok: false, status: 400, error: expect.stringContaining(fragment) });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining(fragment),
+    });
   });
 
   it("指令超过 64 KiB 时 400", () => {
@@ -242,7 +273,11 @@ describe("Workflow 设置校验", () => {
       nodes: [],
       edges: [],
     });
-    expect(result).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("64 KiB") });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining("64 KiB"),
+    });
   });
 
   it("mcpServers 去重，toggles 只存写了的键", () => {
@@ -255,6 +290,9 @@ describe("Workflow 设置校验", () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.data.settings).toEqual({ toggles: { compaction: false }, mcpServers: ["a", "b"] });
+    expect(result.data.settings).toEqual({
+      toggles: { compaction: false },
+      mcpServers: ["a", "b"],
+    });
   });
 });

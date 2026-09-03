@@ -10,13 +10,7 @@ const REF_KIND_LABEL: Record<EntityReference["kind"], string> = {
 };
 
 /** 「被引用」面板：谁在引用这个实体（ADR-0004 要求编辑面板常驻影响面提示） */
-export function ReferencesPanel({
-  kind,
-  id,
-}: {
-  kind: EntityKind;
-  id: string;
-}) {
+export function ReferencesPanel({ kind, id }: { kind: EntityKind; id: string }) {
   const [refs, setRefs] = useState<EntityReference[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,11 +62,7 @@ export function ReferencesPanel({
       <header className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
         <h3 className="text-sm font-semibold text-zinc-900">被引用</h3>
         <span className="text-xs text-zinc-500">
-          {loading
-            ? "统计中…"
-            : refs
-              ? `被 ${refs.length} 处引用`
-              : "引用信息不可用"}
+          {loading ? "统计中…" : refs ? `被 ${refs.length} 处引用` : "引用信息不可用"}
         </span>
       </header>
 
@@ -110,9 +100,7 @@ export function ReferencesPanel({
                       >
                         <span className="truncate font-medium">{ref.name}</span>
                         {ref.detail && (
-                          <span className="truncate text-xs text-zinc-400">
-                            {ref.detail}
-                          </span>
+                          <span className="truncate text-xs text-zinc-400">{ref.detail}</span>
                         )}
                       </Link>
                     </li>

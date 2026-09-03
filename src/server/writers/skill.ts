@@ -96,7 +96,10 @@ function parseSkillFiles(raw: unknown): WriteResult<SkillFilePayload[]> {
   for (const path of paths) {
     for (const other of paths) {
       if (other !== path && other.startsWith(`${path}/`))
-        return writeFail(400, `资源文件路径「${path}」既是文件又是「${other}」的目录（不区分大小写）`);
+        return writeFail(
+          400,
+          `资源文件路径「${path}」既是文件又是「${other}」的目录（不区分大小写）`,
+        );
     }
   }
   return writeOk(files);
@@ -137,12 +140,16 @@ function replaceFiles(tx: Tx, skillId: string, files: SkillFilePayload[]) {
   tx.delete(skillFiles).where(eq(skillFiles.skillId, skillId)).run();
   if (files.length > 0)
     tx.insert(skillFiles)
-      .values(files.map((f) => ({ skillId, path: f.path, content: f.content, size: f.content.length })))
+      .values(
+        files.map((f) => ({ skillId, path: f.path, content: f.content, size: f.content.length })),
+      )
       .run();
 }
 
 /** 该技能的资源文件行，按路径排序；投影与 DTO 都从这里取。 */
-export function loadSkillFiles(skillId: string): Array<{ path: string; content: Buffer; size: number }> {
+export function loadSkillFiles(
+  skillId: string,
+): Array<{ path: string; content: Buffer; size: number }> {
   return db
     .select({ path: skillFiles.path, content: skillFiles.content, size: skillFiles.size })
     .from(skillFiles)

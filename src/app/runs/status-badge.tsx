@@ -1,8 +1,5 @@
 /** run / run_node 状态徽章（含节点独有的 pending / skipped） */
-const STYLES: Record<
-  string,
-  { label: string; badge: string; dot: string }
-> = {
+const STYLES: Record<string, { label: string; badge: string; dot: string }> = {
   running: {
     label: "运行中",
     badge: "border-blue-200 bg-blue-50 text-blue-700",

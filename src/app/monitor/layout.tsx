@@ -34,15 +34,9 @@ export default function MonitorLayout({ children }: { children: ReactNode }) {
     <div className="flex min-h-full flex-col bg-zinc-950 text-zinc-200">
       <header className="sticky top-0 z-20 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur">
         <div className="flex items-baseline gap-3 px-6 pt-4">
-          <h1 className="text-base font-semibold tracking-tight text-white">
-            监控台
-          </h1>
-          <span className="font-mono text-[11px] text-zinc-600">
-            ontoflow://monitor
-          </span>
-          <span className="ml-auto text-[11px] text-zinc-500">
-            {active?.hint}
-          </span>
+          <h1 className="text-base font-semibold tracking-tight text-white">监控台</h1>
+          <span className="font-mono text-[11px] text-zinc-600">ontoflow://monitor</span>
+          <span className="ml-auto text-[11px] text-zinc-500">{active?.hint}</span>
         </div>
         <nav className="flex gap-1 overflow-x-auto px-4 pt-3 pb-2">
           {TABS.map((tab) => {

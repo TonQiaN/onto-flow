@@ -219,9 +219,7 @@ export async function createRunWorkspace(
       tmpDir,
       compositionPath: path.join(runDir, RUN_COMPOSITION_FILE),
       imports: {
-        instructionsDigest: createHash("sha256")
-          .update(options.instructions)
-          .digest("hex"),
+        instructionsDigest: createHash("sha256").update(options.instructions).digest("hex"),
         items,
       },
     };

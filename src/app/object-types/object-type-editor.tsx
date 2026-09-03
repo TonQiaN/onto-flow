@@ -108,20 +108,16 @@ export function ObjectTypeEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(
-        initial ? `/api/object-types/${initial.id}` : "/api/object-types",
-        {
-          method: initial ? "PUT" : "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: name.trim(),
-            kind,
-            description,
-            jsonSchema:
-              kind === "json" && jsonSchema.trim() ? jsonSchema : null,
-          }),
-        },
-      );
+      const res = await fetch(initial ? `/api/object-types/${initial.id}` : "/api/object-types", {
+        method: initial ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          kind,
+          description,
+          jsonSchema: kind === "json" && jsonSchema.trim() ? jsonSchema : null,
+        }),
+      });
       if (!res.ok) {
         setError(await readError(res));
         return;
@@ -151,10 +147,7 @@ export function ObjectTypeEditor({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-black/30"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
       <div
         className="flex h-full w-full max-w-xl flex-col bg-white shadow-xl"
         onClick={(e) => e.stopPropagation()}
@@ -163,10 +156,7 @@ export function ObjectTypeEditor({
           <h2 className="text-base font-semibold text-zinc-900">
             {initial ? "编辑对象类型" : "新建对象类型"}
           </h2>
-          <button
-            onClick={onClose}
-            className="text-sm text-zinc-400 hover:text-zinc-600"
-          >
+          <button onClick={onClose} className="text-sm text-zinc-400 hover:text-zinc-600">
             关闭
           </button>
         </div>
@@ -194,9 +184,7 @@ export function ObjectTypeEditor({
           {tab === "basic" && (
             <>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  名称
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">名称</span>
                 <input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -205,9 +193,7 @@ export function ObjectTypeEditor({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  基础形态
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">基础形态</span>
                 <select
                   value={kind}
                   onChange={(e) => setKind(e.target.value as Kind)}
@@ -219,9 +205,7 @@ export function ObjectTypeEditor({
                 </select>
               </label>
               <label className="block">
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  描述
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">描述</span>
                 <input
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -230,9 +214,7 @@ export function ObjectTypeEditor({
                 />
               </label>
               <div>
-                <span className="mb-1 block text-sm font-medium text-zinc-700">
-                  文件夹
-                </span>
+                <span className="mb-1 block text-sm font-medium text-zinc-700">文件夹</span>
                 <FolderPicker
                   kind="object_type"
                   entityId={initial?.id ?? ""}
@@ -266,9 +248,7 @@ export function ObjectTypeEditor({
             </>
           )}
 
-          {tab === "refs" && initial && (
-            <ReferencesPanel kind="object_type" id={initial.id} />
-          )}
+          {tab === "refs" && initial && <ReferencesPanel kind="object_type" id={initial.id} />}
 
           {tab === "revisions" && initial && (
             <RevisionPanel

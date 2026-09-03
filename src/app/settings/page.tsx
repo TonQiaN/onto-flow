@@ -90,7 +90,6 @@ const EMPTY: SettingsDoc = {
   defaultInstructions: "",
 };
 
-
 /**
  * 五个可按工作流切换的插件开关的文案；键顺序与 COMPOSITION_TOGGLE_KEYS 一致，
  * 每个开关控制 catalog.ts 里带同名 `toggle` 字段的那些行。
@@ -210,7 +209,8 @@ export default function SettingsPage() {
       <h1 className="text-xl font-semibold text-zinc-900">全局设置</h1>
       <p className="mt-1 text-sm text-zinc-500">
         这一层是所有工作流共享的引擎基线：工作流设置只在下面标为「可按工作流切换」的范围内覆盖它，
-        Action 从不开关插件。改动在<b>下一次运行</b>生效——运行启动时读一次并冻结，在跑的运行不受影响。
+        Action 从不开关插件。改动在<b>下一次运行</b>
+        生效——运行启动时读一次并冻结，在跑的运行不受影响。
       </p>
 
       {error && (
@@ -219,7 +219,10 @@ export default function SettingsPage() {
         </p>
       )}
 
-      <Section title="模型与凭据" hint="凭据只登记名字；值留在本机环境变量里，运行启动时才注入子进程。">
+      <Section
+        title="模型与凭据"
+        hint="凭据只登记名字；值留在本机环境变量里，运行启动时才注入子进程。"
+      >
         <Field label="模型凭据引用名">
           <input
             value={doc.modelApiKeyEnv}
@@ -240,9 +243,7 @@ export default function SettingsPage() {
       <Section
         title="凭据引用"
         hint="登记的名字构成运行子进程的环境白名单——只有列在这里的变量会被带进去；Tool 的 execute 模块经 ctx.env 拿到的也只有它们。"
-        onAdd={() =>
-          patch({ credentialRefs: [...doc.credentialRefs, { name: "", purpose: "" }] })
-        }
+        onAdd={() => patch({ credentialRefs: [...doc.credentialRefs, { name: "", purpose: "" }] })}
       >
         {doc.credentialRefs.length === 0 ? (
           <Empty>（还没有登记任何凭据引用）</Empty>
@@ -329,9 +330,7 @@ export default function SettingsPage() {
                   </label>
                   <span className="flex-1" />
                   <RemoveButton
-                    onClick={() =>
-                      patch({ mcpServers: doc.mcpServers.filter((_, x) => x !== i) })
-                    }
+                    onClick={() => patch({ mcpServers: doc.mcpServers.filter((_, x) => x !== i) })}
                   />
                 </div>
                 {server.transport === "stdio" ? (
@@ -365,12 +364,18 @@ export default function SettingsPage() {
         )}
       </Section>
 
-      <Section title="默认停用的工具" hint="按工具公名逐行写；对每次运行的每个 Action 会话都从工具清单里拿掉，模型看不见它。">
+      <Section
+        title="默认停用的工具"
+        hint="按工具公名逐行写；对每次运行的每个 Action 会话都从工具清单里拿掉，模型看不见它。"
+      >
         <textarea
           value={doc.disabledTools.join("\n")}
           onChange={(e) =>
             patch({
-              disabledTools: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean),
+              disabledTools: e.target.value
+                .split("\n")
+                .map((s) => s.trim())
+                .filter(Boolean),
             })
           }
           rows={3}
@@ -392,9 +397,7 @@ export default function SettingsPage() {
             <input
               type="checkbox"
               checked={doc.toggles[key]}
-              onChange={(e) =>
-                patch({ toggles: { ...doc.toggles, [key]: e.target.checked } })
-              }
+              onChange={(e) => patch({ toggles: { ...doc.toggles, [key]: e.target.checked } })}
               className="mt-1"
             />
             <span className="min-w-0">

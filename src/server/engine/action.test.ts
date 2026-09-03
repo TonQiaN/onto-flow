@@ -61,16 +61,10 @@ CREATE TABLE node_usage (
   schema,
 });
 
-const {
-  finalizeUnsettledActionUsage,
-  refreshUnsettledActionUsage,
-  runActionNode,
-} = await import("./action");
-const {
-  clearUnpersistedUsageForSession,
-  recordSessionEvent,
-  unpersistedUsageForSession,
-} = await import("./events");
+const { finalizeUnsettledActionUsage, refreshUnsettledActionUsage, runActionNode } =
+  await import("./action");
+const { clearUnpersistedUsageForSession, recordSessionEvent, unpersistedUsageForSession } =
+  await import("./events");
 const { skillSlug } = await import("../skill-library");
 const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-action-test-"));
 
@@ -150,9 +144,7 @@ function admittedDefinition(): ResolvedActionDefinition {
 
 function context(options?: {
   round?: number;
-  runTurn?: (
-    ...args: Parameters<ActionNodeContext["proc"]["runTurn"]>
-  ) => Promise<void>;
+  runTurn?: (...args: Parameters<ActionNodeContext["proc"]["runTurn"]>) => Promise<void>;
   runTurnError?: Error;
   closeSession?: (sessionId: string) => Promise<void>;
   dispose?: () => Promise<void>;
@@ -294,7 +286,9 @@ describe("Action 执行时边界", () => {
     });
     sqlite.prepare("update actions set prompt = '网页改写后的任务' where id = 'action-1'").run();
     sqlite
-      .prepare("update action_ports set exit_name = '通过', artifact_path = 'changed.md' where id = 'port-1'")
+      .prepare(
+        "update action_ports set exit_name = '通过', artifact_path = 'changed.md' where id = 'port-1'",
+      )
       .run();
     fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
 
@@ -319,7 +313,10 @@ describe("Action 执行时边界", () => {
     ] as const) {
       const skillDir = path.join(workspaceRoot, ".agents", "skills", skill.slug);
       fs.mkdirSync(skillDir, { recursive: true });
-      fs.writeFileSync(path.join(skillDir, "SKILL.md"), `---\nname: ${skill.slug}\n---\n\n${body}\n`);
+      fs.writeFileSync(
+        path.join(skillDir, "SKILL.md"),
+        `---\nname: ${skill.slug}\n---\n\n${body}\n`,
+      );
     }
     fs.writeFileSync(path.join(workspaceRoot, "result.md"), "ok");
 
@@ -387,7 +384,9 @@ describe("Action 执行时边界", () => {
     const snapshot = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
     expect(JSON.parse(snapshot.snapshot).renderedPrompt).toBe(renderedPrompt);
 
-    sqlite.exec("DELETE FROM run_nodes; INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);");
+    sqlite.exec(
+      "DELETE FROM run_nodes; INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);",
+    );
     finalizeUnsettledActionUsage("run-1");
     let plain = "";
     await runActionNode(
@@ -479,9 +478,7 @@ describe("Action 执行时边界", () => {
       cost: 0.15,
     });
     expect(
-      sqlite
-        .prepare("select type, payload from run_events where type = 'usage'")
-        .get(),
+      sqlite.prepare("select type, payload from run_events where type = 'usage'").get(),
     ).toMatchObject({ type: "usage" });
   });
 
@@ -787,8 +784,7 @@ describe("Action 执行时边界", () => {
     expect(row.cost).toBeGreaterThan(0);
     expect(sqlite.prepare("select count(*) as count from node_usage").get()).toEqual({ count: 0 });
     expect(
-      unpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1" })
-        .chunks,
+      unpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1" }).chunks,
     ).toBe(0);
   });
 

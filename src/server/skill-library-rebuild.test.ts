@@ -13,8 +13,13 @@ vi.mock("@/server/fs-safety", () => ({ DATA_DIR: testPaths.dataDir }));
 
 const { db } = await createTestDb();
 const { skillFiles, skills } = await import("@/db/schema");
-const { rebuildSkillLibrary, releaseSkillProjections, retainSkillProjections, skillSlug, SKILL_LIBRARY_DIR } =
-  await import("./skill-library");
+const {
+  rebuildSkillLibrary,
+  releaseSkillProjections,
+  retainSkillProjections,
+  skillSlug,
+  SKILL_LIBRARY_DIR,
+} = await import("./skill-library");
 
 afterAll(() => {
   fs.rmSync(testPaths.dataDir, { recursive: true, force: true });
@@ -22,8 +27,18 @@ afterAll(() => {
 
 describe("启动重建技能投影", () => {
   it("根下的真实目录清掉后按库重建成链接、悬空链接重指、临时链接与孤儿版本清掉、库里没有的技能目录删掉", () => {
-    const legacy = { id: "rebuild-legacy", name: "真实目录技能", description: "d1", content: "库里的正文一" };
-    const dangling = { id: "rebuild-dangling", name: "悬空链接技能", description: "d2", content: "库里的正文二" };
+    const legacy = {
+      id: "rebuild-legacy",
+      name: "真实目录技能",
+      description: "d1",
+      content: "库里的正文一",
+    };
+    const dangling = {
+      id: "rebuild-dangling",
+      name: "悬空链接技能",
+      description: "d2",
+      content: "库里的正文二",
+    };
     db.insert(skills).values([legacy, dangling]).run();
     db.insert(skillFiles)
       .values({ skillId: legacy.id, path: "refs/a.md", content: Buffer.from("A"), size: 1 })
@@ -37,7 +52,11 @@ describe("启动重建技能投影", () => {
     fs.mkdirSync(legacyDir);
     fs.writeFileSync(path.join(legacyDir, "SKILL.md"), "旧投影", "utf8");
     // 版本目录被人手删过：链接悬空
-    fs.symlinkSync(`.versions/${skillSlug(dangling)}-gone`, path.join(root, skillSlug(dangling)), "dir");
+    fs.symlinkSync(
+      `.versions/${skillSlug(dangling)}-gone`,
+      path.join(root, skillSlug(dangling)),
+      "dir",
+    );
     // 上次进程中途倒下留下的孤儿版本与临时链接
     const orphan = path.join(versions, `${skillSlug(legacy)}-orphan`);
     fs.mkdirSync(orphan);
@@ -65,7 +84,12 @@ describe("启动重建技能投影", () => {
   });
 
   it("被已受理运行持有、库里已删的技能：重建不删它的链接与版本，最后一个持有者释放后才删", () => {
-    const held = { id: "rebuild-held-deleted", name: "持有中已删技能", description: "d3", content: "持有中的正文" };
+    const held = {
+      id: "rebuild-held-deleted",
+      name: "持有中已删技能",
+      description: "d3",
+      content: "持有中的正文",
+    };
     db.insert(skills).values(held).run();
     rebuildSkillLibrary();
     retainSkillProjections("run-holding", [held]);

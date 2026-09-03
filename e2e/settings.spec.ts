@@ -48,7 +48,10 @@ test.describe("全局设置", () => {
     expect(entries.length, "组合里应有 entry").toBeGreaterThan(0);
     const panel = page.locator('section:has(h2:text-is("插件面板"))');
     for (const id of ["llm-deepseek", "tools", "agent-loop", "ontoflow-rpc"]) {
-      expect(entries.some((e) => e.id === id), `组合应含 entry「${id}」`).toBe(true);
+      expect(
+        entries.some((e) => e.id === id),
+        `组合应含 entry「${id}」`,
+      ).toBe(true);
       await expect(panel.getByText(id, { exact: true }).first()).toBeVisible();
     }
   });

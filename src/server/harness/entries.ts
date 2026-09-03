@@ -88,9 +88,7 @@ export function mcpCompositionEntry(spec: McpServerSpec): CompositionEntry {
   const shared = {
     serverName: spec.name,
     failOnStartupError: false,
-    ...(spec.toolCallTimeoutMs === undefined
-      ? {}
-      : { toolCallTimeoutMs: spec.toolCallTimeoutMs }),
+    ...(spec.toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs: spec.toolCallTimeoutMs }),
     ...(spec.reconnect === undefined ? {} : { reconnect: spec.reconnect }),
   };
   const config: Record<string, unknown> =
@@ -143,9 +141,7 @@ export const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash-vision-exp";
 /** llm-deepseek 注册的 provider 路由名，与 pi-ai 目录里的 `deepseek` 刻意区分。 */
 export const DEEPSEEK_PROVIDER = "deepseek-official";
 
-export function deepseekCompositionEntry(
-  spec: DeepSeekProviderSpec = {},
-): CompositionEntry {
+export function deepseekCompositionEntry(spec: DeepSeekProviderSpec = {}): CompositionEntry {
   const config: Record<string, unknown> = {
     apiKeyEnv: spec.apiKeyEnv ?? DEFAULT_CREDENTIAL_ENV,
     ...(spec.baseURL === undefined ? {} : { baseURL: spec.baseURL }),

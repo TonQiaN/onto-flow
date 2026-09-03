@@ -33,9 +33,7 @@ export function LibraryToolbar({
 }) {
   const [text, setText] = useState(q);
   /** 越界纠正提示：从第几页夹到了第几页（区分「翻过头了」与「真的没数据」） */
-  const [clamped, setClamped] = useState<{ from: number; to: number } | null>(
-    null,
-  );
+  const [clamped, setClamped] = useState<{ from: number; to: number } | null>(null);
   /** 最近一次由本组件发出（或从外部同步进来）的值，用于区分外部改动与自身回声 */
   const emitted = useRef(q);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -179,8 +177,8 @@ export function LibraryToolbar({
       {/* 越界纠正提示：让「翻过头了，已跳回来」与「这里真的没有数据」两种空态可区分 */}
       {(clamped || outOfRange) && (
         <p className="mt-2 text-xs text-amber-700">
-          第 {clamped?.from ?? page} 页已不存在（当前共 {totalPages} 页），
-          已自动跳到第 {clamped?.to ?? totalPages} 页。
+          第 {clamped?.from ?? page} 页已不存在（当前共 {totalPages} 页）， 已自动跳到第{" "}
+          {clamped?.to ?? totalPages} 页。
         </p>
       )}
     </div>

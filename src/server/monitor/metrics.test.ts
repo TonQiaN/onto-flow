@@ -37,7 +37,9 @@ CREATE TABLE node_usage (
 const { getLiveSessions, getOverview, getTrace } = await import("./metrics");
 
 beforeEach(() => {
-  sqlite.exec("DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM runs;");
+  sqlite.exec(
+    "DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_nodes; DELETE FROM runs;",
+  );
   const now = Date.now();
   sqlite
     .prepare(
@@ -48,7 +50,10 @@ beforeEach(() => {
     .prepare(
       "INSERT INTO run_nodes (id, run_id, node_id, label, status, snapshot, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, cost, session_id, started_at) VALUES ('row-1', 'run-1', 'node-1', '测试节点', 'running', ?, 1, 2, 99, 3, 4, 0.1, 'node-1', ?)",
     )
-    .run(JSON.stringify({ actionName: "测试 Action", model: {}, reasoningEffort: "high" }), now - 500);
+    .run(
+      JSON.stringify({ actionName: "测试 Action", model: {}, reasoningEffort: "high" }),
+      now - 500,
+    );
   sqlite
     .prepare(
       "INSERT INTO node_usage (id, run_id, node_id, session_id, message_id, provider_id, model_id, input_tokens, output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, cost, ts) VALUES ('usage-1', 'run-1', 'node-1', 'node-1', 'turn1-step1', 'deepseek-official', 'deepseek-v4-flash', 10, 20, 77, 3, 4, 0.1, ?)",

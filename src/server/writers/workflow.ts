@@ -78,8 +78,7 @@ function parseWorkflowSettings(raw: unknown): WriteResult<WorkflowSettings> {
     for (const [key, value] of Object.entries(rawToggles.body)) {
       if (!(COMPOSITION_TOGGLE_KEYS as readonly string[]).includes(key))
         return writeFail(400, `settings.toggles 不认识的开关：「${key}」`);
-      if (typeof value !== "boolean")
-        return writeFail(400, `settings.toggles.${key} 必须是布尔值`);
+      if (typeof value !== "boolean") return writeFail(400, `settings.toggles.${key} 必须是布尔值`);
       toggles[key as keyof CompositionToggles] = value;
     }
   }
@@ -89,8 +88,7 @@ function parseWorkflowSettings(raw: unknown): WriteResult<WorkflowSettings> {
     if (!Array.isArray(body.mcpServers))
       return writeFail(400, "settings.mcpServers 必须是字符串数组");
     for (const item of body.mcpServers as unknown[]) {
-      if (typeof item !== "string")
-        return writeFail(400, "settings.mcpServers 必须是字符串数组");
+      if (typeof item !== "string") return writeFail(400, "settings.mcpServers 必须是字符串数组");
       // 只校验形状不校验登记：全局登记表可以在工作流之后变化，受理时按当时的登记表取交集。
       if (!MCP_SERVER_NAME_PATTERN.test(item))
         return writeFail(400, `MCP 服务器名「${item}」非法：只允许字母数字与 -_，最长 32 位`);
@@ -111,8 +109,7 @@ function parseSettingsPayload(
 ): WriteResult<WorkflowSettingsPayload> {
   let instructions = current.instructions;
   if (body.instructions !== undefined) {
-    if (typeof body.instructions !== "string")
-      return writeFail(400, "instructions 必须是字符串");
+    if (typeof body.instructions !== "string") return writeFail(400, "instructions 必须是字符串");
     if (Buffer.byteLength(body.instructions, "utf8") > WORKFLOW_INSTRUCTIONS_MAX_BYTES)
       return writeFail(400, "工作流指令不能超过 64 KiB");
     instructions = body.instructions;
@@ -131,7 +128,12 @@ function parseSettingsPayload(
     if (!ids) return writeFail(400, "skillIds 必须是字符串数组");
     if (ids.length > 0) {
       const found = new Set(
-        db.select({ id: skills.id }).from(skills).where(inArray(skills.id, ids)).all().map((r) => r.id),
+        db
+          .select({ id: skills.id })
+          .from(skills)
+          .where(inArray(skills.id, ids))
+          .all()
+          .map((r) => r.id),
       );
       const missing = ids.find((s) => !found.has(s));
       if (missing !== undefined) return writeFail(400, `技能集里的技能不存在：${missing}`);
@@ -145,7 +147,12 @@ function parseSettingsPayload(
     if (!ids) return writeFail(400, "toolIds 必须是字符串数组");
     if (ids.length > 0) {
       const found = new Set(
-        db.select({ id: tools.id }).from(tools).where(inArray(tools.id, ids)).all().map((r) => r.id),
+        db
+          .select({ id: tools.id })
+          .from(tools)
+          .where(inArray(tools.id, ids))
+          .all()
+          .map((r) => r.id),
       );
       const missing = ids.find((t) => !found.has(t));
       if (missing !== undefined) return writeFail(400, `Tool 集里的 Tool 不存在：${missing}`);
@@ -167,8 +174,7 @@ function parseGraphPayload(
   const nodes: NodePayload[] = [];
   const nodeIds = new Set<string>();
   for (const item of body.nodes as unknown[]) {
-    if (typeof item !== "object" || item === null)
-      return writeFail(400, "节点格式不正确");
+    if (typeof item !== "object" || item === null) return writeFail(400, "节点格式不正确");
     const n = item as Record<string, unknown>;
     const nodeId = typeof n.id === "string" ? n.id : "";
     if (!nodeId) return writeFail(400, "节点缺少 id");
@@ -190,8 +196,7 @@ function parseGraphPayload(
     const y = typeof n.y === "number" ? n.y : 0;
     if (kind === "action") {
       const actionId = typeof n.actionId === "string" ? n.actionId : "";
-      if (!actionId)
-        return writeFail(400, `Action 节点「${label || nodeId}」缺少 actionId`);
+      if (!actionId) return writeFail(400, `Action 节点「${label || nodeId}」缺少 actionId`);
       nodes.push({
         id: nodeId,
         kind,
@@ -202,13 +207,9 @@ function parseGraphPayload(
         y,
       });
     } else {
-      const objectTypeId =
-        typeof n.objectTypeId === "string" ? n.objectTypeId : "";
+      const objectTypeId = typeof n.objectTypeId === "string" ? n.objectTypeId : "";
       if (!objectTypeId)
-        return writeFail(
-          400,
-          `输入/输出节点「${label || nodeId}」缺少 objectTypeId`,
-        );
+        return writeFail(400, `输入/输出节点「${label || nodeId}」缺少 objectTypeId`);
       nodes.push({
         id: nodeId,
         kind,
@@ -221,9 +222,7 @@ function parseGraphPayload(
     }
   }
 
-  const actionIds = [
-    ...new Set(nodes.flatMap((n) => (n.actionId !== null ? [n.actionId] : []))),
-  ];
+  const actionIds = [...new Set(nodes.flatMap((n) => (n.actionId !== null ? [n.actionId] : [])))];
   if (actionIds.length > 0) {
     const actionNames = new Map(
       db
@@ -240,7 +239,11 @@ function parseGraphPayload(
     // 才知道集合是什么，所以子集关系在这里挡（运行受理再挡一次，答 422）。
     const skillSet = new Set(sets.skillIds);
     const preloads = db
-      .select({ actionId: actionPreloads.actionId, skillId: actionPreloads.skillId, skillName: skills.name })
+      .select({
+        actionId: actionPreloads.actionId,
+        skillId: actionPreloads.skillId,
+        skillName: skills.name,
+      })
       .from(actionPreloads)
       .innerJoin(skills, eq(actionPreloads.skillId, skills.id))
       .where(inArray(actionPreloads.actionId, actionIds))
@@ -269,9 +272,7 @@ function parseGraphPayload(
     }
   }
   const typeIds = [
-    ...new Set(
-      nodes.flatMap((n) => (n.objectTypeId !== null ? [n.objectTypeId] : [])),
-    ),
+    ...new Set(nodes.flatMap((n) => (n.objectTypeId !== null ? [n.objectTypeId] : []))),
   ];
   if (typeIds.length > 0) {
     const found = new Set(
@@ -282,24 +283,19 @@ function parseGraphPayload(
         .all()
         .map((r) => r.id),
     );
-    if (typeIds.some((t) => !found.has(t)))
-      return writeFail(400, "节点引用的对象类型不存在");
+    if (typeIds.some((t) => !found.has(t))) return writeFail(400, "节点引用的对象类型不存在");
   }
 
   const edges: EdgePayload[] = [];
   const edgeIds = new Set<string>();
   for (const item of body.edges as unknown[]) {
-    if (typeof item !== "object" || item === null)
-      return writeFail(400, "连线格式不正确");
+    if (typeof item !== "object" || item === null) return writeFail(400, "连线格式不正确");
     const e = item as Record<string, unknown>;
-    const edgeId =
-      typeof e.id === "string" && e.id !== "" ? e.id : crypto.randomUUID();
+    const edgeId = typeof e.id === "string" && e.id !== "" ? e.id : crypto.randomUUID();
     if (edgeIds.has(edgeId)) return writeFail(400, `连线 id 重复：${edgeId}`);
     edgeIds.add(edgeId);
-    const sourceNodeId =
-      typeof e.sourceNodeId === "string" ? e.sourceNodeId : "";
-    const targetNodeId =
-      typeof e.targetNodeId === "string" ? e.targetNodeId : "";
+    const sourceNodeId = typeof e.sourceNodeId === "string" ? e.sourceNodeId : "";
+    const targetNodeId = typeof e.targetNodeId === "string" ? e.targetNodeId : "";
     if (!nodeIds.has(sourceNodeId))
       return writeFail(400, "连线的 sourceNodeId 不在本次提交的节点中");
     if (!nodeIds.has(targetNodeId))
@@ -407,8 +403,7 @@ export function createWorkflow(raw: unknown): WriteResult<WorkflowRow> {
 
   const name = typeof body.name === "string" ? body.name.trim() : "";
   if (!name) return writeFail(400, "名称不能为空");
-  const description =
-    typeof body.description === "string" ? body.description : "";
+  const description = typeof body.description === "string" ? body.description : "";
 
   const settingsPayload = parseSettingsPayload(body, {
     instructions: "",
@@ -429,7 +424,16 @@ export function createWorkflow(raw: unknown): WriteResult<WorkflowRow> {
     recordRevision(
       "workflow",
       inserted.id,
-      revisionPayload({ name, description, instructions, settings, skillIds, toolIds, nodes: [], edges: [] }),
+      revisionPayload({
+        name,
+        description,
+        instructions,
+        settings,
+        skillIds,
+        toolIds,
+        nodes: [],
+        edges: [],
+      }),
       "",
       tx,
     );
@@ -443,10 +447,7 @@ export function createWorkflow(raw: unknown): WriteResult<WorkflowRow> {
  * 保持连线引用；instructions / settings / skillIds / toolIds 缺省沿用现值，出现即整体替换。
  * 子集校验用的是本次提交生效后的集合，所以先算设置再校验图。
  */
-export function writeWorkflow(
-  id: string,
-  raw: unknown,
-): WriteResult<WorkflowRow> {
+export function writeWorkflow(id: string, raw: unknown): WriteResult<WorkflowRow> {
   const existing = db.select().from(workflows).where(eq(workflows.id, id)).get();
   if (!existing) return writeFail(404, "工作流不存在");
 
@@ -461,8 +462,7 @@ export function writeWorkflow(
   }
   let description: string | undefined;
   if (body.description !== undefined) {
-    if (typeof body.description !== "string")
-      return writeFail(400, "description 必须是字符串");
+    if (typeof body.description !== "string") return writeFail(400, "description 必须是字符串");
     description = body.description;
   }
 
@@ -480,10 +480,10 @@ export function writeWorkflow(
   if ((body.nodes === undefined) !== (body.edges === undefined))
     return writeFail(400, "nodes 与 edges 必须同时提供或同时省略");
   const graphProvided = body.nodes !== undefined;
-  const graph = parseGraphPayload(
-    graphProvided ? body : { ...body, ...loadCurrentGraph(id) },
-    { skillIds, toolIds },
-  );
+  const graph = parseGraphPayload(graphProvided ? body : { ...body, ...loadCurrentGraph(id) }, {
+    skillIds,
+    toolIds,
+  });
   if (!graph.ok) return graph;
   const { nodes, edges } = graph.data;
 

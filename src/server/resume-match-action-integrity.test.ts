@@ -43,8 +43,7 @@ describe("简历评分 Action 行为摘要", () => {
       model: { ...original.model, displayName: "新的显示名" },
     };
 
-    expect(resumeMatchActionBehaviorDigest(renamedDescription, ["tool_a", "tool_b"]))
-      .toBe(digest);
+    expect(resumeMatchActionBehaviorDigest(renamedDescription, ["tool_a", "tool_b"])).toBe(digest);
   });
 
   it("预载技能的 slug 与 id 不进入摘要，名字进入", () => {
@@ -62,43 +61,68 @@ describe("简历评分 Action 行为摘要", () => {
   });
 
   it.each([
-    ["任务", (value: ResolvedActionDefinition) => ({
-      ...value,
-      action: { ...value.action, prompt: "篡改任务" },
-    })],
-    ["规则", (value: ResolvedActionDefinition) => ({
-      ...value,
-      action: { ...value.action, rule: "篡改规则" },
-    })],
-    ["provider", (value: ResolvedActionDefinition) => ({
-      ...value,
-      model: { ...value.model, providerId: "other-provider" },
-    })],
-    ["model", (value: ResolvedActionDefinition) => ({
-      ...value,
-      model: { ...value.model, modelId: "other-model" },
-    })],
-    ["推理档位", (value: ResolvedActionDefinition) => ({
-      ...value,
-      action: { ...value.action, reasoningEffort: "low" as const },
-    })],
-    ["重入上限", (value: ResolvedActionDefinition) => ({
-      ...value,
-      action: { ...value.action, maxReentries: 1 },
-    })],
-    ["耗尽策略", (value: ResolvedActionDefinition) => ({
-      ...value,
-      action: { ...value.action, onExhausted: "accept" as const },
-    })],
-    ["预载技能", (value: ResolvedActionDefinition) => ({
-      ...value,
-      preloads: [{ id: "skill-one", name: "额外技能", slug: "skill-one" }],
-    })],
+    [
+      "任务",
+      (value: ResolvedActionDefinition) => ({
+        ...value,
+        action: { ...value.action, prompt: "篡改任务" },
+      }),
+    ],
+    [
+      "规则",
+      (value: ResolvedActionDefinition) => ({
+        ...value,
+        action: { ...value.action, rule: "篡改规则" },
+      }),
+    ],
+    [
+      "provider",
+      (value: ResolvedActionDefinition) => ({
+        ...value,
+        model: { ...value.model, providerId: "other-provider" },
+      }),
+    ],
+    [
+      "model",
+      (value: ResolvedActionDefinition) => ({
+        ...value,
+        model: { ...value.model, modelId: "other-model" },
+      }),
+    ],
+    [
+      "推理档位",
+      (value: ResolvedActionDefinition) => ({
+        ...value,
+        action: { ...value.action, reasoningEffort: "low" as const },
+      }),
+    ],
+    [
+      "重入上限",
+      (value: ResolvedActionDefinition) => ({
+        ...value,
+        action: { ...value.action, maxReentries: 1 },
+      }),
+    ],
+    [
+      "耗尽策略",
+      (value: ResolvedActionDefinition) => ({
+        ...value,
+        action: { ...value.action, onExhausted: "accept" as const },
+      }),
+    ],
+    [
+      "预载技能",
+      (value: ResolvedActionDefinition) => ({
+        ...value,
+        preloads: [{ id: "skill-one", name: "额外技能", slug: "skill-one" }],
+      }),
+    ],
   ])("%s 变化会使固定摘要失效", (_field, mutate) => {
     const original = definition();
     const expected = resumeMatchActionBehaviorDigest(original, ["validate_result"]);
-    expect(matchesResumeMatchActionBehavior(mutate(original), ["validate_result"], expected))
-      .toBe(false);
+    expect(matchesResumeMatchActionBehavior(mutate(original), ["validate_result"], expected)).toBe(
+      false,
+    );
   });
 
   it("可见 Tool 集合变化会使固定摘要失效", () => {

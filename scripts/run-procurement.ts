@@ -14,11 +14,7 @@ import { totalUsageTokens } from "./token-total";
 
 async function main(): Promise<void> {
   if (!process.env.DEEPSEEK_API_KEY) throw new Error("缺少 DEEPSEEK_API_KEY");
-  const wf = db
-    .select()
-    .from(workflows)
-    .where(eq(workflows.name, "采购集采计划生成"))
-    .get();
+  const wf = db.select().from(workflows).where(eq(workflows.name, "采购集采计划生成")).get();
   if (!wf) throw new Error("找不到工作流，先跑 npm run db:seed");
 
   const inputNode = db

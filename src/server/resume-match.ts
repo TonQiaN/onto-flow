@@ -3,20 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
-import {
-  db,
-  runEvents,
-  runNodes,
-  runResults,
-  runs,
-  workflows,
-} from "@/db";
-import {
-  classifyEdges,
-  downstreamOf,
-  type ResolvedPort,
-  type ValidationIssue,
-} from "@/lib/graph";
+import { db, runEvents, runNodes, runResults, runs, workflows } from "@/db";
+import { classifyEdges, downstreamOf, type ResolvedPort, type ValidationIssue } from "@/lib/graph";
 import {
   parseResumeMatchResult,
   RESUME_MATCH_CRITIC_ACTION_NAMES,
@@ -49,19 +37,11 @@ import {
 } from "@/lib/resume-match";
 import { isWithinData, resolveWithinData } from "@/server/fs-safety";
 import { startResolvedRun } from "@/server/engine/runner";
-import {
-  resolveWorkflow,
-  WorkflowResolveError,
-  type ResolvedWorkflow,
-} from "@/server/resolve";
+import { resolveWorkflow, WorkflowResolveError, type ResolvedWorkflow } from "@/server/resolve";
 import { isAuthoritativeResumeMatchActionBehavior } from "@/server/resume-match-action-integrity";
 import { isAuthoritativeResumeMatchValidatorTool } from "@/server/resume-match-validator-integrity";
 import { readSettings, type SettingsDocument } from "@/server/settings";
-import {
-  type WriteResult,
-  writeFail,
-  writeOk,
-} from "@/server/writers/types";
+import { type WriteResult, writeFail, writeOk } from "@/server/writers/types";
 
 const MAX_RESULT_BYTES = 1024 * 1024;
 const RESUME_MATCH_REQUIRED_BUILTIN_TOOLS = [
@@ -97,10 +77,7 @@ export interface ResumeMatchRunView {
   historyUrl: string;
 }
 
-function exactKeys(
-  value: Record<string, unknown>,
-  allowed: readonly string[],
-): boolean {
+function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   const keys = Object.keys(value);
   return keys.length === allowed.length && keys.every((key) => allowed.includes(key));
 }
@@ -137,9 +114,7 @@ function parseFileInput(value: unknown, label: string): ResumeMatchFileInput | s
   };
 }
 
-export function parseResumeMatchInvocation(
-  value: unknown,
-): WriteResult<ResumeMatchInvocation> {
+export function parseResumeMatchInvocation(value: unknown): WriteResult<ResumeMatchInvocation> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return writeFail(400, "请求体必须是 JSON 对象");
   }
@@ -170,7 +145,9 @@ function stableJson(value: unknown): string {
 function sameResultSchema(schema: string | null): boolean {
   if (!schema) return false;
   try {
-    return stableJson(JSON.parse(schema)) === stableJson(JSON.parse(RESUME_MATCH_RESULT_SCHEMA_TEXT));
+    return (
+      stableJson(JSON.parse(schema)) === stableJson(JSON.parse(RESUME_MATCH_RESULT_SCHEMA_TEXT))
+    );
   } catch {
     return false;
   }
@@ -190,10 +167,7 @@ function portContract(
   return { name, kind, objectTypeId, artifactPath, exitName: null };
 }
 
-function exactPorts(
-  actual: readonly ResolvedPort[],
-  expected: readonly PortContract[],
-): boolean {
+function exactPorts(actual: readonly ResolvedPort[], expected: readonly PortContract[]): boolean {
   const key = (port: ResolvedPort | PortContract) =>
     JSON.stringify([
       port.name,
@@ -382,11 +356,7 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
       (critic, index) =>
         exactPorts(critic.inputs, [
           portContract(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobPort.objectTypeId),
-          portContract(
-            RESUME_MATCH_PARSED_RESUME_PORT,
-            "file",
-            parsedResumePort.objectTypeId,
-          ),
+          portContract(RESUME_MATCH_PARSED_RESUME_PORT, "file", parsedResumePort.objectTypeId),
         ]) &&
         exactPorts(critic.outputs, [
           portContract(
@@ -399,16 +369,8 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
     ) &&
     exactPorts(reportActionNode.inputs, [
       portContract(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobPort.objectTypeId),
-      portContract(
-        RESUME_MATCH_PARSED_RESUME_PORT,
-        "file",
-        parsedResumePort.objectTypeId,
-      ),
-      portContract(
-        RESUME_MATCH_REPORT_CRITICS_PORT,
-        "file",
-        criticReportPort.objectTypeId,
-      ),
+      portContract(RESUME_MATCH_PARSED_RESUME_PORT, "file", parsedResumePort.objectTypeId),
+      portContract(RESUME_MATCH_REPORT_CRITICS_PORT, "file", criticReportPort.objectTypeId),
     ]) &&
     exactPorts(reportActionNode.outputs, [
       portContract(
@@ -470,24 +432,13 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
       reportActionNode.id,
       RESUME_MATCH_PARSED_RESUME_PORT,
     ),
-    edgeTuple(
-      reportActionNode.id,
-      RESUME_MATCH_REPORT_RESULT_PORT,
-      outputNode.id,
-      "value",
-    ),
+    edgeTuple(reportActionNode.id, RESUME_MATCH_REPORT_RESULT_PORT, outputNode.id, "value"),
   ];
-  const edgeKey = (edge: readonly [string, string, string, string]) =>
-    JSON.stringify(edge);
+  const edgeKey = (edge: readonly [string, string, string, string]) => JSON.stringify(edge);
   const expectedEdgeKeys = expectedEdges.map(edgeKey).sort();
   const actualEdgeKeys = resolved.edges
     .map((edge) =>
-      edgeKey([
-        edge.sourceNodeId,
-        edge.sourcePort,
-        edge.targetNodeId,
-        edge.targetPort,
-      ]),
+      edgeKey([edge.sourceNodeId, edge.sourcePort, edge.targetNodeId, edge.targetPort]),
     )
     .sort();
   if (
@@ -525,15 +476,11 @@ function validateRequiredCapabilities(
   const incoming = outputNode
     ? resolved.edges.find((edge) => edge.targetNodeId === outputNode.id)
     : undefined;
-  const actionId = incoming
-    ? resolved.nodeRows.get(incoming.sourceNodeId)?.actionId
-    : null;
+  const actionId = incoming ? resolved.nodeRows.get(incoming.sourceNodeId)?.actionId : null;
   if (!actionId) {
     return "简历匹配汇总 Action 无法解析校验工具归属";
   }
-  const referencedTools = new Set(
-    resolved.capabilities.toolNamesByActionId.get(actionId) ?? [],
-  );
+  const referencedTools = new Set(resolved.capabilities.toolNamesByActionId.get(actionId) ?? []);
   // 可见关系与 Tool 集里放的都是公名：展示名可随意改，公名才是模型调用与收窄用的身份。
   const validator = referencedTools.has(RESUME_MATCH_VALIDATOR_TOOL_NAME)
     ? resolved.capabilities.tools.find(
@@ -582,11 +529,9 @@ function validateActionBehaviors(resolved: ResolvedWorkflow): string | null {
       (candidate) => candidate.kind === "action" && candidate.label === name,
     );
     const actionId = node ? resolved.nodeRows.get(node.id)?.actionId : null;
-    const definition = actionId
-      ? resolved.actionDefinitions.get(actionId)
-      : undefined;
+    const definition = actionId ? resolved.actionDefinitions.get(actionId) : undefined;
     const toolPublicNames = actionId
-      ? resolved.capabilities.toolNamesByActionId.get(actionId) ?? []
+      ? (resolved.capabilities.toolNamesByActionId.get(actionId) ?? [])
       : [];
     if (
       !definition ||
@@ -677,8 +622,7 @@ function validatorReceiptHash(payload: Record<string, unknown> | null): string |
   }
   try {
     const receipt = JSON.parse(payload.output) as unknown;
-    return (
-      typeof receipt === "object" &&
+    return typeof receipt === "object" &&
       receipt !== null &&
       !Array.isArray(receipt) &&
       exactKeys(receipt as Record<string, unknown>, ["valid", "errors", "resultSha256"]) &&
@@ -687,7 +631,6 @@ function validatorReceiptHash(payload: Record<string, unknown> | null): string |
       ((receipt as Record<string, unknown>).errors as unknown[]).length === 0 &&
       typeof (receipt as Record<string, unknown>).resultSha256 === "string" &&
       /^[0-9a-f]{64}$/.test((receipt as Record<string, unknown>).resultSha256 as string)
-    )
       ? ((receipt as Record<string, unknown>).resultSha256 as string)
       : null;
   } catch {
@@ -776,12 +719,7 @@ export function captureResumeMatchCompletion(
   const outputNode = db
     .select()
     .from(runNodes)
-    .where(
-      and(
-        eq(runNodes.runId, runId),
-        eq(runNodes.nodeId, resultNodes.outputNodeId),
-      ),
-    )
+    .where(and(eq(runNodes.runId, runId), eq(runNodes.nodeId, resultNodes.outputNodeId)))
     .get();
   const output = outputFile(outputNode?.outputs?.value);
   const run = db.select({ runDir: runs.runDir }).from(runs).where(eq(runs.id, runId)).get();
@@ -832,10 +770,7 @@ function readResultArtifact(
   if (!runDir) return { ok: false, error: "运行没有工作区记录" };
   // runDir 是数据库里的运行时事实；忽略构建期追踪，否则 Turbopack 会把动态路径
   // 扩成整个仓库并把所有文件打进这个 API 路由（与 trajectory.ts 同一处理）。
-  const runRoot = path.resolve(
-    /* turbopackIgnore: true */ process.cwd(),
-    runDir,
-  );
+  const runRoot = path.resolve(/* turbopackIgnore: true */ process.cwd(), runDir);
   const candidate = resolveWithinData(output.file.path);
   if (!descendant(runRoot, candidate)) {
     return { ok: false, error: "评分结果不在该运行目录内" };
@@ -862,11 +797,7 @@ function readResultArtifact(
 export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunView, string> {
   const run = db.select().from(runs).where(eq(runs.id, runId)).get();
   const invocation = run ? resumeMatchInvocation(run.imports) : null;
-  if (
-    !run ||
-    run.workflowName !== RESUME_MATCH_WORKFLOW_NAME ||
-    !invocation
-  ) {
+  if (!run || run.workflowName !== RESUME_MATCH_WORKFLOW_NAME || !invocation) {
     return writeFail(404, "简历匹配运行不存在");
   }
   const base: Omit<ResumeMatchRunView, "result"> = {
@@ -881,11 +812,7 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
 
   // 结果节点身份已在受理时持久化，并在完成门禁里用于精确读取该节点产物；GET
   // 只读门禁留下的持久业务结果，工作区按保留策略清理后不改变成功调用的响应。
-  const storedResult = db
-    .select()
-    .from(runResults)
-    .where(eq(runResults.runId, run.id))
-    .get();
+  const storedResult = db.select().from(runResults).where(eq(runResults.runId, run.id)).get();
   if (!storedResult || storedResult.kind !== "resume-match") {
     return writeFail(500, "成功运行缺少持久 JSON 评分结果");
   }
@@ -895,11 +822,7 @@ export function readResumeMatchRun(runId: string): WriteResult<ResumeMatchRunVie
   }
   const completionHash = completionResultHash(run.imports);
   const resultSha256 = createHash("sha256").update(storedResult.content, "utf8").digest("hex");
-  if (
-    !completionHash ||
-    storedResult.sha256 !== resultSha256 ||
-    completionHash !== resultSha256
-  ) {
+  if (!completionHash || storedResult.sha256 !== resultSha256 || completionHash !== resultSha256) {
     return writeFail(
       500,
       `成功运行缺少 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 对当前结果的持久完成证据`,

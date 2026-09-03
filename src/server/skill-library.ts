@@ -41,8 +41,7 @@ interface SkillLibraryGlobals {
 const g = globalThis as SkillLibraryGlobals;
 const projectionHolds = g.ontoflowSkillProjectionHolds ?? new Map<string, Set<string>>();
 g.ontoflowSkillProjectionHolds = projectionHolds;
-const pendingRemovals =
-  g.ontoflowPendingSkillProjectionRemovals ?? new Set<string>();
+const pendingRemovals = g.ontoflowPendingSkillProjectionRemovals ?? new Set<string>();
 g.ontoflowPendingSkillProjectionRemovals = pendingRemovals;
 const pendingVersionRemovals =
   g.ontoflowPendingSkillVersionRemovals ?? new Map<string, Set<string>>();

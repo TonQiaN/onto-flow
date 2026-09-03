@@ -127,11 +127,7 @@ export async function resolveWorkflow(
   workflowId: string,
   options: ResolveWorkflowOptions = {},
 ): Promise<ResolvedWorkflow | null> {
-  const workflow = db
-    .select()
-    .from(workflows)
-    .where(eq(workflows.id, workflowId))
-    .get();
+  const workflow = db.select().from(workflows).where(eq(workflows.id, workflowId)).get();
   if (!workflow) return null;
 
   const nodeRows = db
@@ -153,11 +149,7 @@ export async function resolveWorkflow(
   );
 
   const actionIds = [
-    ...new Set(
-      nodeRows
-        .filter((n) => n.kind === "action" && n.actionId)
-        .map((n) => n.actionId!),
-    ),
+    ...new Set(nodeRows.filter((n) => n.kind === "action" && n.actionId).map((n) => n.actionId!)),
   ];
   const actionRows = actionIds.length
     ? db.select().from(actions).where(inArray(actions.id, actionIds)).all()
@@ -220,24 +212,16 @@ export async function resolveWorkflow(
         .all()
     : [];
   const actionToolRows = actionIds.length
-    ? db
-        .select()
-        .from(actionTools)
-        .where(inArray(actionTools.actionId, actionIds))
-        .all()
+    ? db.select().from(actionTools).where(inArray(actionTools.actionId, actionIds)).all()
     : [];
   // 越界的预载 / 可见 Tool 只能报名字：它们不在工作流集合里，但仍是库里的实体。
   const outsidePreloadSkillIds = [
     ...new Set(
-      preloadRows
-        .map((relation) => relation.skillId)
-        .filter((id) => !skillRefById.has(id)),
+      preloadRows.map((relation) => relation.skillId).filter((id) => !skillRefById.has(id)),
     ),
   ];
   const outsideToolIds = [
-    ...new Set(
-      actionToolRows.map((relation) => relation.toolId).filter((id) => !toolById.has(id)),
-    ),
+    ...new Set(actionToolRows.map((relation) => relation.toolId).filter((id) => !toolById.has(id))),
   ];
   const outsideSkillNames = new Map(
     (outsidePreloadSkillIds.length
@@ -343,9 +327,7 @@ export async function resolveWorkflow(
         kind: "action",
         label: action?.name ?? row.label ?? "（Action 已删除）",
         inputs: ports.filter((p) => p.direction === "input").map(toResolvedPort),
-        outputs: ports
-          .filter((p) => p.direction === "output")
-          .map(toResolvedPort),
+        outputs: ports.filter((p) => p.direction === "output").map(toResolvedPort),
         maxReentries: action?.maxReentries ?? 0,
         onExhausted: action?.onExhausted ?? "fail",
       };
@@ -358,7 +340,8 @@ export async function resolveWorkflow(
       kind: type?.kind ?? "text",
     };
     const label =
-      row.label || (row.kind === "input" ? `输入·${port.objectTypeName}` : `输出·${port.objectTypeName}`);
+      row.label ||
+      (row.kind === "input" ? `输入·${port.objectTypeName}` : `输出·${port.objectTypeName}`);
     return row.kind === "input"
       ? { id: row.id, kind: "input", label, inputs: [], outputs: [port] }
       : { id: row.id, kind: "output", label, inputs: [port], outputs: [] };

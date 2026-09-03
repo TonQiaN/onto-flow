@@ -250,7 +250,11 @@ function upsertTool(desired: ToolPayload): string {
   if (!existing) {
     // 公名不在库里、展示名却已被另一个 Tool 占用：不按展示名猜身份（会把别人的契约整份覆盖），
     // 也不让 UNIQUE(name) 以一句 constraint failed 收场；点名冲突让人自己处理。
-    const taken = db.select({ publicName: tools.publicName }).from(tools).where(eq(tools.name, desired.name)).get();
+    const taken = db
+      .select({ publicName: tools.publicName })
+      .from(tools)
+      .where(eq(tools.name, desired.name))
+      .get();
     if (taken) {
       throw new Error(
         `种子 Tool「${desired.name}」（公名 ${desired.publicName}）在库里找不到，但展示名已被公名为 ${taken.publicName} 的 Tool 占用：改掉或删掉那个 Tool 再重跑种子`,
@@ -405,7 +409,10 @@ export function seedLeetcodeWorkflow(): { workflowId: string; inputNodeId: strin
 
   const description = "解题与测试互审的循环：测试每轮重写用例并真跑，通过才产出定稿脚本";
   // 三层设置（ADR-0016）：Tool 集声明 run_python 并只对测试 Action 可见；指令原样成为 workspace/AGENTS.md。
-  const settingsFields: Pick<WorkflowDefinition, "instructions" | "settings" | "skillIds" | "toolIds"> = {
+  const settingsFields: Pick<
+    WorkflowDefinition,
+    "instructions" | "settings" | "skillIds" | "toolIds"
+  > = {
     instructions: [`# ${LEETCODE_WORKFLOW_NAME}`, "", description, ""].join("\n"),
     settings: EMPTY_WORKFLOW_SETTINGS,
     skillIds: [],
@@ -457,12 +464,42 @@ export function seedLeetcodeWorkflow(): { workflowId: string; inputNodeId: strin
   const desiredEdges: EdgePayload[] = [
     // classifyEdges 的 DFS 按边 id 排序遍历；e1 < e2 保证从题目先走到「解题」，
     // 这样环的方向才是 测试→解题 为回边。id 前缀就是遍历顺序的一部分，别改。
-    { id: "lc-e1-problem-write", sourceNodeId: LEETCODE_INPUT_NODE_ID, sourcePort: "value", targetNodeId: "lc-write", targetPort: "题目" },
-    { id: "lc-e2-problem-test", sourceNodeId: LEETCODE_INPUT_NODE_ID, sourcePort: "value", targetNodeId: "lc-test", targetPort: "题目" },
-    { id: "lc-e3-script", sourceNodeId: "lc-write", sourcePort: "脚本", targetNodeId: "lc-test", targetPort: "脚本" },
+    {
+      id: "lc-e1-problem-write",
+      sourceNodeId: LEETCODE_INPUT_NODE_ID,
+      sourcePort: "value",
+      targetNodeId: "lc-write",
+      targetPort: "题目",
+    },
+    {
+      id: "lc-e2-problem-test",
+      sourceNodeId: LEETCODE_INPUT_NODE_ID,
+      sourcePort: "value",
+      targetNodeId: "lc-test",
+      targetPort: "题目",
+    },
+    {
+      id: "lc-e3-script",
+      sourceNodeId: "lc-write",
+      sourcePort: "脚本",
+      targetNodeId: "lc-test",
+      targetPort: "脚本",
+    },
     // 回边：不通过的意见流回解题节点，触发下一轮（ADR-0009）。
-    { id: "lc-e4-feedback", sourceNodeId: "lc-test", sourcePort: "意见", targetNodeId: "lc-write", targetPort: "意见" },
-    { id: "lc-e5-final", sourceNodeId: "lc-test", sourcePort: "定稿", targetNodeId: "lc-out", targetPort: "value" },
+    {
+      id: "lc-e4-feedback",
+      sourceNodeId: "lc-test",
+      sourcePort: "意见",
+      targetNodeId: "lc-write",
+      targetPort: "意见",
+    },
+    {
+      id: "lc-e5-final",
+      sourceNodeId: "lc-test",
+      sourcePort: "定稿",
+      targetNodeId: "lc-out",
+      targetPort: "value",
+    },
   ];
   const currentNodeRows = db
     .select()
@@ -496,15 +533,13 @@ export function seedLeetcodeWorkflow(): { workflowId: string; inputNodeId: strin
       })),
     ),
     edges: byId(
-      currentEdgeRows.map(
-        ({ id, sourceNodeId, sourcePort, targetNodeId, targetPort }) => ({
-          id,
-          sourceNodeId,
-          sourcePort,
-          targetNodeId,
-          targetPort,
-        }),
-      ),
+      currentEdgeRows.map(({ id, sourceNodeId, sourcePort, targetNodeId, targetPort }) => ({
+        id,
+        sourceNodeId,
+        sourcePort,
+        targetNodeId,
+        targetPort,
+      })),
     ),
   };
   const desiredDefinition: WorkflowDefinition = {

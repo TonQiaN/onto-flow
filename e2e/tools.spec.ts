@@ -47,9 +47,7 @@ test.describe("Tool 库", () => {
     owners.length = 0;
   });
 
-  test("列表显示种子 Tool「集采计划归档入库」及其公名徽章 save_purchase_plan", async ({
-    page,
-  }) => {
+  test("列表显示种子 Tool「集采计划归档入库」及其公名徽章 save_purchase_plan", async ({ page }) => {
     await page.goto("/tools");
     const card = page
       .locator("li")

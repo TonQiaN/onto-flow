@@ -28,14 +28,25 @@ describe("Skill 资源文件校验", () => {
     [{ path: "ok.md" }, "contentBase64"],
   ])("拒绝非法资源文件 %j", (file, fragment) => {
     const result = createSkill({ name: "校验", files: [file] });
-    expect(result).toMatchObject({ ok: false, status: 400, error: expect.stringContaining(fragment) });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining(fragment),
+    });
     expect(materializeSkill).not.toHaveBeenCalled();
   });
 
   it("拒绝单文件超过 1 MiB", () => {
     const big = Buffer.alloc(1024 * 1024 + 1, 1).toString("base64");
-    const result = createSkill({ name: "大文件", files: [{ path: "big.bin", contentBase64: big }] });
-    expect(result).toMatchObject({ ok: false, status: 400, error: expect.stringContaining("1 MiB") });
+    const result = createSkill({
+      name: "大文件",
+      files: [{ path: "big.bin", contentBase64: big }],
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining("1 MiB"),
+    });
   });
 
   it("拒绝超过 32 个文件", () => {
@@ -117,17 +128,26 @@ describe("Skill 写入", () => {
     if (!created.ok) return;
 
     expect(created.data.files).toEqual([
-      { path: "references/rubric.md", contentBase64: b64("# 评分表"), size: Buffer.byteLength("# 评分表") },
+      {
+        path: "references/rubric.md",
+        contentBase64: b64("# 评分表"),
+        size: Buffer.byteLength("# 评分表"),
+      },
       { path: "scripts/check.py", contentBase64: b64("print('ok')"), size: 11 },
     ]);
     expect(
-      sqlite.prepare("select path, size from skill_files where skill_id = ? order by path").all(created.data.id),
+      sqlite
+        .prepare("select path, size from skill_files where skill_id = ? order by path")
+        .all(created.data.id),
     ).toEqual([
       { path: "references/rubric.md", size: Buffer.byteLength("# 评分表") },
       { path: "scripts/check.py", size: 11 },
     ]);
     expect(materializeSkill).toHaveBeenCalledTimes(1);
-    const [row, files] = materializeSkill.mock.calls[0] as [{ id: string }, Array<{ path: string; content: Buffer }>];
+    const [row, files] = materializeSkill.mock.calls[0] as [
+      { id: string },
+      Array<{ path: string; content: Buffer }>,
+    ];
     expect(row.id).toBe(created.data.id);
     expect(files.map((f) => [f.path, f.content.toString("utf8")])).toEqual([
       ["scripts/check.py", "print('ok')"],

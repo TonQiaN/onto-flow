@@ -1,12 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import {
-  compactionEventLine,
-  formatClock,
-  toMillis,
-  type RunEventRow,
-} from "../lib";
+import { compactionEventLine, formatClock, toMillis, type RunEventRow } from "../lib";
 
 const SUMMARY_LIMIT = 200;
 
@@ -18,9 +13,7 @@ function payloadSummary(payload: Record<string, unknown> | null): string {
   } catch {
     text = String(payload);
   }
-  return text.length > SUMMARY_LIMIT
-    ? `${text.slice(0, SUMMARY_LIMIT)}…`
-    : text;
+  return text.length > SUMMARY_LIMIT ? `${text.slice(0, SUMMARY_LIMIT)}…` : text;
 }
 
 /** 事件日志面板：等宽小字号，时间戳 + type + payload 摘要，自动滚底 */
@@ -66,9 +59,7 @@ export function EventLog({
             const label = ev.nodeId ? nodeLabels.get(ev.nodeId) : null;
             return (
               <div key={ev.id} className="break-all whitespace-pre-wrap">
-                <span className="text-zinc-400">
-                  [{ts == null ? "--:--:--" : formatClock(ts)}]
-                </span>{" "}
+                <span className="text-zinc-400">[{ts == null ? "--:--:--" : formatClock(ts)}]</span>{" "}
                 {label && <span className="text-zinc-400">{label} · </span>}
                 <span className="font-semibold text-zinc-700">{ev.type}</span>{" "}
                 {ev.type === "compaction"

@@ -14,15 +14,8 @@ test.describe("Action 库", () => {
   }) => {
     await page.goto("/actions");
 
-    for (const name of [
-      "需求整理",
-      "集采计划生成",
-      "集采计划审核",
-      "集采计划归档",
-    ]) {
-      await expect(
-        page.getByRole("heading", { name, exact: true }),
-      ).toBeVisible();
+    for (const name of ["需求整理", "集采计划生成", "集采计划审核", "集采计划归档"]) {
+      await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
     }
 
     // 「集采计划审核」端口签名：集采计划 → 审核评价、集采计划
@@ -61,9 +54,7 @@ test.describe("Action 库", () => {
     ]);
 
     // 编辑器里两个分区改名为「预载技能」与「可见 Tool」，旧的「强制注入」说法不再出现
-    await expect(
-      page.getByRole("heading", { name: "编辑 Action", exact: true }),
-    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "编辑 Action", exact: true })).toBeVisible();
     await expect(page.getByText("预载技能", { exact: true })).toBeVisible();
     await expect(page.getByText("可见 Tool", { exact: true })).toBeVisible();
     await expect(page.getByText("强制注入")).toHaveCount(0);
@@ -76,8 +67,6 @@ test.describe("Action 库", () => {
     await expect(preloadRow).toHaveCount(1);
     await expect(preloadRow.getByRole("checkbox")).toBeChecked();
     await expect(preloadRow.getByText(/约 \d+ token/)).toBeVisible();
-    await expect(
-      page.getByText(`预载 ${dto!.preloadSkillIds.length} 个，合计约`),
-    ).toBeVisible();
+    await expect(page.getByText(`预载 ${dto!.preloadSkillIds.length} 个，合计约`)).toBeVisible();
   });
 });

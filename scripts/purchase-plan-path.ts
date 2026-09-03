@@ -67,12 +67,7 @@ export function removeUnownedBackup(
     fsModule.unlinkSync(absolutePath);
     return null;
   } catch (error) {
-    if (
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
       return null;
     }
     return error instanceof Error ? error.message : String(error);

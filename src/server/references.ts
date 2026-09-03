@@ -80,10 +80,7 @@ const ENTITY_LABELS: Record<EntityKind, string> = {
 };
 
 export function isEntityKind(value: unknown): value is EntityKind {
-  return (
-    typeof value === "string" &&
-    (ENTITY_KINDS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && (ENTITY_KINDS as readonly string[]).includes(value);
 }
 
 export function entityLabel(kind: EntityKind): string {
@@ -91,32 +88,19 @@ export function entityLabel(kind: EntityKind): string {
 }
 
 /** 该 kind 的全部实体（只取 id + name），按名字升序 */
-export function listEntities(
-  kind: EntityKind,
-): Array<{ id: string; name: string }> {
+export function listEntities(kind: EntityKind): Array<{ id: string; name: string }> {
   const table = ENTITY_TABLES[kind];
-  return db
-    .select({ id: table.id, name: table.name })
-    .from(table)
-    .orderBy(asc(table.name))
-    .all();
+  return db.select({ id: table.id, name: table.name }).from(table).orderBy(asc(table.name)).all();
 }
 
 export function entityExists(kind: EntityKind, id: string): boolean {
   const table = ENTITY_TABLES[kind];
-  return (
-    db.select({ id: table.id }).from(table).where(eq(table.id, id)).get() !==
-    undefined
-  );
+  return db.select({ id: table.id }).from(table).where(eq(table.id, id)).get() !== undefined;
 }
 
 export function entityName(kind: EntityKind, id: string): string | null {
   const table = ENTITY_TABLES[kind];
-  const row = db
-    .select({ name: table.name })
-    .from(table)
-    .where(eq(table.id, id))
-    .get();
+  const row = db.select({ name: table.name }).from(table).where(eq(table.id, id)).get();
   return row?.name ?? null;
 }
 
@@ -274,18 +258,12 @@ export function refCounts(kind: EntityKind): Record<string, number> {
       break;
     }
     case "skill": {
-      const rows = db
-        .select({ skillId: workflowSkills.skillId })
-        .from(workflowSkills)
-        .all();
+      const rows = db.select({ skillId: workflowSkills.skillId }).from(workflowSkills).all();
       for (const r of rows) bump(r.skillId);
       break;
     }
     case "tool": {
-      const rows = db
-        .select({ toolId: workflowTools.toolId })
-        .from(workflowTools)
-        .all();
+      const rows = db.select({ toolId: workflowTools.toolId }).from(workflowTools).all();
       for (const r of rows) bump(r.toolId);
       break;
     }
@@ -324,10 +302,7 @@ export function orphans(kind: EntityKind): OrphanEntity[] {
  * 失效判定：连线用到的端口在 nextPorts 中按 (direction, name) 找不到（删除或改名），
  * 或找到了但 objectTypeId 变了（nominal 类型变更即失效）。
  */
-export function impactOfActionPorts(
-  actionId: string,
-  nextPorts: NextPort[],
-): BrokenEdge[] {
+export function impactOfActionPorts(actionId: string, nextPorts: NextPort[]): BrokenEdge[] {
   const nodes = db
     .select({
       nodeId: workflowNodes.id,
@@ -375,14 +350,8 @@ export function impactOfActionPorts(
   const typeName = (id: string) => typeNames.get(id) ?? "未知类型";
   const broken: BrokenEdge[] = [];
 
-  const check = (
-    node: (typeof nodes)[number],
-    direction: "input" | "output",
-    portName: string,
-  ) => {
-    const next = nextPorts.find(
-      (p) => p.direction === direction && p.name === portName,
-    );
+  const check = (node: (typeof nodes)[number], direction: "input" | "output", portName: string) => {
+    const next = nextPorts.find((p) => p.direction === direction && p.name === portName);
     const label = direction === "input" ? "输入端口" : "输出端口";
     if (!next) {
       broken.push({
@@ -394,9 +363,7 @@ export function impactOfActionPorts(
       });
       return;
     }
-    const current = currentPorts.find(
-      (p) => p.direction === direction && p.name === portName,
-    );
+    const current = currentPorts.find((p) => p.direction === direction && p.name === portName);
     if (current && current.objectTypeId !== next.objectTypeId) {
       broken.push({
         workflowId: node.workflowId,

@@ -138,10 +138,11 @@ describe("工作流执行定义快照", () => {
       ["validate_result", "original tool code"],
       ["archive_result", "archive code"],
     ]);
-    expect(resolved.capabilities.tools[1]).toMatchObject({ timeoutMs: 5000, parameters: { type: "object" } });
-    expect(resolved.capabilities.toolNamesByActionId.get("action-1")).toEqual([
-      "validate_result",
-    ]);
+    expect(resolved.capabilities.tools[1]).toMatchObject({
+      timeoutMs: 5000,
+      parameters: { type: "object" },
+    });
+    expect(resolved.capabilities.toolNamesByActionId.get("action-1")).toEqual(["validate_result"]);
   });
 
   it("Action 预载了技能集之外的技能时以 422 语义拒绝受理", async () => {

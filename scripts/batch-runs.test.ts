@@ -30,12 +30,15 @@ describe("付费批量运行准入", () => {
     ];
 
     await expect(
-      admitWholeBatch(started.map((result) => Promise.resolve(result)), {
-        cancelRun,
-        isRunExecutionActive: (runId) => active.has(runId),
-        settleTimeoutMs: 20,
-        pollIntervalMs: 1,
-      }),
+      admitWholeBatch(
+        started.map((result) => Promise.resolve(result)),
+        {
+          cancelRun,
+          isRunExecutionActive: (runId) => active.has(runId),
+          settleTimeoutMs: 20,
+          pollIntervalMs: 1,
+        },
+      ),
     ).rejects.toThrow("已取消并收束同批已受理的 2 个运行");
     expect(cancelRun.mock.calls.map(([runId]) => runId)).toEqual(["run-1", "run-3"]);
   });
@@ -47,12 +50,15 @@ describe("付费批量运行准入", () => {
     ];
 
     await expect(
-      admitWholeBatch(started.map((result) => Promise.resolve(result)), {
-        cancelRun: async () => ({ ok: true }),
-        isRunExecutionActive: () => true,
-        settleTimeoutMs: 0,
-        pollIntervalMs: 1,
-      }),
+      admitWholeBatch(
+        started.map((result) => Promise.resolve(result)),
+        {
+          cancelRun: async () => ({ ok: true }),
+          isRunExecutionActive: () => true,
+          settleTimeoutMs: 0,
+          pollIntervalMs: 1,
+        },
+      ),
     ).rejects.toThrow("1 个执行器在 0ms 内未退出：run-stuck");
   });
 

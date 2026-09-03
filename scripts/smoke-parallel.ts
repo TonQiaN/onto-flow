@@ -22,11 +22,7 @@ import {
   workflowNodes,
   workflows,
 } from "../src/db";
-import {
-  cancelRun,
-  isRunExecutionActive,
-  startRun,
-} from "../src/server/engine/runner";
+import { cancelRun, isRunExecutionActive, startRun } from "../src/server/engine/runner";
 import { abortRunBatch, admitWholeBatch } from "./batch-runs";
 import {
   createAction,
@@ -116,7 +112,8 @@ async function main(): Promise<void> {
     .from(models)
     .where(and(eq(models.providerId, "deepseek-official"), eq(models.modelId, "deepseek-v4-flash")))
     .get();
-  if (!model) throw new Error("找不到 deepseek-official/deepseek-v4-flash 模型行，先跑 npm run db:seed");
+  if (!model)
+    throw new Error("找不到 deepseek-official/deepseek-v4-flash 模型行，先跑 npm run db:seed");
 
   const tNeed = upsertObjectType(`${PREFIX}需求`, "text");
   const tOut = upsertObjectType(`${PREFIX}产出`, "file");
@@ -297,7 +294,9 @@ async function main(): Promise<void> {
   );
   const runIds = await admitWholeBatch(
     markers.map((marker) =>
-      startRun(wf.id, { [INPUT_NODE_ID]: { kind: "text", text: `${marker}：这是本运行的专属需求，原样誊写即可。` } }),
+      startRun(wf.id, {
+        [INPUT_NODE_ID]: { kind: "text", text: `${marker}：这是本运行的专属需求，原样誊写即可。` },
+      }),
     ),
     { cancelRun, isRunExecutionActive },
   );
@@ -307,7 +306,9 @@ async function main(): Promise<void> {
   for (;;) {
     const rows = runIds.map((id) => db.select().from(runs).where(eq(runs.id, id)).get()!);
     const done = rows.filter((r) => r.status !== "running");
-    process.stdout.write(`\r收束 ${done.length}/${RUN_COUNT}（${Math.round((Date.now() - t0) / 1000)}s）  `);
+    process.stdout.write(
+      `\r收束 ${done.length}/${RUN_COUNT}（${Math.round((Date.now() - t0) / 1000)}s）  `,
+    );
     if (done.length === RUN_COUNT) break;
     if (Date.now() - t0 > 900_000) {
       await abortRunBatch(runIds, "等待运行收束超时", {
@@ -360,7 +361,9 @@ async function main(): Promise<void> {
   });
 
   if (finishesAt.length === RUN_COUNT && Math.max(...startsAt) <= Math.min(...finishesAt)) {
-    console.log(`\n并行证据：最早收束时刻之前 ${RUN_COUNT} 个运行已全部启动（同时在飞 ${RUN_COUNT} 个）。`);
+    console.log(
+      `\n并行证据：最早收束时刻之前 ${RUN_COUNT} 个运行已全部启动（同时在飞 ${RUN_COUNT} 个）。`,
+    );
   } else {
     console.log("\n注意：启动/收束区间没有完整重叠，人工核对时间线。");
   }

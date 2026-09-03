@@ -119,14 +119,16 @@ CREATE TABLE run_nodes (
   started_at INTEGER, finished_at INTEGER, UNIQUE(run_id, node_id)
 );
 `);
-(globalThis as unknown as {
-  ontoflowDb?: unknown;
-  ontoflowCancelledRuns?: Set<string>;
-  ontoflowRunProcesses?: Map<string, unknown>;
-  ontoflowActiveRuns?: Set<string>;
-  ontoflowRunDisposalFailures?: Set<string>;
-  ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
-}).ontoflowDb = drizzle(sqlite, { schema });
+(
+  globalThis as unknown as {
+    ontoflowDb?: unknown;
+    ontoflowCancelledRuns?: Set<string>;
+    ontoflowRunProcesses?: Map<string, unknown>;
+    ontoflowActiveRuns?: Set<string>;
+    ontoflowRunDisposalFailures?: Set<string>;
+    ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
+  }
+).ontoflowDb = drizzle(sqlite, { schema });
 (globalThis as unknown as { ontoflowCancelledRuns?: Set<string> }).ontoflowCancelledRuns =
   new Set();
 const runProcesses = new Map<string, unknown>();
@@ -135,12 +137,15 @@ const runProcesses = new Map<string, unknown>();
 const activeRuns = new Set<string>();
 (globalThis as unknown as { ontoflowActiveRuns?: Set<string> }).ontoflowActiveRuns = activeRuns;
 const disposalFailures = new Set<string>();
-(globalThis as unknown as { ontoflowRunDisposalFailures?: Set<string> })
-  .ontoflowRunDisposalFailures = disposalFailures;
+(
+  globalThis as unknown as { ontoflowRunDisposalFailures?: Set<string> }
+).ontoflowRunDisposalFailures = disposalFailures;
 const pendingUsageSettlements = new Map<string, Promise<void>>();
-(globalThis as unknown as {
-  ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
-}).ontoflowPendingUsageSettlements = pendingUsageSettlements;
+(
+  globalThis as unknown as {
+    ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
+  }
+).ontoflowPendingUsageSettlements = pendingUsageSettlements;
 
 let startRun: typeof import("./runner").startRun;
 let startResolvedRun: typeof import("./runner").startResolvedRun;
@@ -526,7 +531,10 @@ describe("三层设置受理", () => {
   function settingsWorkflow(): ResolvedWorkflow {
     const graph = resolvedWorkflow();
     graph.workflow.instructions = "# 工作流自己的指令\n";
-    graph.workflow.settings = { toggles: { webSearch: true, todo: false }, mcpServers: ["docs", "ghost"] };
+    graph.workflow.settings = {
+      toggles: { webSearch: true, todo: false },
+      mcpServers: ["docs", "ghost"],
+    };
     graph.settings = { toggles: { webSearch: true, todo: false }, mcpServers: ["docs", "ghost"] };
     graph.capabilities = {
       skills: [{ id: "skill-1", name: "核对", slug: "skill-abc" }],
@@ -558,9 +566,27 @@ describe("三层设置受理", () => {
     const settings = testSettings({
       disabledTools: ["todo_write"],
       mcpServers: [
-        { name: "docs", enabled: true, transport: "streamable-http", url: "https://example.invalid/a", headers: {} },
-        { name: "off", enabled: false, transport: "streamable-http", url: "https://example.invalid/b", headers: {} },
-        { name: "other", enabled: true, transport: "streamable-http", url: "https://example.invalid/c", headers: {} },
+        {
+          name: "docs",
+          enabled: true,
+          transport: "streamable-http",
+          url: "https://example.invalid/a",
+          headers: {},
+        },
+        {
+          name: "off",
+          enabled: false,
+          transport: "streamable-http",
+          url: "https://example.invalid/b",
+          headers: {},
+        },
+        {
+          name: "other",
+          enabled: true,
+          transport: "streamable-http",
+          url: "https://example.invalid/c",
+          headers: {},
+        },
       ],
     });
     const startedRun = await startResolvedRun(
@@ -582,7 +608,9 @@ describe("三层设置受理", () => {
         toggles: GLOBAL_TOGGLES,
         mcpServers: ["docs", "other"],
         disabledTools: ["todo_write"],
-        defaultInstructionsSha256: createHash("sha256").update(DEFAULT_INSTRUCTIONS_TEXT).digest("hex"),
+        defaultInstructionsSha256: createHash("sha256")
+          .update(DEFAULT_INSTRUCTIONS_TEXT)
+          .digest("hex"),
       },
       workflow: {
         settings: { toggles: { webSearch: true, todo: false }, mcpServers: ["docs", "ghost"] },
@@ -597,9 +625,9 @@ describe("三层设置受理", () => {
     });
 
     await vi.waitFor(() => {
-      const run = sqlite
-        .prepare("SELECT status FROM runs WHERE id = ?")
-        .get(startedRun.runId) as { status: string };
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
       expect(run.status).toBe("success");
     });
   });
@@ -610,13 +638,31 @@ describe("三层设置受理", () => {
       outputs: { result: { kind: "text", text: "完成" } },
       selectedExit: null,
     });
-    const docs = { name: "docs", enabled: true, transport: "streamable-http" as const, url: "https://example.invalid/a", headers: {} };
+    const docs = {
+      name: "docs",
+      enabled: true,
+      transport: "streamable-http" as const,
+      url: "https://example.invalid/a",
+      headers: {},
+    };
     const settings = testSettings({
       credentialRefs: [{ name: "TEAM_API_KEY", purpose: "" }],
       mcpServers: [
         docs,
-        { name: "ghost", enabled: false, transport: "streamable-http", url: "https://example.invalid/b", headers: {} },
-        { name: "other", enabled: true, transport: "streamable-http", url: "https://example.invalid/c", headers: {} },
+        {
+          name: "ghost",
+          enabled: false,
+          transport: "streamable-http",
+          url: "https://example.invalid/b",
+          headers: {},
+        },
+        {
+          name: "other",
+          enabled: true,
+          transport: "streamable-http",
+          url: "https://example.invalid/c",
+          headers: {},
+        },
       ],
     });
     const startedRun = await startResolvedRun(
@@ -628,9 +674,9 @@ describe("三层设置受理", () => {
     expect(startedRun.ok).toBe(true);
     if (!startedRun.ok) return;
     await vi.waitFor(() => {
-      const run = sqlite
-        .prepare("SELECT status FROM runs WHERE id = ?")
-        .get(startedRun.runId) as { status: string };
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
       expect(run.status).toBe("success");
     });
 
@@ -670,9 +716,9 @@ describe("三层设置受理", () => {
       );
     });
     await vi.waitFor(() => {
-      const run = sqlite
-        .prepare("SELECT status FROM runs WHERE id = ?")
-        .get(startedRun.runId) as { status: string };
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
       expect(run.status).toBe("success");
     });
   });
@@ -764,9 +810,7 @@ describe("运行输入物化", () => {
     expect(completionGate).toHaveBeenCalledWith(startedRun.runId);
     expect(
       sqlite
-        .prepare(
-          "select kind, content, sha256 from run_results where run_id = ?",
-        )
+        .prepare("select kind, content, sha256 from run_results where run_id = ?")
         .get(startedRun.runId),
     ).toEqual({ kind: "test-result", content: resultContent, sha256: resultSha256 });
     expect(controls.releaseSkillProjections).toHaveBeenCalledWith(
@@ -949,9 +993,9 @@ describe("运行输入物化", () => {
     expect(startedRun.ok).toBe(true);
     if (!startedRun.ok) return;
     await vi.waitFor(() => {
-      const run = sqlite
-        .prepare("SELECT status FROM runs WHERE id = ?")
-        .get(startedRun.runId) as { status: string };
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
       expect(run.status).toBe("success");
     });
 
@@ -1118,9 +1162,9 @@ describe("运行取消终态", () => {
     releaseAction?.();
 
     await vi.waitFor(() => {
-      const run = sqlite
-        .prepare("SELECT status FROM runs WHERE id = ?")
-        .get(startedRun.runId) as { status: string };
+      const run = sqlite.prepare("SELECT status FROM runs WHERE id = ?").get(startedRun.runId) as {
+        status: string;
+      };
       const action = sqlite
         .prepare("SELECT status FROM run_nodes WHERE run_id = ? AND node_id = 'action-node'")
         .get(startedRun.runId) as { status: string };

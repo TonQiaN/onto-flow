@@ -45,6 +45,9 @@ export function assertSafeName(kind: string, value: string): void {
 
 /** 生成按时间可排序的唯一运行 id，例如 run-20260826T081530Z-a1b2c3。 */
 export function newRunId(now: Date = new Date()): string {
-  const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const stamp = now
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d+Z$/, "Z");
   return `run-${stamp}-${randomBytes(3).toString("hex")}`;
 }

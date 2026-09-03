@@ -161,9 +161,7 @@ test.describe("多路并行界面", () => {
 
       // 画布保持挂载时再点同工作流的另一条导航深链：只有 query string 改变，
       // 仍必须切换 SSE 与取消目标，不能停留在上一条运行。
-      const itemB = page
-        .getByTestId("nav-running-run")
-        .filter({ hasText: runB.slice(0, 8) });
+      const itemB = page.getByTestId("nav-running-run").filter({ hasText: runB.slice(0, 8) });
       await itemB.click();
       await page.waitForURL(`/workflows/${workflowId}?runId=${runB}`);
       await expect(switcher).toHaveValue(runB);
@@ -207,17 +205,17 @@ test.describe("多路并行界面", () => {
 
     try {
       await page.goto(`/workflows/${currentId}?runId=${foreignRunId}`);
-      await expect(
-        page.getByText("链接中的运行不存在或不属于当前工作流，已停止跟随"),
-      ).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText("链接中的运行不存在或不属于当前工作流，已停止跟随")).toBeVisible({
+        timeout: 10_000,
+      });
       await expect(page).toHaveURL(`/workflows/${currentId}`);
       await expect(page.getByRole("button", { name: "取消运行" })).toHaveCount(0);
 
       const database = openDb();
       try {
-        expect(
-          database.prepare("select status from runs where id = ?").get(foreignRunId),
-        ).toEqual({ status: "running" });
+        expect(database.prepare("select status from runs where id = ?").get(foreignRunId)).toEqual({
+          status: "running",
+        });
       } finally {
         database.close();
       }
@@ -252,9 +250,9 @@ test.describe("多路并行界面", () => {
 
     try {
       await page.goto(`/workflows/${workflow.id}?runId=${runId}`);
-      await expect(
-        page.getByText("运行详情暂时无法读取，已保留链接并正在重试"),
-      ).toBeVisible({ timeout: 10_000 });
+      await expect(page.getByText("运行详情暂时无法读取，已保留链接并正在重试")).toBeVisible({
+        timeout: 10_000,
+      });
       await expect(page).toHaveURL(`/workflows/${workflow.id}?runId=${runId}`);
       allowDetailSuccess = true;
       await expect(page.getByRole("button", { name: "取消运行" })).toBeVisible({

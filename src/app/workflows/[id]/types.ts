@@ -15,13 +15,7 @@ import {
 
 export type PortKind = "text" | "file" | "json";
 export type ReasoningEffort = "off" | "low" | "high" | "max";
-export type RunNodeStatus =
-  | "pending"
-  | "running"
-  | "success"
-  | "failed"
-  | "skipped"
-  | "cancelled";
+export type RunNodeStatus = "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
 
 export const EFFORT_LABEL: Record<ReasoningEffort, string> = {
   off: "关闭",
@@ -169,9 +163,7 @@ export function fromToggleChoice(choice: ToggleChoice): boolean | undefined {
 }
 
 /** 只保留写了覆盖的键：PUT 载荷里不能出现 undefined 值的键，服务端按键存在即覆盖 */
-export function pruneToggles(
-  toggles: Partial<CompositionToggles>,
-): Partial<CompositionToggles> {
+export function pruneToggles(toggles: Partial<CompositionToggles>): Partial<CompositionToggles> {
   const result: Partial<CompositionToggles> = {};
   for (const key of COMPOSITION_TOGGLE_KEYS) {
     const value = toggles[key];
@@ -193,10 +185,7 @@ export function pickBySet<T extends { id: string }>(
 }
 
 /** 已选中但不在集合里的 id（保序）：Action 从库里选的预载/可见 Tool 越出了工作流集合 */
-export function outsideSet(
-  selected: readonly string[],
-  set: readonly string[],
-): string[] {
+export function outsideSet(selected: readonly string[], set: readonly string[]): string[] {
   const inSet = new Set(set);
   return selected.filter((id) => !inSet.has(id));
 }
@@ -310,10 +299,7 @@ export function portSignature(action: ActionDto): string {
 }
 
 /** 按 position 排序后的某方向端口 */
-export function actionPorts(
-  action: ActionDto,
-  direction: "input" | "output",
-): ActionPortDto[] {
+export function actionPorts(action: ActionDto, direction: "input" | "output"): ActionPortDto[] {
   return action.ports
     .filter((p) => p.direction === direction)
     .sort((a, b) => a.position - b.position);
@@ -363,9 +349,7 @@ export function sourceExitName(
   sourceData: FlowNodeData | undefined,
   sourceHandleId: string | null | undefined,
 ): string | null {
-  const sourcePort = sourceData?.outputs.find(
-    (port) => port.name === (sourceHandleId ?? "value"),
-  );
+  const sourcePort = sourceData?.outputs.find((port) => port.name === (sourceHandleId ?? "value"));
   return sourcePort?.exitName ?? null;
 }
 
@@ -421,12 +405,8 @@ export function pruneEdges(nodes: FlowNode[], edges: Edge[]): Edge[] {
     const source = nodeById.get(e.source);
     const target = nodeById.get(e.target);
     if (!source || !target) return false;
-    const out = source.data.outputs.find(
-      (p) => p.name === (e.sourceHandle ?? "value"),
-    );
-    const inp = target.data.inputs.find(
-      (p) => p.name === (e.targetHandle ?? "value"),
-    );
+    const out = source.data.outputs.find((p) => p.name === (e.sourceHandle ?? "value"));
+    const inp = target.data.inputs.find((p) => p.name === (e.targetHandle ?? "value"));
     if (!out || !inp) return false;
     // 端口名没变但绑定的 Object Type 改了，连线同样失效（ADR-0002 严格 nominal 类型，
     // 与 lib/graph.ts validateGraph 的判定一致）。只比端口名会在画布上留下类型不匹配的
@@ -473,9 +453,7 @@ export function buildFlowNodes(
       else inputs = [port];
       label =
         dto.label ||
-        (dto.kind === "input"
-          ? `输入·${port.objectTypeName}`
-          : `输出·${port.objectTypeName}`);
+        (dto.kind === "input" ? `输入·${port.objectTypeName}` : `输出·${port.objectTypeName}`);
     }
 
     return {

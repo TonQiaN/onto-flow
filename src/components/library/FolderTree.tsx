@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  type DragEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { type DragEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DND_ENTITY_MIME,
   DND_FOLDER_MIME,
@@ -93,12 +86,8 @@ function pruneTree(nodes: FolderNode[], keyword: string): FolderNode[] {
   const lower = keyword.toLowerCase();
   const walk = (node: FolderNode): FolderNode | null => {
     if (node.name.toLowerCase().includes(lower)) return node;
-    const children = node.children
-      .map(walk)
-      .filter((n): n is FolderNode => n !== null);
-    const leaves = node.entities.filter((e) =>
-      e.name.toLowerCase().includes(lower),
-    );
+    const children = node.children.map(walk).filter((n): n is FolderNode => n !== null);
+    const leaves = node.entities.filter((e) => e.name.toLowerCase().includes(lower));
     if (children.length === 0 && leaves.length === 0) return null;
     return { ...node, children, entities: leaves };
   };
@@ -106,10 +95,7 @@ function pruneTree(nodes: FolderNode[], keyword: string): FolderNode[] {
 }
 
 /** 收集所有「有内容可折叠」的文件夹 id（全部展开/折叠用） */
-function collectExpandableIds(
-  nodes: FolderNode[],
-  out: string[] = [],
-): string[] {
+function collectExpandableIds(nodes: FolderNode[], out: string[] = []): string[] {
   for (const node of nodes) {
     if (node.children.length > 0 || node.entities.length > 0) out.push(node.id);
     collectExpandableIds(node.children, out);
@@ -188,9 +174,7 @@ export function FolderTree({
   } | null>(null);
   /** 行内输入：新建（根/子）或重命名，Enter 提交 Esc 取消 */
   const [editing, setEditing] = useState<
-    | { mode: "create"; parentId: string | null }
-    | { mode: "rename"; id: string }
-    | null
+    { mode: "create"; parentId: string | null } | { mode: "rename"; id: string } | null
   >(null);
   const [editText, setEditText] = useState("");
   /** 当前 dragover 高亮的目标：folder id 或 ALL_DROP_KEY */
@@ -248,8 +232,7 @@ export function FolderTree({
   useEffect(() => {
     if (!menu) return;
     const onDocDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node))
-        setMenu(null);
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setMenu(null);
@@ -315,9 +298,7 @@ export function FolderTree({
               method: "POST",
               headers: JSON_HEADERS,
               body: JSON.stringify(
-                editing.parentId
-                  ? { name, parentId: editing.parentId }
-                  : { name },
+                editing.parentId ? { name, parentId: editing.parentId } : { name },
               ),
             })
           : await fetch(`/api/folders/${editing.id}`, {
@@ -385,11 +366,7 @@ export function FolderTree({
   };
 
   /** 拖实体到文件夹（或「全部」= 未归类）：单归属整体替换 */
-  const assignEntity = async (
-    entityKind: string,
-    entityId: string,
-    folderId: string | null,
-  ) => {
+  const assignEntity = async (entityKind: string, entityId: string, folderId: string | null) => {
     setOpError(null);
     try {
       const res = await fetch("/api/folders/assign", {
@@ -452,10 +429,7 @@ export function FolderTree({
     setDropTarget((prev) => (prev === key ? null : prev));
   };
 
-  const onRowDrop = async (
-    e: DragEvent<HTMLElement>,
-    folderId: string | null,
-  ) => {
+  const onRowDrop = async (e: DragEvent<HTMLElement>, folderId: string | null) => {
     e.preventDefault();
     setDropTarget(null);
     const entityRaw = e.dataTransfer.getData(DND_ENTITY_MIME);
@@ -484,10 +458,7 @@ export function FolderTree({
   };
 
   const onEntityDragStart = (e: DragEvent<HTMLElement>, entity: EntityLeaf) => {
-    e.dataTransfer.setData(
-      DND_ENTITY_MIME,
-      JSON.stringify({ kind, id: entity.id }),
-    );
+    e.dataTransfer.setData(DND_ENTITY_MIME, JSON.stringify({ kind, id: entity.id }));
     e.dataTransfer.effectAllowed = "move";
   };
 
@@ -567,16 +538,12 @@ export function FolderTree({
       const renaming = editing?.mode === "rename" && editing.id === node.id;
       const hasContent = node.children.length > 0 || node.entities.length > 0;
       const isCollapsed = !searching && collapsed.has(node.id);
-      const iconCls = `h-3.5 w-3.5 shrink-0 ${
-        isSelected ? "text-zinc-300" : "text-zinc-400"
-      }`;
+      const iconCls = `h-3.5 w-3.5 shrink-0 ${isSelected ? "text-zinc-300" : "text-zinc-400"}`;
       return (
         <div key={node.id}>
           <div
             className={`group flex items-center gap-1 rounded-md pr-2 text-sm ${
-              isSelected
-                ? "bg-zinc-900 text-white"
-                : "text-zinc-700 hover:bg-zinc-100"
+              isSelected ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-100"
             } ${isDrop ? "ring-1 ring-zinc-500 ring-inset" : ""}`}
             style={{ paddingLeft: `${depth * 12 + 4}px` }}
             draggable={!renaming}
@@ -636,15 +603,11 @@ export function FolderTree({
               {node.totalCount}
             </span>
           </div>
-          {editing?.mode === "create" &&
-            editing.parentId === node.id &&
-            renderEditRow(depth + 1)}
+          {editing?.mode === "create" && editing.parentId === node.id && renderEditRow(depth + 1)}
           {hasContent && !isCollapsed && (
             <div>
               {renderFolders(node.children, depth + 1)}
-              {node.entities.map((entity) =>
-                renderEntityRow(entity, depth + 1),
-              )}
+              {node.entities.map((entity) => renderEntityRow(entity, depth + 1))}
             </div>
           )}
         </div>
@@ -653,8 +616,7 @@ export function FolderTree({
 
   const expandableIds = useMemo(() => collectExpandableIds(roots), [roots]);
   const anyExpandable = expandableIds.length > 0;
-  const isEmpty =
-    visibleRoots.length === 0 && visibleRootEntities.length === 0;
+  const isEmpty = visibleRoots.length === 0 && visibleRootEntities.length === 0;
 
   return (
     <div className="flex h-full flex-col rounded-lg border border-zinc-200 bg-white">
@@ -676,9 +638,7 @@ export function FolderTree({
             <button
               type="button"
               onClick={() =>
-                setCollapsed((prev) =>
-                  prev.size > 0 ? new Set() : new Set(expandableIds),
-                )
+                setCollapsed((prev) => (prev.size > 0 ? new Set() : new Set(expandableIds)))
               }
               className="text-xs text-zinc-400 hover:text-zinc-700"
             >
@@ -702,19 +662,11 @@ export function FolderTree({
           onDragLeave={(e) => onRowDragLeave(e, ALL_DROP_KEY)}
           onDrop={(e) => void onRowDrop(e, null)}
           className={`mb-1 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm ${
-            selected === null
-              ? "bg-zinc-900 text-white"
-              : "text-zinc-700 hover:bg-zinc-100"
-          } ${
-            dropTarget === ALL_DROP_KEY
-              ? "ring-1 ring-zinc-500 ring-inset"
-              : ""
-          }`}
+            selected === null ? "bg-zinc-900 text-white" : "text-zinc-700 hover:bg-zinc-100"
+          } ${dropTarget === ALL_DROP_KEY ? "ring-1 ring-zinc-500 ring-inset" : ""}`}
         >
           <span>全部</span>
-          {selected !== null && (
-            <span className="text-xs text-zinc-400">清空筛选</span>
-          )}
+          {selected !== null && <span className="text-xs text-zinc-400">清空筛选</span>}
         </button>
 
         {error && (
@@ -743,9 +695,7 @@ export function FolderTree({
           </div>
         )}
 
-        {editing?.mode === "create" &&
-          editing.parentId === null &&
-          renderEditRow(0)}
+        {editing?.mode === "create" && editing.parentId === null && renderEditRow(0)}
 
         {loading && !data ? (
           <p className="px-2 py-4 text-xs text-zinc-400">加载中…</p>

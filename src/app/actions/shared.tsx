@@ -95,8 +95,7 @@ export function formatUsedBy(usedBy: unknown): string {
     return usedBy
       .map((u) => {
         if (typeof u === "string") return u;
-        if (u && typeof u === "object" && "name" in u)
-          return String((u as { name: unknown }).name);
+        if (u && typeof u === "object" && "name" in u) return String((u as { name: unknown }).name);
         return JSON.stringify(u);
       })
       .join("、");

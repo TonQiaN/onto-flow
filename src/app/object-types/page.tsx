@@ -20,11 +20,7 @@ import {
   useLibraryQuery,
   type WithLibraryMeta,
 } from "@/components/library";
-import {
-  KindBadge,
-  ObjectTypeEditor,
-  type ObjectTypeRow,
-} from "./object-type-editor";
+import { KindBadge, ObjectTypeEditor, type ObjectTypeRow } from "./object-type-editor";
 
 type ObjectTypeItem = ObjectTypeRow & WithLibraryMeta;
 
@@ -33,8 +29,7 @@ function formatUsedBy(usedBy: unknown): string {
     return usedBy
       .map((u) => {
         if (typeof u === "string") return u;
-        if (u && typeof u === "object" && "name" in u)
-          return String((u as { name: unknown }).name);
+        if (u && typeof u === "object" && "name" in u) return String((u as { name: unknown }).name);
         return JSON.stringify(u);
       })
       .join("、");
@@ -43,10 +38,7 @@ function formatUsedBy(usedBy: unknown): string {
 }
 
 /** 从扁平文件夹清单还原带完整路径的 FolderRef（新建默认归属用）；拿不到时返回 null */
-function folderRefFrom(
-  folders: FolderDto[],
-  id: string | null,
-): FolderRef | null {
+function folderRefFrom(folders: FolderDto[], id: string | null): FolderRef | null {
   if (!id) return null;
   const byId = new Map(folders.map((f) => [f.id, f]));
   const target = byId.get(id);
@@ -64,27 +56,15 @@ function folderRefFrom(
 
 export default function ObjectTypesPage() {
   return (
-    <Suspense
-      fallback={<p className="p-8 text-sm text-zinc-400">加载对象类型…</p>}
-    >
+    <Suspense fallback={<p className="p-8 text-sm text-zinc-400">加载对象类型…</p>}>
       <ObjectTypesLibrary />
     </Suspense>
   );
 }
 
 function ObjectTypesLibrary() {
-  const {
-    q,
-    folder,
-    sort,
-    page,
-    highlight,
-    setQ,
-    setFolder,
-    setSort,
-    setPage,
-    openEntity,
-  } = useLibraryQuery();
+  const { q, folder, sort, page, highlight, setQ, setFolder, setSort, setPage, openEntity } =
+    useLibraryQuery();
 
   const [data, setData] = useState<ListEnvelope<ObjectTypeItem> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -165,8 +145,7 @@ function ObjectTypesLibrary() {
   // highlight 定位：列表加载后把高亮卡片滚到视口中央（每个目标只滚一次）
   const scrolledRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!highlight || data === null || scrolledRef.current === highlight)
-      return;
+    if (!highlight || data === null || scrolledRef.current === highlight) return;
     const el = document.getElementById(`entity-${highlight}`);
     if (el) {
       el.scrollIntoView({ block: "center" });
@@ -177,8 +156,7 @@ function ObjectTypesLibrary() {
   const items = data?.items ?? [];
 
   async function remove(type: ObjectTypeItem) {
-    if (!window.confirm(`确认删除对象类型「${type.name}」？此操作不可撤销。`))
-      return;
+    if (!window.confirm(`确认删除对象类型「${type.name}」？此操作不可撤销。`)) return;
     setRowError((prev) => ({ ...prev, [type.id]: "" }));
     try {
       const res = await fetch(`/api/object-types/${type.id}`, {
@@ -266,17 +244,13 @@ function ObjectTypesLibrary() {
                 e.dataTransfer.effectAllowed = "move";
               }}
               className={`rounded-lg border bg-white p-4 ${
-                highlight === type.id
-                  ? "border-zinc-900 ring-1 ring-zinc-900"
-                  : "border-zinc-200"
+                highlight === type.id ? "border-zinc-900 ring-1 ring-zinc-900" : "border-zinc-200"
               }`}
             >
               <div className="flex items-start justify-between gap-4">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-semibold text-zinc-900">
-                      {type.name}
-                    </h2>
+                    <h2 className="text-sm font-semibold text-zinc-900">{type.name}</h2>
                     <KindBadge kind={type.kind} />
                     {type.builtin && (
                       <span className="inline-flex items-center rounded border border-zinc-300 bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-600">
@@ -289,9 +263,7 @@ function ObjectTypesLibrary() {
                       </span>
                     )}
                   </div>
-                  <p className="mt-1 text-sm text-zinc-500">
-                    {type.description || "（无描述）"}
-                  </p>
+                  <p className="mt-1 text-sm text-zinc-500">{type.description || "（无描述）"}</p>
                 </div>
                 {!type.builtin && (
                   <div className="flex shrink-0 gap-2">
@@ -314,9 +286,7 @@ function ObjectTypesLibrary() {
               <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
                 <FolderBadge folder={type.folder} onEnter={setFolder} />
                 <RefCount count={type.refCount} />
-                <span className="text-zinc-400">
-                  更新于 {formatTime(type.updatedAt)}
-                </span>
+                <span className="text-zinc-400">更新于 {formatTime(type.updatedAt)}</span>
               </div>
 
               {rowError[type.id] && (
@@ -331,9 +301,7 @@ function ObjectTypesLibrary() {
         <ObjectTypeEditor
           initial={editor.mode === "edit" ? editor.type : null}
           initialFolder={
-            editor.mode === "edit"
-              ? editor.type.folder
-              : folderRefFrom(folders, folder)
+            editor.mode === "edit" ? editor.type.folder : folderRefFrom(folders, folder)
           }
           onClose={() => setEditor(null)}
           onSaved={() => {
