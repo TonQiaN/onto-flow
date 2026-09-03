@@ -64,7 +64,8 @@
 
 - `npm run fmt:check` 退出码 0；`npm run check`、`npm run build` 通过；
   `npx playwright test e2e/workflow-editor.spec.ts` 通过。
-- PR 只含格式改动：抽查 diff 无语义变化；`package.json` 与 `.oxfmtrc.json` 是仅有的非格式文件。
+- PR 只含格式改动：抽查 diff 无语义变化；`package.json`、`package-lock.json`（装 oxfmt 必然改）与
+  `.oxfmtrc.json` 是仅有的非格式文件。
 - 不改 AGENTS.md（门禁句在 0b 一起改）。
 
 ## 第 0b 批：lint、knip、CI、记录树、skill、proposed 记录
@@ -170,8 +171,11 @@
 
 **验收**
 
-- `rm -f data/ontoflow.db && npm run db:push && npm run db:seed && npx playwright test` 全绿
-  （与 CI e2e 作业同一起点）；`npm run check`、`npm run build` 通过。
+- 与 CI e2e 作业同一起点的全量 e2e 全绿：**不要删 `data/ontoflow.db`**（它装着付费重建的运行历史与
+  持久业务结果）。在另一个 worktree（`git worktree add ../ontoflow-e2e <分支>`，其 `data/` 为空）里
+  `npm run db:push && npm run db:seed && npx playwright test`，跑之前停掉 3592 上的 dev server
+  （playwright 会附着到已监听的进程，那是主工作树的数据库）；或先把 `data/ontoflow.db` 连同
+  `-wal` / `-shm` 备份到 `data/backups/<时间戳>/`、跑完恢复。`npm run check`、`npm run build` 通过。
 - `npx tsx scripts/seed-resume.ts` 与 `seed-leetcode.ts` 各跑两遍无报错、pin 不变。
 - `rg -n "purchase|采购|集采|归档文档" src scripts e2e docs README.md AGENTS.md` 只剩 ADR / 记录树里
   的历史陈述。
@@ -221,8 +225,23 @@
 
 ## 第 3 批：运行页
 
-**schema**：`runs.graph: text("graph", { mode: "json" })`（可空；早于本批的运行为 null）。形状定义在
-`src/lib/run-graph.ts`（纯类型 + 校验函数）：
+**schema（三处）**
+
+1. `runs.graph: text("graph", { mode: "json" })`（可空；早于本批的运行为 null）。形状定义在
+   `src/lib/run-graph.ts`（纯类型 + 校验函数），见下。
+2. 新表 `run_node_rounds`：一轮执行一行——`{ id, runId, nodeId, round（0 起）, sessionId, status
+   （running / success / failed / cancelled）, startedAt, finishedAt, exitName（本轮所走出口；无具名
+   出口为 null）, error }`，唯一键 `(run_id, node_id, round)`，随 `runs` 级联删除。引擎在一轮开始时
+   insert（running）、结束时 update 终态、`finishedAt`、`exitName`、`error`。**必须有它的原因**：
+   `run_nodes` 一个节点只有一行，回边重入会覆盖它的 `startedAt` / `finishedAt` / `outputs` /
+   `sessionId` / `snapshot`，只看 `run_nodes` 回放不出「第 1 轮走了打回、第 2 轮走了通过」。
+   `run_nodes` 继续作为节点的**最新状态**行（列表、汇总、快照页签都读它），不再承担轮次历史。
+3. `run_events.session_id: text`（可空）：`events.ts` 落库时从 `ctx.sessionId` 写入，事件从此能归到
+   轮（会话 id 在第 0 轮是节点 id，之后是 `<节点id>#<轮次+1>`，见 `engine/action.ts`）。
+   早于本批的事件为 null，按节点归到最后一轮。
+
+事件清理（`cleanup.ts` 的 events 目标）不删 `run_node_rounds`——它每行几十字节，是回放退化后仍要
+保留的骨架。
 
 ```ts
 interface RunGraph {
@@ -247,17 +266,19 @@ interface RunGraph {
   `flow-node.tsx`、`flow-edge.tsx` 与 `types.ts` 里它们依赖的端口 / 配色工具移到
   `src/components/canvas/`，编辑器与运行页共用；节点视觉仍从 Context 读。
 - **时间模型**：`src/app/runs/[id]/visuals-at.ts` 纯函数
-  `visualsAt({ run, nodes, events, t })` → 每节点 `{ status, round, activity }`、每连线
-  `{ state }`、总计；规则：`startedAt > t` 等待、`startedAt ≤ t < finishedAt` 运行中、
-  `finishedAt ≤ t` 取终态；连线在上游 `finishedAt ≤ t` 且走的是该出口（`run_nodes.outputs` 含该
-  端口）时激活；活动取 `ts ≤ t` 的最后一条 tool 与累计 text 字数；轮次边界沿用被删 `getTrace`
-  的会话推导（搬为纯函数，保留其单测用例）。事件被清理后只剩节点级。单测 `visuals-at.test.ts`
-  覆盖等待 / 运行中 / 终态 / 出口未走 / 事件缺失。
+  `visualsAt({ run, nodes, rounds, events, t })` → 每节点 `{ status, round, activity }`、每连线
+  `{ state }`、总计。节点在 `t` 时刻的状态取**该节点在 `t` 之前最后开始的那一轮**：
+  `startedAt > t` 等待、`startedAt ≤ t < finishedAt` 运行中、`finishedAt ≤ t` 取该轮终态；连线在
+  上游那一轮 `finishedAt ≤ t`、终态成功且该轮 `exitName` 等于连线源端口的出口（无具名出口时全部
+  输出端口生效）时激活；活动取 `session_id` 属于当前轮且 `ts ≤ t` 的最后一条 tool 与累计 text 字数。
+  没有轮次行的旧运行退化为「`run_nodes` 一行当一轮」，事件被清理后只剩轮次级。单测
+  `visuals-at.test.ts` 覆盖等待 / 运行中 / 终态 / 出口未走 / 两轮回边（第 1 轮打回、第 2 轮通过，
+  `t` 落在两轮之间时连线与状态取第 1 轮）/ 事件缺失 / 无轮次行。
 - **数据源**：现 `use-run-visuals.ts` 搬到 `src/app/runs/[id]/use-run-stream.ts`，只负责 SSE
   订阅（snapshot / log 去重 / 一次重连）与 1Hz `now`；视觉一律经 `visualsAt(t)`。进行中默认
   `t = now` 跟随，往回拖即暂停跟随，「跟随」按钮回到现在；已结束默认 `t = finishedAt`。
-- **时间轴**（画布下方）：每个节点一行，按轮次分段的时间条（左 = 相对 `startedAt` 偏移，宽 =
-  时长），事件作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
+- **时间轴**（画布下方）：每个节点一行，一轮一段（来自 `run_node_rounds`；左 = 相对 `startedAt`
+  偏移，宽 = 时长），事件按 `session_id` 落在所属段上作刻度；播放 / 暂停 / 倍速（1× / 10× / 60×）；拖动或点击某段设 `t`。
 - **抽屉**（点节点打开，右侧）：错误置顶；三页签「轨迹 / 输入输出 / 快照」复用
   `agent-trajectory.tsx`、`port-value-view.tsx`、`snapshot-view.tsx`；轨迹组件加 `cursorMs`
   （高亮并滚到 `t` 所在记录，不过滤）与 `onSeek`（点记录设 `t`）。`node-card.tsx`、
@@ -267,7 +288,7 @@ interface RunGraph {
   运行对话框成功后 `router.push('/runs/<runId>')`。导航「运行中」面板与工作流卡片深链改
   `/runs/<id>`；运行页不再有「回画布看动画」。
 - **监控台 Trace 删除**：`src/app/monitor/trace/`、`src/app/api/monitor/trace/`、`getTrace` 与其
-  单测（轮次推导部分先搬到 `visuals-at.ts` 再删）；layout 标签去掉 Trace。
+  单测；layout 标签去掉 Trace。它按节点只画最后一轮，轮次表落地后没有它能画而运行页画不了的东西。
 
 **文档同步**：DESIGN.md「多路运行的界面契约」段整段替换为运行页契约，`/api/runs/[id]` 行加
 `graph`；AGENTS.md Repository layout 里 `workflows/[id]/`、`runs/[id]/`、`monitor/` 三行改写，
@@ -276,14 +297,16 @@ interface RunGraph {
 
 **验收**
 
-- `npm run check`、`npm run build`；单测 `visuals-at.test.ts`、`run-graph.test.ts`（构造与校验）。
+- `npm run check`、`npm run build`；单测 `visuals-at.test.ts`、`run-graph.test.ts`（构造与校验）、
+  `runner.test.ts` 补「回边重入写出两行轮次、事件带会话 id」。
 - e2e：`runs.spec.ts` 夹具行带 `graph`，断言画布节点数与 `graph.nodes` 一致、点节点开抽屉且轨迹
   面板可检索（沿用现有轨迹用例）、时间轴行数与节点数一致、旧运行（`graph` 为 null）显示无画布
   提示；`parallel-ui.spec.ts` 改为：导航面板两路各深链 `/runs/<id>`，运行页概要栏状态为运行中、
   取消按钮指向正确的 run；`parallel-runs.spec.ts` 免费真跑后运行页画布节点全部成功、光标在末尾。
   `workflow-editor.spec.ts` 补一条：编辑器不再出现 `run-switcher` / 运行条元素。
 - 付费：停掉 dev server 后跑一次 `npx tsx scripts/smoke-engine.ts`，确认真实运行的 `runs.graph`
-  非空且运行页可回放；结论写进 PR。
+  非空、`run_node_rounds` 每个 Action 一行、运行页可回放；再跑 `npx tsx scripts/smoke-graph.ts`
+  验证回边重入产生多行轮次且回放能逐轮切换；结论写进 PR。
 - Chrome 验收：打开一条已结束运行，拖光标看节点由等待→运行中→终态、连线随之激活；点节点看三页签，
   拖光标时轨迹高亮跟着走，点轨迹记录光标跳过去；用免费的输入→输出工作流发起一次运行，跳到运行页后
   看直播跟随、往回拖暂停、「跟随」回到现在；导航「运行中」面板深链到运行页。
