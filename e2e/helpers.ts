@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { APIRequestContext } from "@playwright/test";
 import Database from "better-sqlite3";
+import type { RunGraph } from "@/lib/run-graph";
 
 /** 一切从仓库根解析：data/ 取自 process.cwd()，换目录就是另一个库（与 src/db/index.ts 同源） */
 export const DATA_DIR = path.join(process.cwd(), "data");
@@ -622,7 +623,7 @@ export function linearRunGraph(input: {
   objectTypeName?: string;
   inputLabel?: string;
   outputLabel?: string;
-}): unknown {
+}): RunGraph {
   const type = {
     name: "value",
     objectTypeId: input.objectTypeId,
