@@ -1,6 +1,6 @@
 # 简化：把 resume-decision-policy 测试收窄到只钉语义短语
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -81,3 +81,51 @@ both values」），审阅者更新 pin 时短语被删掉也不会红。
 真库——用「文件顶部不出现 `@/db` / `node:fs`」这一条肉眼核对即可，不值一条 rules 断言。
 
 预估净删约 5 行（删 Tool 源码正则与拓扑正则约 −25，精确集合断言、期望集合抽出与 import 约 +20）；风险等级：低。
+
+## 落地
+
+PR：#PENDING
+
+**与提议的差异：**
+
+- **多搬了一样东西：八个 Action 的端口定义。** 提议只点名 `CRITICS` / `desiredNodes` /
+  `desiredEdges` / `nodeId` / `edgeId` / `edge`，但「每个 Action 节点的端口集合 `toEqual` 期望端口
+  集合」这条断言要求测试能把种子的端口当**数据**读到，而它们原本是写在会写库的 `upsertAction({…})`
+  调用里的字面量。所以端口定义一并搬进 `scripts/seed-resume-graph.ts` 的 `resumeMatchSeedPorts()`，
+  端口值一个字没改（`action_ports` 仍是 26 行）。
+- **`nodeId` / `edgeId` 本来就不是纯函数**——它们要读库里现有的行来复用 id（幂等靠这个）。
+  拆出来的 `resumeMatchSeedGraph()` 因此把 `currentNodes` / `currentEdges` 作参数收进来，
+  由 `seed-resume.ts` 喂 drizzle 查到的行；模块运行时只剩 `crypto.randomUUID()` 这一个依赖，
+  不 import `@/db`、不碰文件系统（`NodePayload` / `EdgePayload` 走 `import type`，会被 TS 擦除）。
+- **顺手收敛了一处同形状的重复表示**：`src/server/resume-match.ts` 里私有的 `PortContract` 类型与
+  `portContract()` 构造函数，跟新导出的 `ResumeMatchPortContract` 完全同形，直接改用导出的那个、
+  删掉私有副本，否则等于又把同一件事写两遍。
+- **测试保留了三个语义用例而不是两个**：提议说「删第二个 `it()` 里那三条 Tool 源码正则」，
+  没说删掉那个 `it()`，所以它连同 `## 证据缺口及计分处理` / `RESUME_MATCH_RESULT_SCHEMA_TEXT` /
+  `没有拿到 valid=true 不得提交结构化输出` 等断言留着，只去掉了那三条被
+  `RESUME_MATCH_VALIDATOR_TOOL_SHA256` 逐字盖住的实现细节。短语断言改成对
+  `seed-resume.ts` + `seed-resume-graph.ts` 拼起来的文本查——评委口径搬了文件，不该因此变红。
+- **多加了一条断言**：图定义模块里不出现 `@/db` / `node:fs` 的 import。记录说这条「不值一条 rules
+  断言」，这里没有加进 `src/rules.test.ts`，而是放在这个测试文件自己里（两行正则）——它是这个
+  模块存在的全部理由，破了就会在 import 的一瞬间去种真库。
+- 三类 digest 的 pin 值一字未动，`AGENTS.md` / `.github/REVIEW.md` / `docs/DESIGN.md` / CI 经 `rg`
+  现场复核都不需要改。
+
+**验收实际跑了什么：**
+
+- `npx vitest run scripts/resume-decision-policy.test.ts src/server/resume-match.test.ts` → 2 文件 39 通过。
+- `npm run check` 全绿（typecheck、oxlint、oxfmt、vitest 46 文件 390 通过 1 跳过；改前是 387）。
+- 工作树自建库跑种子确认幂等且 pin 不报错（不花钱）：`npm run db:push && npm run db:seed`，
+  再 `npx tsx scripts/seed-resume.ts` 连跑三次 —— 三次都 `节点 11 个，评委 6 位`，
+  `revisions` 恒 17、`workflow_nodes` 恒 11、`workflow_edges` 恒 23、`actions` 恒 8、`action_ports` 恒 26，
+  节点 id 逐个不变；三类摘要 pin 一次都没抛。
+- **故意打破两次，新断言两次都红**（验完已还原，`diff` 与备份逐字节一致）：
+  1. 把 `criticNodes.map(...)` 改成 `criticNodes.slice(1).map(...)`（少一条评委→汇总的结论边）→
+     `边集合与受理时要求的固定编排完全一致` 红：`expected [ …(22) ] to deeply equal [ …(23) ]`，
+     其余 6 条仍绿。
+  2. 多接一条类型匹配的合法边（解析`岗位要求` → 汇总`岗位要求`）→ 同一条红：
+     `expected [ …(24) ] to deeply equal [ …(23) ]`。
+     （附带发现：这张图里**每一对**类型匹配的端口都已经接上了，23 条边就是全集，所以「多一条合法边」
+     只能是在已有的某一对上再接一条——旧的子集正则对这种情况不会红，新的精确集合会。）
+- **不需要付费冒烟**：三类 digest 的 pin 值未动，`resume-match-validator-integrity.ts` 的受理校验路径不变。
+- e2e：不适用（纯脚本 / 服务端纯函数改动，没有用户可见变化）。
