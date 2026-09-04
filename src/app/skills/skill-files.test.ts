@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  defaultFilePath,
-  formatBytes,
   SKILL_FILE_MAX_BYTES,
   SKILL_FILE_MAX_COUNT,
   skillFilePathProblem,
-  skillFilesProblem,
-} from "./skill-files";
+} from "@/lib/skill-files";
+import { defaultFilePath, formatBytes, skillFilesProblem } from "./skill-files";
 
 describe("资源文件路径校验（与写入口同一套规则）", () => {
   it("合法的相对路径通过", () => {

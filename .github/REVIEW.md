@@ -47,7 +47,7 @@
 - [ ] 每个 route `export const dynamic = "force-dynamic"`
 - [ ] 客户端代码（含 `"use client"` 文件与 `src/app`（`api/` 除外）、`src/components` 下没有指令的共享模块）没有从 `@/server` 或 `@/db` 导入任何东西（`import type` 也不行，客户端要用的类型先搬进 `src/lib/`）。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
 - [ ] 能到达修订还原的 route 带 `import "@/server/writers";`，否则 restore 静默答 501
-- [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`（没有第二处写死 30 / 100）；其它 GET 各自定形
+- [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`；排序键与 30 / 100 只在 `src/lib/list-query.ts` 写一遍，服务端与共享列表 UI 都从它取，没有第二处（`src/rules.test.ts` 钉住四个 `src/lib/` 规则模块的「只声明一次 + 消费者必须 import」）；其它 GET 各自定形
 - [ ] 改了 `/api/runs` 的筛选或汇总 → `summary` 仍按同一组筛选**不分页**算：`runs` 是 distinct 的运行数（零用量的运行也算），token / 费用与每行同源、从按 `run_id` 预聚合的 `run_nodes` 子查询 **left join** 求和（权威汇总，`node_usage` 缺一条明细时不掉账），只有 `byModel` 走 `node_usage`；没有退化成内连接把无用量的运行挤掉；数组消费者一个不剩地改读 `items`（`rg -n '"/api/runs' src e2e scripts`）
 - [ ] 受理来源仍是 `imports.invocation.source` 的**读时投影**：`/api/runs` 用 `json_extract` 推导 `items[].source` 与 `source=` 筛选（无 invocation 的行 coalesce 成 `workflow`），没有为它新增列、没有回填历史行、没有第二份表示（The five library list GETs and `/api/runs`…）
 - [ ] 五个库页复用 `src/components/library/`，没有长出自己的列表 / 文件夹 / 引用 / 修订 UI——按面而不是按四个组件名核对（曾有四份逐字相同的文件夹徽章与 409 文案从枚举的缝里过了评审）；筛选状态在 URL（`use-library-query`）不在组件 state
@@ -81,8 +81,8 @@
 - [ ] 新插件的 `decision` / `mountedByDefault` / `workflowToggle` / `reason` 与它在组合里的实际挂载一致
 - [ ] 新增 `models` 行走 `scripts/seed.ts` 的 `upsertModel`；新 provider 路由有 `runCompositionEntries` 里的 adapter；没有 route 写 `models`
 - [ ] Tool 仍是契约、包装仍归平台（A Tool is an OntoFlow contract）：库里的 `code` 只是 `export default async function execute(args, ctx)`，没有 `name` / `inject` / `apply`，不 import `@deepseek-ai/*`（写入口拒绝）；上游注册形状只出现在 `src/server/harness/tool-plugin.ts`，改了它就跑 `tool-plugin.test.ts` 与 `composition-boot.test.ts`（真 boot 带样例契约 Tool 的组合）；Tool 要围栏只经 `ctx.run()`，谨慎的 Tool 以 `sandbox.enforced && !sandbox.runnerFailed` 为门禁
-- [ ] JSON Schema 子集在**写入口**拦（`objectSchemaProblem`，`parameters` 与 `output` 都查，客户端 `tool-form.ts` 镜像形状规则）；没有把 type 数组的拒绝寄托在插件加载上——上游 `register` 不校验 `parameters`
-- [ ] Tool 公名不在 `TOOL_RESERVED_PUBLIC_NAMES`（上游内建工具名 + `structured_output` / `run_code` / `web_fetch`）里、也不以 `mcp__` 开头，写入口拒绝；同名包装会让 boot 撞名倒下、遮蔽会话的 `structured_output`、或让整台 MCP 服务器的工具在同步时被丢弃（A Tool is an OntoFlow contract）
+- [ ] JSON Schema 子集在**写入口**拦（`harness/tool-schema.ts` 的 `objectSchemaProblem`，`parameters` 与 `output` 都查）；形状那半边是 `src/lib/json-schema-shape.ts` 的 `objectSchemaShapeProblem`，编辑器调同一个而不是抄一份（`src/rules.test.ts` 钉住），上游 `assertObjectJsonSchema` 那半边仍只在 `harness/`；没有把 type 数组的拒绝寄托在插件加载上——上游 `register` 不校验 `parameters`
+- [ ] Tool 公名不在 `TOOL_RESERVED_PUBLIC_NAMES`（上游内建工具名 + `structured_output` / `run_code` / `web_fetch`）里、也不以 `mcp__` 开头，写入口拒绝；清单与 `publicNameProblem` / `toolCodeProblem` 都只在 `src/lib/tool-names.ts` 写一遍，写入口、平台包装与编辑器共用，没有第二份可抄（`src/rules.test.ts` 钉住）；同名包装会让 boot 撞名倒下、遮蔽会话的 `structured_output`、或让整台 MCP 服务器的工具在同步时被丢弃（A Tool is an OntoFlow contract）
 
 ## 7. 专用付费入口的行为钉死（A specialized paid invocation pins behavior, not names）
 

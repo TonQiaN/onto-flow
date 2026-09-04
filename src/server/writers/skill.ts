@@ -1,13 +1,14 @@
 import { asc, eq } from "drizzle-orm";
 import { db, skillFiles, skills } from "@/db";
+import {
+  foldSkillPath,
+  SKILL_FILE_MAX_BYTES,
+  SKILL_FILE_MAX_COUNT,
+  skillFilePathProblem,
+} from "@/lib/skill-files";
 import { recordRevision } from "@/server/revisions";
 import { materializeSkill } from "@/server/skill-library";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
-
-/** 每个技能目录最多带的资源文件数、单文件上限与路径长度上限（ADR-0016）。 */
-export const SKILL_FILE_MAX_COUNT = 32;
-export const SKILL_FILE_MAX_BYTES = 1024 * 1024;
-export const SKILL_FILE_PATH_MAX_LENGTH = 200;
 
 export interface SkillFilePayload {
   /** 技能目录内的相对路径，以 / 分段 */
@@ -32,34 +33,6 @@ export interface SkillDto extends SkillRow {
 
 /** 严格 base64：Node 的解码器对非法输入很宽容，先按字面挡住才不会把乱码当文件存进去。 */
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-
-/**
- * 资源文件路径必须能原样落到 data/skills/<slug>/<path> 之下：绝对路径、`..`、空段、
- * 控制字符与反斜杠都拒绝；根下的 SKILL.md 由正文生成，资源文件不能顶替它、也不能拿它当
- * 根下目录名（macOS 文件系统不分大小写，按不区分大小写比较；重复与文件/目录冲突还要折叠
- * Unicode 正规化，见 foldSkillPath）。
- */
-function skillFilePathProblem(path: string): string | null {
-  if (path === "") return "资源文件路径不能为空";
-  if (path.length > SKILL_FILE_PATH_MAX_LENGTH)
-    return `资源文件路径「${path.slice(0, 40)}…」超过 ${SKILL_FILE_PATH_MAX_LENGTH} 个字符`;
-  // oxlint-disable-next-line no-control-regex -- 控制字符与 NUL 在文件名里是货真价实的坑
-  if (/[\u0000-\u001f\u007f]/.test(path)) return "资源文件路径不能含控制字符";
-  if (path.startsWith("/")) return `资源文件路径「${path}」不能是绝对路径`;
-  if (path.includes("\\")) return `资源文件路径「${path}」只能用 / 分段`;
-  for (const segment of path.split("/")) {
-    if (segment === "" || segment === "." || segment === "..")
-      return `资源文件路径「${path}」不能含空段、. 或 ..`;
-  }
-  if (path.split("/")[0]?.toLowerCase() === "skill.md")
-    return "SKILL.md 由正文生成，不能作为资源文件上传，也不能作为目录名";
-  return null;
-}
-
-/** 文件系统眼里的同一路径：折叠大小写与 Unicode 正规化（APFS / HFS+ 两者都不区分）。 */
-function foldSkillPath(path: string): string {
-  return path.normalize("NFC").toLowerCase();
-}
 
 function parseSkillFiles(raw: unknown): WriteResult<SkillFilePayload[]> {
   if (raw === undefined) return writeOk([]);
