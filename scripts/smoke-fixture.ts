@@ -265,10 +265,13 @@ export function upsertSkill(input: SkillFixture): SkillDto {
     } catch {
       return "投影缺失或读不出来";
     }
-    // 不复刻 frontmatter 的排版（那是 skill-library 的事），只查三样必须出现的事实：
-    // 目录名（slug）、模型据以选技能的中文名、以及 SKILL.md 正文本身。
+    // 不复刻 frontmatter 的排版（那是 skill-library 的事），只查必须出现的事实：目录名（slug）、
+    // 模型据以选技能的中文名与描述、以及 SKILL.md 正文本身。
     if (!text.includes(slug)) return "frontmatter 里的 name 与目录名对不上";
     if (!text.includes(dto.name)) return "描述里的库名不是当前的名字";
+    // 描述是模型据以发现技能的那句话，只改描述的一次写入同样会留下陈旧投影；
+    // 空描述时上游拿库名兜底，与 materializeSkill 的 `description || name` 同源。
+    if (!text.includes(dto.description || dto.name)) return "描述与库里的定义不一致";
     if (!text.includes(dto.content)) return "正文与库里的定义不一致";
     return null;
   })();
