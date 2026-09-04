@@ -876,7 +876,8 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
    * 记录的列表续行普遍缩进四格，当代码块会一次漏掉一大批真链接）。
    */
   const CONTAINER_PREFIX = String.raw`[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*`;
-  const DEFINITION_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}\[[^\]]+]:(.*)$`);
+  // 标签里的 `]` 可以转义（`[ref\]]: 目标`）；把每个 `]` 都当终止符会让整条定义匹配不上
+  const DEFINITION_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}\[(?:[^\]\\]|\\.)+]:(.*)$`);
   const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}`);
 
   function recordLinkTargets(raw: string): string[] {
