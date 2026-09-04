@@ -26,6 +26,102 @@ function walk(dir: string, out: string[] = []): string[] {
 const rel = (file: string): string => path.relative(ROOT, file).split(path.sep).join("/");
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isSource = (file: string): boolean => /\.tsx?$/.test(file);
+/**
+ * `/` 前面是这些就当正则字面量的开头，否则当除号。关键字列表取「除号的左操作数不可能是它」的那一批，
+ * 宁滥勿缺：多认一个只会把某段多抹白 → 误报（红），少认一个才会让藏在正则里的假代码蒙混过关
+ * （Codex 对 #50 的九、十二、十三轮各点出一种前缀）。
+ */
+const REGEX_START_RE =
+  /(?:^|[=(,:[!&|?{};+\-*%^~<>])\s*$|\b(?:return|throw|typeof|instanceof|in|of|do|else|case|new|delete|void|yield|await|if|while|for|switch|with|as|satisfies)\s*$/;
+
+/**
+ * 抹掉注释；`literals` 为真时连字符串 / 模板串的**内容**一起抹成空白（换行与长度都保留）。
+ * 只扫文本的断言都该先过它：注释掉的代码在原文里字还在，`// export const dynamic = "force-dynamic";`
+ * 用 includes 判定会被当成真的导出，被注释掉的 `import "@/server/writers";` 同理；字符串里的分号
+ * 还能把语句边界骗断（Codex 对 #50 的六、七两轮复审）。
+ * 正则字面量不识别——今天仓库里的正则都不含引号；真出现引号会让整段被抹白，用它的地方各自有
+ * 「抹完顶层 export 条数不变」这类自检兜底。
+ */
+function stripCode(content: string, literals = false): string {
+  let out = "";
+  for (let i = 0; i < content.length; i += 1) {
+    const ch = content[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const start = i;
+      for (i += 1; i < content.length && content[i] !== ch; i += 1) if (content[i] === "\\") i += 1;
+      const literal = content.slice(start, Math.min(i + 1, content.length));
+      out += literals ? literal.replace(/[^\n]/g, " ") : literal;
+      continue;
+    }
+    if (ch === "/" && (content[i + 1] === "/" || content[i + 1] === "*")) {
+      const close =
+        content[i + 1] === "/" ? content.indexOf("\n", i) : content.indexOf("*/", i + 2);
+      const stop = close === -1 ? content.length : close + (content[i + 1] === "/" ? 1 : 2);
+      out += content.slice(i, stop).replace(/[^\n]/g, " ");
+      i = stop - 1;
+      continue;
+    }
+    // 正则字面量：不认的话 `const marker = /export const dynamic = "…";/` 里那段像代码的文本会
+    // 原样留在视图里，冒充真代码（Codex 对 #50 的九轮复审）。用「前一个有效字符决定除号还是正则」
+    // 这条常规启发式；判错只会让某段被多抹白，方向是误报（红）不是漏放（绿）。
+    if (ch === "/" && REGEX_START_RE.test(out)) {
+      const start = i;
+      let inClass = false;
+      for (i += 1; i < content.length; i += 1) {
+        const c = content[i];
+        if (c === "\\") i += 1;
+        else if (c === "[") inClass = true;
+        else if (c === "]") inClass = false;
+        else if (c === "\n") break;
+        else if (c === "/" && !inClass) break;
+      }
+      if (i < content.length && content[i] === "/") {
+        const literal = content.slice(start, i + 1);
+        out += literals ? literal.replace(/[^\n]/g, " ") : literal;
+        continue;
+      }
+      i = start; // 判错了，当普通除号
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/** 这个位置前面在同一行里只有空白（顶层语句都在行首；正则字面量以 `/` 开头，永远不在行首） */
+function atLineStart(raw: string, at: number): boolean {
+  return raw.slice(raw.lastIndexOf("\n", at - 1) + 1, at).trim() === "";
+}
+
+/**
+ * 这段文本是否作为**真代码**出现过。`stripCode` 抹白时长度与换行都保留，所以抹过的视图与原文
+ * 偏移一一对应：先在原文里找到位置，再要求抹过字面量的视图在同一段偏移上是同样的「形状」。
+ * 注释掉的那行在视图里只剩空白，藏进字符串的仿冒（`const marker = 'import "@/server/writers";'`）
+ * 内容也被抹白，两种都对不上（Codex 对 #50 的七、八两轮复审）。
+ *
+ * 再加一条**行首锚定**：这三处判定的都是顶层语句，而正则字面量必以 `/` 开头，行首之后就再也藏不住
+ * 一条语句。有了它，「这个 `/` 是除号还是正则」的启发式对这几条判定不再是承重的（十四轮复审）。
+ */
+function occursAsCode(raw: string, snippet: string): boolean {
+  const view = stripCode(raw, true);
+  const shape = stripCode(snippet, true);
+  for (let at = raw.indexOf(snippet); at !== -1; at = raw.indexOf(snippet, at + 1)) {
+    // 行首判定看抹过的视图：同行的注释前缀已成空白，不该挡住真语句；同行真代码仍然挡得住
+    if (!atLineStart(view, at)) continue;
+    if (view.slice(at, at + snippet.length) === shape) return true;
+  }
+  return false;
+}
+
+/** 正则版的 occursAsCode：命中的那一段必须在抹过字面量的视图里是同样的形状 */
+function matchesAsCode(raw: string, re: RegExp): boolean {
+  const code = stripCode(raw); // 只抹注释：说明符那串字符还要参与匹配
+  const view = stripCode(raw, true); // 再抹字面量：用来验证命中处不是藏在字面量里
+  const all = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+  for (const match of code.matchAll(all))
+    if (view.slice(match.index, match.index + match[0].length) === stripCode(match[0], true))
+      return true;
+  return false;
+}
 const isTest = (file: string): boolean => /\.test\.tsx?$/.test(file);
 
 // 本文件的测试名引用了被禁的写法（await db.、"use server"），扫描集要把自己排除。
@@ -49,7 +145,7 @@ describe("AGENTS.md · Repository layout", () => {
   it('src/app/api 的每个 route.ts 都 `export const dynamic = "force-dynamic"`', () => {
     expect(apiRoutes.length).toBeGreaterThan(0);
     const missing = apiRoutes
-      .filter((file) => !read(file).includes('export const dynamic = "force-dynamic";'))
+      .filter((file) => !occursAsCode(read(file), 'export const dynamic = "force-dynamic";'))
       .map(rel);
     expect(missing).toEqual([]);
   });
@@ -61,19 +157,113 @@ describe("AGENTS.md · Conventions · handle()", () => {
    * api/runs/[id]/events returns a raw SSE Response — do not copy it.」
    */
   const EXEMPT = ["src/app/api/runs/[id]/events/route.ts"];
-  const METHOD_RE = /^export (?:async )?function (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/gm;
+  const METHODS = "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS";
+  // 每个 ^export 都容忍行首空白：注释被抹成空白后，`/* 说明 */ export async function POST(){}`
+  // 这种同行前缀会把锚死在列 0 的匹配全部躲过去（Codex 对 #50 的十轮复审）。
+  const FUNCTION_METHOD_RE = new RegExp(
+    String.raw`^[ \t]*export\s+(?:async\s+)?function\s+(${METHODS})\b`,
+    "gm",
+  );
+  const VAR_EXPORT_RE = /^[ \t]*export\s+(?:const|let|var)\b/gm;
+  const EXPORT_AT_RE = /^[ \t]*export\b/gm;
+  // route 顶层只许两种导出形状：方法用的函数声明，和 `export const <标识符> = …`（`dynamic`、
+  // uploads 的字节上限）。别的一律记违规，不再逐种枚举——`export { post as "POST" }`、
+  // `export const { POST } = handlers`、`export *`、`export default` 都被这一条一次性拦下
+  // （Codex 对 #50 的九轮复审）。
+  const ALLOWED_EXPORT_RE =
+    /^[ \t]*export\s+(?:(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=)/;
+  const LEADING_TRIVIA_RE = /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
+
+  /**
+   * 抹过的视图里这个位置的花括号深度。顶层导出必须是 0：`namespace X { export async function GET(){} }`
+   * 缩进之后仍能匹配 `^[ \t]*export`，但它根本不是模块级导出，请求会拿到 405（Codex 对 #50 的
+   * 十七轮复审）。
+   */
+  const braceDepth = (view: string, index: number): number => {
+    let depth = 0;
+    for (let i = 0; i < index; i += 1) {
+      if (view[i] === "{") depth += 1;
+      else if (view[i] === "}") depth -= 1;
+    }
+    return depth;
+  };
+
+  /** 本条语句的结尾：括号全配平后的第一个 `;`。多声明符的 `const a = 1, POST = …` 要整条一起看 */
+  const statementEnd = (content: string, from: number): number => {
+    let depth = 0;
+    for (let i = from; i < content.length; i += 1) {
+      const ch = content[i];
+      if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+      else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
+      else if (ch === ";" && depth === 0) return i;
+    }
+    return content.length;
+  };
+
+  /** 函数声明的体内第一段有效代码；定位不到返回 null，断言报错而不是悄悄放行 */
+  const functionBody = (content: string, from: number): string | null => {
+    let depth = 0;
+    for (let i = from; i < content.length; i += 1) {
+      const ch = content[i];
+      if (ch === "(" || ch === "[") depth += 1;
+      else if (ch === ")" || ch === "]") depth -= 1;
+      else if (depth === 0 && ch === "{")
+        return content.slice(i + 1).replace(LEADING_TRIVIA_RE, "");
+    }
+    return null;
+  };
 
   it("唯一例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));
-    const found = violations(files, (content) => {
-      const methods = content.match(METHOD_RE)?.length ?? 0;
-      const handled = content.match(/\breturn handle\(/g)?.length ?? 0;
-      const imported = /import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(content);
+    const found = violations(files, (raw) => {
       const out: string[] = [];
-      if (methods === 0) out.push("没有导出任何 HTTP 方法");
-      if (handled !== methods)
-        out.push(`导出 ${methods} 个方法，只有 ${handled} 处 return handle(`);
-      if (!imported) out.push("没有从 @/lib/http 导入 handle");
+      const content = stripCode(raw, true);
+      // 自检：抹字面量不该抹掉任何顶层 export（route 里 export 不会写在字面量里）。数量对不上说明
+      // 扫描把一整段当成了字符串，后面的判断都不可信，直接记违规。两边都是抹过注释的视图，
+      // 差别只在字面量，所以同行注释前缀不会让它误报。
+      const topLevelExports = (text: string): number =>
+        text.match(/^[ \t]*export\b/gm)?.length ?? 0;
+      if (topLevelExports(content) !== topLevelExports(stripCode(raw)))
+        out.push("抹字面量后顶层 export 数量变了，扫描不可信");
+      let methods = 0;
+      for (const match of content.matchAll(FUNCTION_METHOD_RE)) {
+        if (braceDepth(content, match.index) !== 0) continue; // 嵌在 namespace / 块里的不是模块级导出
+        methods += 1;
+        const body = functionBody(content, match.index + match[0].length);
+        if (body === null) out.push(`${match[1]} 定位不到函数体`);
+        else if (!body.startsWith("return handle("))
+          out.push(`${match[1]} 的方法体第一句不是 return handle(`);
+      }
+      // 方法只认「导出的函数声明」这一种写法，别的一律记违规而不是想办法看懂它：文本扫描追不上
+      // TypeScript 的全部合法写法（`export const POST = raw`、`export { post as POST }`、
+      // `export const a = 1, POST = …` 各绕过一次），把面收成仓库今天实际用的那一种，未知写法就朝
+      // 红的一边倒（Codex 对 #50 的五轮复审）。
+      for (const match of content.matchAll(VAR_EXPORT_RE)) {
+        if (braceDepth(content, match.index) !== 0) continue;
+        const stmt = content.slice(match.index, statementEnd(content, match.index));
+        // 整条语句里凡出现方法名就违规，不限于 `POST =`：解构 `export const { POST } = handlers;`
+        // 同样要拦（Codex 对 #50 的七轮复审）。抹过字面量，所以字符串里的 "POST" 不会误伤。
+        for (const decl of stmt.matchAll(new RegExp(String.raw`\b(${METHODS})\b`, "g")))
+          out.push(`${decl[1]} 出现在 export const / let / var 里，只能是导出的函数声明`);
+      }
+      for (const match of content.matchAll(EXPORT_AT_RE))
+        if (braceDepth(content, match.index) !== 0)
+          out.push(
+            `第 ${content.slice(0, match.index).split("\n").length} 行的 export 不在模块顶层`,
+          );
+        else if (!ALLOWED_EXPORT_RE.test(content.slice(match.index))) {
+          const line = content.slice(0, match.index).split("\n").length;
+          out.push(`第 ${line} 行的 export 形状不认识，只允许函数声明或 export const <标识符> = …`);
+        }
+      if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
+      // `handle` 后面只许跟 `,` 或 `}`：`import { handle as wrapped }` 绑的本地名不是 handle，
+      // route 就能自己声明一个 handle，让每个方法都以 return handle( 起头却绕开真正的错误包装。
+      // 反过来 `import { jsonError as handle }` 把**别的**导出改名成 handle，同样能骗过
+      // `return handle(` 那条（Codex 对 #50 的十五、十六两轮复审）。
+      if (!matchesAsCode(raw, /^[ \t]*import \{[^}]*\bhandle\s*(?:,[^}]*)?\} from "@\/lib\/http"/m))
+        out.push("没有从 @/lib/http 原名导入 handle");
+      if (matchesAsCode(raw, /^[ \t]*import \{[^}]*\bas\s+handle\b/m))
+        out.push("把别的导出改名成了 handle");
       return out;
     });
     expect(found).toEqual([]);
@@ -122,9 +312,13 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
    */
   // 客户端代码 = 含 "use client" 的文件 ∪ src/app（api/ 除外）与 src/components 下没有指令的共享模块：
   // 后者被客户端页面 import，同样不能把 @/server 的运行时值带进浏览器包。
+  // 指令按「整行只有这个串」找，不设字节窗口：窗口卡在 600 字节时，前面堆够注释就能把指令挤出扫描
+  // 范围，那个文件整条断言都不再受检（Codex 对 #50 的二十轮复审）。注释已抹成空白，所以前面有多少
+  // 注释都不影响；多认一个文件只会让判定更严，方向是误报不是漏放。
+  const CLIENT_DIRECTIVE_RE = /^[ \t]*["']use client["']\s*;?[ \t]*$/m;
   const clientFiles = sourceFiles.filter((file) => {
     if (isTest(file)) return false;
-    if (/["']use client["']/.test(read(file).slice(0, 600))) return true;
+    if (CLIENT_DIRECTIVE_RE.test(stripCode(read(file)))) return true;
     const r = rel(file);
     return (
       (r.startsWith("src/app/") && !r.startsWith("src/app/api/")) || r.startsWith("src/components/")
@@ -146,26 +340,51 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
     return content.slice(0, cut);
   };
   const SERVER_SPECIFIER = /^@\/(?:server|db)(?:\/|$)/;
+  const SERVER_DIRS = [path.join(ROOT, "src", "server"), path.join(ROOT, "src", "db")];
+  /**
+   * 越界 = `@/server` / `@/db`，**或**相对路径解析后落进这两棵树。相对写法必须一起查：
+   * `import type { X } from "../../server/foo"` 类型导入运行时被擦掉，typecheck 与 build 都不报
+   * （Codex 对 #50 的十一轮复审）。
+   */
+  const crossesBoundary = (specifier: string, file: string): boolean => {
+    if (SERVER_SPECIFIER.test(specifier)) return true;
+    if (!specifier.startsWith(".")) return false;
+    const target = path.resolve(path.dirname(file), specifier);
+    return SERVER_DIRS.some((dir) => target === dir || target.startsWith(`${dir}${path.sep}`));
+  };
   // `[^;]*?` 把匹配限制在同一条语句里：`export type { X };` 没有 from，不能吞到下一条 import 的 from。
-  const IMPORT_FROM_RE = /^(?:import|export)\s+(type\s+)?[^;]*?\s+from\s+["']([^"']+)["']/gm;
-  const SIDE_EFFECT_IMPORT_RE = /^import\s+["']([^"']+)["']/gm;
-  const DYNAMIC_IMPORT_RE = /\bimport\(\s*["']([^"']+)["']/g;
+  // 四条都容忍行首空白：注释抹成空白后 `/* c */ import type { X } from "…"` 不再从列 0 开始
+  // （Codex 对 #50 的十九轮复审，与第十轮对 export 的那次同一类）。
+  const IMPORT_FROM_RE = /^[ \t]*(?:import|export)\s+(type\s+)?[^;]*?\s+from\s+["']([^"']+)["']/gm;
+  const SIDE_EFFECT_IMPORT_RE = /^[ \t]*import\s+["']([^"']+)["']/gm;
+  // 反引号也要收：`await import(\`../../server/x\`)` 是合法的无插值模板串说明符（Codex 对 #50 的
+  // 十二轮复审）。静态 import 的说明符按语法只能是引号串，所以上面两条不用管反引号。
+  const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["'`]([^"'`]+)["'`]/g;
+  // 所有 `require("…")`：既盖 TS 的 import 赋值（`import type Server = require("../server/x")`，
+  // 既没有 from 也没有 import(，类型形式还会被擦掉），也盖普通表达式
+  // （`const types = require("@/server/monitor/types")`）（Codex 对 #50 的十八、二十一两轮复审）。
+  const REQUIRE_RE = /\brequire\s*\(\s*["'`]([^"'`]+)["'`]/g;
 
   it('含 "use client" 的文件与 src/app、src/components 下的共享模块不从 @/server 或 @/db 导入任何东西（含 import type）', () => {
     expect(clientFiles.length).toBeGreaterThan(0);
     const found = violations(clientFiles, (raw, file) => {
-      const content = file === undefined ? raw : scanText(file);
+      // 抹掉注释再扫：`import /* c */ ("../../server/x")` 这种插在中间的注释会把匹配挡掉，
+      // 注释掉的 import 也不该算数（Codex 对 #50 的十七轮复审）
+      const content = stripCode(scanText(file));
       const out: string[] = [];
       for (const match of content.matchAll(IMPORT_FROM_RE)) {
         const [, typeOnly, specifier] = match;
-        if (!SERVER_SPECIFIER.test(specifier)) continue;
+        if (!crossesBoundary(specifier, file)) continue;
         out.push(typeOnly ? `import type 来自 ${specifier}` : `从 ${specifier} 导入了运行时值`);
       }
       for (const match of content.matchAll(SIDE_EFFECT_IMPORT_RE)) {
-        if (SERVER_SPECIFIER.test(match[1])) out.push(`副作用导入 ${match[1]}`);
+        if (crossesBoundary(match[1], file)) out.push(`副作用导入 ${match[1]}`);
       }
       for (const match of content.matchAll(DYNAMIC_IMPORT_RE)) {
-        if (SERVER_SPECIFIER.test(match[1])) out.push(`动态导入 ${match[1]}`);
+        if (crossesBoundary(match[1], file)) out.push(`动态导入 ${match[1]}`);
+      }
+      for (const match of content.matchAll(REQUIRE_RE)) {
+        if (crossesBoundary(match[1], file)) out.push(`require 引入 ${match[1]}`);
       }
       return out;
     });
@@ -277,10 +496,12 @@ describe("AGENTS.md · Conventions · revision restore", () => {
    * silently answers 501」——注册发生在 writers/index.ts 模块加载时。
    */
   it('引用 restoreRevision 的 route 带 import "@/server/writers";', () => {
-    const restoreRoutes = apiRoutes.filter((file) => /\brestoreRevision\b/.test(read(file)));
+    const restoreRoutes = apiRoutes.filter((file) =>
+      matchesAsCode(read(file), /\brestoreRevision\b/),
+    );
     expect(restoreRoutes.map(rel)).toContain("src/app/api/revisions/[revId]/restore/route.ts");
     const missing = restoreRoutes
-      .filter((file) => !read(file).includes('import "@/server/writers";'))
+      .filter((file) => !occursAsCode(read(file), 'import "@/server/writers";'))
       .map(rel);
     expect(missing).toEqual([]);
   });
@@ -454,6 +675,27 @@ describe("AGENTS.md · Conventions · raw SQL", () => {
     const listed = sourceFiles.filter((file) => ALLOWED_FILES.includes(rel(file)));
     expect(listed.map(rel).sort()).toEqual([...ALLOWED_FILES].sort());
     expect(listed.filter((file) => !RAW_SQL.test(read(file))).map(rel)).toEqual([]);
+  });
+
+  it("drizzle 的 sql 只以 sql 这个名字导入：没有 `sql as`，也没有 drizzle-orm 的命名空间导入", () => {
+    // 上面两条按名字扫 `sql\`` / `sql<T>\``；改名导入（`sql as rawSql`）或命名空间导入
+    // （`import * as d from "drizzle-orm"` 后 `d.sql\`…\``）都会让它们看不见，白名单形同虚设
+    // （Codex 对 #50 的十五轮复审）。仓库今天两种写法都没有，这条把现状钉住。
+    const found = violations(
+      sourceFiles.filter((file) => !isTest(file)),
+      (raw) => {
+        const out: string[] = [];
+        for (const match of stripCode(raw).matchAll(
+          /^[ \t]*import\s+([^;]*?)\s+from\s+"drizzle-orm[^"]*"/gm,
+        )) {
+          const clause = match[1].trim();
+          if (/\bsql\s+as\s+/.test(clause)) out.push(`把 sql 改名导入：${clause}`);
+          if (/^\*\s+as\s+/.test(clause)) out.push(`命名空间导入 drizzle-orm：${clause}`);
+        }
+        return out;
+      },
+    );
+    expect(found).toEqual([]);
   });
 
   it("「User input inside LIKE is escaped and paired with escape '\\'」——插值进 like 的那一行带 escape '\\'", () => {
