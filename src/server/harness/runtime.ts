@@ -23,7 +23,7 @@ import type {
   SessionPromptResult,
 } from "./rpc/types";
 
-export class RunProcessError extends Error {}
+class RunProcessError extends Error {}
 
 /** 子进程退出边沿的事实记录。 */
 export interface RunProcessExit {
@@ -59,7 +59,7 @@ export interface RunProcessSpawnOptions {
 }
 
 /** 洗刷后的父环境为起点，显式白名单在其上合并。 */
-export function buildChildEnv(explicit: Record<string, string>): Record<string, string> {
+function buildChildEnv(explicit: Record<string, string>): Record<string, string> {
   return { ...scrubbedParentEnv(), ...explicit };
 }
 
@@ -139,10 +139,6 @@ export class RunProcess {
     return this.#child.pid;
   }
 
-  get exitInfo(): RunProcessExit | undefined {
-    return this.#exit;
-  }
-
   /** 某会话已到达的事件条数（诊断用；事件本体不驻留）。 */
   eventCountOf(sessionId: string): number {
     return this.#eventCountBySession.get(sessionId) ?? 0;
@@ -193,11 +189,6 @@ export class RunProcess {
     await this.#request("session/close", { sessionId });
     // 会话关闭即释放它的计数条目，一次运行内节点多也不让映射长下去。
     this.#eventCountBySession.delete(sessionId);
-  }
-
-  /** 已观察到的最新状态通知序号；配合 waitForStatus 界定「此后」的状态。 */
-  get statusSeq(): number {
-    return this.#statusSeq;
   }
 
   /** 等待某会话在 afterSeq 之后出现目标状态，返回命中状态通知的序号。 */

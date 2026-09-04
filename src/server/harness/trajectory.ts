@@ -20,6 +20,7 @@ import type {} from "@deepseek-ai/dsh-llm-retry";
 // 注册 compaction/start、compaction/summary、compaction/end、compaction/prune 的声明合并。
 import type {} from "@deepseek-ai/dsh-compaction/types";
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
+import { RUN_SESSIONS_SUBDIR } from "./workspace";
 
 export interface TrajectoryDetail {
   label: string;
@@ -274,7 +275,7 @@ export function readAgentTrajectory(options: ReadAgentTrajectoryOptions): AgentT
   // lexical 校验之外再校验 realpath，拒绝 data/runs 内指向外部的符号链接。
   assertDescendant(rootReal, runReal, "运行目录越界 data/runs");
 
-  const sessionsRoot = path.join(runReal, "sessions");
+  const sessionsRoot = path.join(runReal, RUN_SESSIONS_SUBDIR);
   if (!fs.existsSync(sessionsRoot)) {
     return { available: false, reason: "not-recorded", sessions: [] };
   }

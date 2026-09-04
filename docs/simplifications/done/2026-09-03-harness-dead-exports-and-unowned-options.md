@@ -1,6 +1,6 @@
 # 简化：清掉 harness 层的死导出与无主人的可选项，会话根目录名只留一处
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -69,3 +69,37 @@ MCP 的 `reconnect` / `toolCallTimeoutMs` 与 DeepSeek 的 `models` 目录：将
 `workspace.ts` 正是为此。
 
 预估净删约 45 行生产代码，另有 ~14 个 `export` 关键字消失；风险等级：低。
+
+## 落地
+
+PR 待开。
+
+**与提议的差异（三处）**
+
+1. `parseSessionJsonl`（`src/server/harness/trajectory.ts`）**没有**去掉 `export`。提议把它归进「内部有
+   真消费者，去掉 export 即可」那一栏，但它有**文件外**的消费者：`trajectory.test.ts` 引它做 30 处断言
+   （不连续 seq、未提交尾行、未知 required event、版本不受支持……）。去掉 export 要么删这些断言、要么
+   把解析器改成从 `readAgentTrajectory` 迂回测，两者都是拿覆盖换一个 knip 早已不报的名字——knip 把
+   `*.test.ts` 当 entry，它本来就不在 knip 的清单里。其余 13 个过度导出照提议去掉了 `export`。
+2. `ToolExecute`（`tool-contract.ts:95`）**没有删**。它不在本记录的表里；[knip 归零](2026-09-03-knip-to-zero-then-gate.md)
+   的第 2 步把它派给了本记录，但同一份记录的「已考察但不作为删除项」又把它的兄弟
+   （`ToolContext` / `ToolRunOptions` / `ToolRunSandbox` / `ToolRunResult`）作为 ADR-0017 的公开面保住——
+   `ToolExecute` 正是「execute 模块默认导出的形状」，同一个公开面，同一条理由。归零靠 `knip.json` 的
+   ignore，不靠删它。
+3. 连带改了 `docs/harness/` 三行（本记录没点名，`rg` 现场发现）：`01-骨架.md` 的 llm-deepseek 配置要点
+   原写「entry 生成器还接受 `maxTokens` 与 `models`，但今天的全局设置不暴露」——字段既然删了，这句改成
+   「一律不写，生成器也不再留字段」；`02-模型的手脚.md` 的 mcp-client 行同理改 `toolCallTimeoutMs` /
+   `reconnect` 两处；`10-本项目自有.md:92` 组合生成器的输入清单去掉「模型目录」。
+
+**验收实际跑了什么**
+
+- `npm run check`：typecheck / oxlint / oxfmt --check 全过，vitest 46 文件 387 通过 1 跳过。
+- `npx vitest run src/server/harness/catalog.test.ts src/server/harness/composition-boot.test.ts`：16 通过。
+  四条 boot 用例（默认组合、样例契约 Tool、四开关全关、搜索开关打开）都真起了子进程并完成 initialize，
+  这就是「组合未受影响」的证据——按 `AGENTS.md`「The harness seam」，本 PR 删的全是没有调用点的声明，
+  不跑付费冒烟。
+- `npm run build`：通过。
+- `npm run knip`：`src/server/harness/**` / `src/server/engine/**` 的 **Unused exports 归零**；剩下的
+  harness 条目全在「Unused exported types」，且全是「本文件内自用」这一类（拿 knip 归零记录提议的
+  `ignoreExportsUsedInFile: true` 探针复跑，harness 只剩上面第 2 条说的 `ToolExecute`）。
+- e2e：不适用（纯服务端，无用户可见改动）。

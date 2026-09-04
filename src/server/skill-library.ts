@@ -214,7 +214,7 @@ export function materializeSkill(
 }
 
 /** 删掉 <slug> 链接（或旧式真实目录）与它的全部版本目录。 */
-export function removeSkillDir(slug: string): void {
+function removeSkillDir(slug: string): void {
   try {
     fs.rmSync(skillDir(slug), { recursive: true, force: true });
     for (const name of versionNamesOf(slug)) {
