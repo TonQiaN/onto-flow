@@ -273,7 +273,26 @@ await if while for switch with as satisfies`），并把取舍写进注释：宁
 四十七种写法反向验证过。除前面四十种外新增：六个前缀（`throw` / `return` / `typeof` / `yield` /
 `await` / `case`）各造一次正则仿冒，全部变红；原样绿。
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十三轮改写对现有 route 与现有
+第十四轮点出 `if (enabled) /export const dynamic = "…";/.test(source)`——`)` 之后也可以起正则。
+到这里已经是第三次补正则前缀了，所以换掉做法：给三处存在性判定加**行首锚定**。它们判的都是顶层
+语句，而正则字面量必以 `/` 开头，行首之后再也藏不住一条语句——于是「这个 `/` 是除号还是正则」
+这条启发式对这几条判定不再承重。行首判定看抹过的视图，所以同行注释前缀不挡真语句、同行真代码
+仍然挡得住；`handle` 那条 import 的正则也加了 `^[ \t]*` 与 `m`，`matchesAsCode` 改在抹过注释的
+文本上匹配。
+
+五十四种写法反向验证过。除前面四十七种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `if (enabled) /export const dynamic = "…";/.test(source)` | 红 | 红 |
+| `const marker = () => /…/;`（回归） | 红 | 红 |
+| `const marker = 'export const dynamic = "…";';`（回归） | 红 | 红 |
+| `// export const dynamic = "…";`（整行注释，回归） | 红 | 红 |
+| `/* c */ export const dynamic = "force-dynamic";` | 绿 | 绿 |
+| `/* c */ import "@/server/writers";`（restore route） | 绿 | 绿 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十四轮改写对现有 route 与现有
 客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：

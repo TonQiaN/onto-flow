@@ -87,25 +87,37 @@ function stripCode(content: string, literals = false): string {
   return out;
 }
 
+/** 这个位置前面在同一行里只有空白（顶层语句都在行首；正则字面量以 `/` 开头，永远不在行首） */
+function atLineStart(raw: string, at: number): boolean {
+  return raw.slice(raw.lastIndexOf("\n", at - 1) + 1, at).trim() === "";
+}
+
 /**
  * 这段文本是否作为**真代码**出现过。`stripCode` 抹白时长度与换行都保留，所以抹过的视图与原文
  * 偏移一一对应：先在原文里找到位置，再要求抹过字面量的视图在同一段偏移上是同样的「形状」。
  * 注释掉的那行在视图里只剩空白，藏进字符串的仿冒（`const marker = 'import "@/server/writers";'`）
  * 内容也被抹白，两种都对不上（Codex 对 #50 的七、八两轮复审）。
+ *
+ * 再加一条**行首锚定**：这三处判定的都是顶层语句，而正则字面量必以 `/` 开头，行首之后就再也藏不住
+ * 一条语句。有了它，「这个 `/` 是除号还是正则」的启发式对这几条判定不再是承重的（十四轮复审）。
  */
 function occursAsCode(raw: string, snippet: string): boolean {
   const view = stripCode(raw, true);
   const shape = stripCode(snippet, true);
-  for (let at = raw.indexOf(snippet); at !== -1; at = raw.indexOf(snippet, at + 1))
+  for (let at = raw.indexOf(snippet); at !== -1; at = raw.indexOf(snippet, at + 1)) {
+    // 行首判定看抹过的视图：同行的注释前缀已成空白，不该挡住真语句；同行真代码仍然挡得住
+    if (!atLineStart(view, at)) continue;
     if (view.slice(at, at + snippet.length) === shape) return true;
+  }
   return false;
 }
 
 /** 正则版的 occursAsCode：命中的那一段必须在抹过字面量的视图里是同样的形状 */
 function matchesAsCode(raw: string, re: RegExp): boolean {
-  const view = stripCode(raw, true);
+  const code = stripCode(raw); // 只抹注释：说明符那串字符还要参与匹配
+  const view = stripCode(raw, true); // 再抹字面量：用来验证命中处不是藏在字面量里
   const all = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
-  for (const match of raw.matchAll(all))
+  for (const match of code.matchAll(all))
     if (view.slice(match.index, match.index + match[0].length) === stripCode(match[0], true))
       return true;
   return false;
@@ -224,7 +236,7 @@ describe("AGENTS.md · Conventions · handle()", () => {
           out.push(`第 ${line} 行的 export 形状不认识，只允许函数声明或 export const <标识符> = …`);
         }
       if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
-      if (!matchesAsCode(raw, /import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/))
+      if (!matchesAsCode(raw, /^[ \t]*import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/m))
         out.push("没有从 @/lib/http 导入 handle");
       return out;
     });
