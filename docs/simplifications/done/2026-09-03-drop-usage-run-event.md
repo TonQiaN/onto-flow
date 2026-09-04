@@ -1,6 +1,6 @@
 # 简化：删掉引擎自插的 usage 运行事件与它带出来的四个字段、两条特例测试
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -83,3 +83,42 @@ failure quarantines the run」那条明写要刷新 `usage` event——同一提
 持续刷新到进程退出确认）不变。
 
 预估净删约 220 行（生产 ~80 + 测试 ~140）；风险等级：中。
+
+## 落地
+
+PR 待开。
+
+与提议的差异：多删了一个字段，多改了两处文档。
+
+- `UnsettledUsageRollup.modelId` 一起删：它唯一的读者就是 `usageEventPayload()` 的 `model` 字段，
+  与提议点名的四个字段同批死。它一走，`usageRollupState()` / `beginUnsettledUsageRollup()` /
+  `recordUsage()` 的 `model` 形参也没有读者了，三处签名一并收窄（纯管线，无行为）。
+- `src/server/engine/events.ts` 的头注释里「另有一种引擎自产的 usage 结算事件」那两行同批改成
+  「本模块是 `run_events` 唯一的写入者」——记录漏列了这处注释，但它陈述的正是被删掉的行为。
+- `docs/DESIGN-V3.md:311` 第 3 批的 `session_id` 条目里「`action.ts` 里 `refreshUnsettledUsageRollup()`
+  自己插的 `usage` 事件……两处插入点都改」同批删掉，理由同上。
+- `AGENTS.md`「Session events must be written to SQLite as they arrive」那句里的
+  「`action.ts` on the `usage` event it inserts itself」与 `.github/REVIEW.md` §5 的对应半句一起改成
+  「`events.ts` 是 `run_events` 唯一的写入者」——`session_id` 规则本身保留。
+
+测试按提议合并：`action.test.ts` 的三条 usage 事件用例并成一条
+「节点用量累计写入失败时保留结算状态，故障消失后由最终结算补齐」，trigger 从 `run_events` 的
+INSERT/UPDATE 改挂到 `run_nodes` 的 `UPDATE OF input_tokens` 上，保留「结算失败 → 保留状态 → 重试」
+这条不变量；隔离会话那条去掉事件断言并改名。`src/rules.test.ts` 的 raw-SQL 名单未动。
+
+验收实际跑了：
+
+- `npm run check` 全绿（46 个测试文件、387 通过 1 跳过）；`npm run build` 通过；
+  `npx vitest run src/server/engine`（5 个文件、54 条）绿。
+- **付费冒烟**（在本工作树自己的 `data/` 上，先 `db:push` + `db:seed`）：
+  - `npx tsx scripts/smoke-engine.ts` 跑了两次，退出码 **0**，终态均 `success`；
+    事件类型分别是 `tool×12 reasoning×1 session.idle×2 text×2` 与 `reasoning×4 tool×16 session.idle×2`，
+    **没有 `usage` 一类**。
+  - `npx tsx scripts/smoke-harness.ts` 退出码 **0**：一轮对话、结构化输出
+    `{"captured":true,"value":{"artifact":"hello.md","line_count":3}}`、产物正确、
+    `子进程收束：code=0 expected=true`、运行目录已清理——会话收束路径不变。
+  - sqlite3 核对（两次运行合计）：`select count(*) from run_events where type='usage'` = **0**；
+    每个节点的 `run_nodes` token 与 cost 与 `node_usage` 按 `(run_id, session_id)` 求和**逐行相等**
+    （偏差行数 0）；两次运行都是 success，合计 59107 token、0.015128 元。
+- 观察终态：`rg -n '"usage"' src --glob '!*.test.ts'` 只剩 `events.ts:195` 与 `trajectory.ts:804`
+  两处上游 chunk 判定。

@@ -7,9 +7,8 @@
  * 事件词汇：text / reasoning / tool / session.idle / session.error 五种沿用既有，
  * compaction 记录上下文压缩（摘要与工具结果裁剪）；上游 dsh 的事件种类远多于这些，
  * 只有能落到这六种上的才记，其余丢弃——完整的会话记录本来就在运行目录的
- * sessions/*.jsonl 里，这里只是给人看的摘要。
- * 另有一种引擎自产的 usage 结算事件：节点收束时由 action.ts 的 recordUsage 写入，
- * 载荷是该会话的 token 汇总与人民币费用，让事件日志里能看到每个 Action 花了多少钱。
+ * sessions/*.jsonl 里，这里只是给人看的摘要。本模块是 run_events 唯一的写入者：
+ * 用量不再另落事件，逐 chunk 明细在 node_usage、节点累计在 run_nodes，两处就是全部账目。
  *
  * 压缩摘要那次模型调用不经过 agent-loop，因此没有 assistant/chunk 的 usage chunk；
  * 它的用量只挂在 compaction/summary 事件上。这里把它落成 node_usage 一条明细，
