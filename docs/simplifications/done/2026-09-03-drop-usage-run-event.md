@@ -86,7 +86,7 @@ failure quarantines the run」那条明写要刷新 `usage` event——同一提
 
 ## 落地
 
-PR 待开。
+PR [#48](https://github.com/TonQiaN/onto-flow/pull/48)。
 
 与提议的差异：多删了一个字段，多改了两处文档。
 
