@@ -76,7 +76,7 @@ conventions above」保护的是**有被测对象**的测试。这两个函数�
 
 ## 落地
 
-PR 待开（分支 `cleanup/5-drop-test-only-exports`，[DESIGN-V3 第 5 批](../../DESIGN-V3.md)）。
+PR：https://github.com/TonQiaN/onto-flow/pull/44（分支 `cleanup/5-drop-test-only-exports`，[DESIGN-V3 第 5 批](../../DESIGN-V3.md)）。
 
 与提议的差异：
 
