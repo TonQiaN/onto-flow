@@ -119,8 +119,11 @@ export const CRITICS: Array<{ key: string; name: string; focus: string; scoring:
 
 /**
  * 八个 Action 的完整端口集合。受理时 `validateWorkflowContract` 会拿
- * `resumeMatchExpectedPorts()` 逐个 Action 做**精确**比较，多一个端口就 422，
- * 所以这份定义与那份期望必须一致。
+ * `resumeMatchExpectedPorts()` 逐个 Action 做**精确**比较，多一个端口就 422。
+ *
+ * 这里**独立**写一份，而不是直接返回 `resumeMatchExpectedPorts()`：由那份期望生成的话，
+ * 「种子真的照契约接线了吗」就没有任何东西在钉，`resume-decision-policy.test.ts` 也退化成
+ * 同义反复。两边各写一份、由那个测试做精确集合比较，漂移才会在 CI 上红而不是在付费运行时 422。
  */
 export function resumeMatchSeedPorts(types: SeedObjectTypeIds): {
   parse: SeedActionPorts;
@@ -215,6 +218,9 @@ export interface SeedGraph {
  *
  * 扇出是图的形状而不是节点类型（ADR-0009）：解析的两个输出端口各连到六个评委；汇总另各接一条
  * 岗位与简历原文边，并在一个结论端口接齐六份评委产物（同一端口的多条入边要全部结算才就绪）。
+ *
+ * 与端口同理：边也是**独立**写出来的，不从 `resumeMatchExpectedEdges()` 生成——少接一条评委到
+ * 汇总的结论边，通用图校验拦不住，只有那条精确集合断言会红。
  *
  * `currentNodes` / `currentEdges` 是库里已有的行，形状对得上就复用它的 id——幂等靠这个，
  * 不传就全部新建。除此之外本函数不看外界任何状态。
