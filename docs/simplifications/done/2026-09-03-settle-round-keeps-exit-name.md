@@ -94,7 +94,10 @@ PR：https://github.com/TonQiaN/onto-flow/pull/33（分支 `cleanup/5-settle-rou
   `action.ts` 收束时写的就是 `exitName: selectedExit`，两者不一致的 mock 会误导后来的人。
   这个返回值在本用例里到不了消费点（`runOne` 的 post-await 取消检查先抛「运行已取消」），
   共享夹具 `resolvedWorkflow()` 的端口不加 `exitName`，免得改到别的用例的连线激活。
-- REVIEW.md 的半句落在 §3「轮次行与节点行的线上形态没变」那条下面，与它同讲 `run_node_rounds`。
+- REVIEW.md 的半句**接在** §3「轮次行与节点行的线上形态没变（A round row has a skeleton and a
+  payload）」那条的末尾，而不是另起一条：REVIEW.md 每条都要括注 AGENTS.md 里拥有理由的那句，
+  独立成条就成了没有主人的规则（Codex 首轮 P1 指出，已改）。挂在这条下面是对的——它括注的那句
+  AGENTS.md 正把 `exit` 与 `error` 数进骨架列，并说骨架是事件清理后回放退化到的东西。
 - `AGENTS.md` / `docs/DESIGN-V3.md` 不改：前者没有陈述这条细则；后者 L272 说的
   「结束时 update 终态、`finishedAt`、`exitName`、`outputs`、`error`」讲的是 Action 侧的收束
   （那次调用本来就带这几列），取消分支的「无条件改成 cancelled」也仍成立（终态与
