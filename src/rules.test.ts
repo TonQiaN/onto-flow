@@ -174,6 +174,20 @@ describe("AGENTS.md · Conventions · handle()", () => {
     /^[ \t]*export\s+(?:(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=)/;
   const LEADING_TRIVIA_RE = /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
 
+  /**
+   * 抹过的视图里这个位置的花括号深度。顶层导出必须是 0：`namespace X { export async function GET(){} }`
+   * 缩进之后仍能匹配 `^[ \t]*export`，但它根本不是模块级导出，请求会拿到 405（Codex 对 #50 的
+   * 十七轮复审）。
+   */
+  const braceDepth = (view: string, index: number): number => {
+    let depth = 0;
+    for (let i = 0; i < index; i += 1) {
+      if (view[i] === "{") depth += 1;
+      else if (view[i] === "}") depth -= 1;
+    }
+    return depth;
+  };
+
   /** 本条语句的结尾：括号全配平后的第一个 `;`。多声明符的 `const a = 1, POST = …` 要整条一起看 */
   const statementEnd = (content: string, from: number): number => {
     let depth = 0;
@@ -213,6 +227,7 @@ describe("AGENTS.md · Conventions · handle()", () => {
         out.push("抹字面量后顶层 export 数量变了，扫描不可信");
       let methods = 0;
       for (const match of content.matchAll(FUNCTION_METHOD_RE)) {
+        if (braceDepth(content, match.index) !== 0) continue; // 嵌在 namespace / 块里的不是模块级导出
         methods += 1;
         const body = functionBody(content, match.index + match[0].length);
         if (body === null) out.push(`${match[1]} 定位不到函数体`);
@@ -224,6 +239,7 @@ describe("AGENTS.md · Conventions · handle()", () => {
       // `export const a = 1, POST = …` 各绕过一次），把面收成仓库今天实际用的那一种，未知写法就朝
       // 红的一边倒（Codex 对 #50 的五轮复审）。
       for (const match of content.matchAll(VAR_EXPORT_RE)) {
+        if (braceDepth(content, match.index) !== 0) continue;
         const stmt = content.slice(match.index, statementEnd(content, match.index));
         // 整条语句里凡出现方法名就违规，不限于 `POST =`：解构 `export const { POST } = handlers;`
         // 同样要拦（Codex 对 #50 的七轮复审）。抹过字面量，所以字符串里的 "POST" 不会误伤。
@@ -231,7 +247,11 @@ describe("AGENTS.md · Conventions · handle()", () => {
           out.push(`${decl[1]} 出现在 export const / let / var 里，只能是导出的函数声明`);
       }
       for (const match of content.matchAll(EXPORT_AT_RE))
-        if (!ALLOWED_EXPORT_RE.test(content.slice(match.index))) {
+        if (braceDepth(content, match.index) !== 0)
+          out.push(
+            `第 ${content.slice(0, match.index).split("\n").length} 行的 export 不在模块顶层`,
+          );
+        else if (!ALLOWED_EXPORT_RE.test(content.slice(match.index))) {
           const line = content.slice(0, match.index).split("\n").length;
           out.push(`第 ${line} 行的 export 形状不认识，只允许函数声明或 export const <标识符> = …`);
         }
@@ -333,12 +353,14 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
   const SIDE_EFFECT_IMPORT_RE = /^import\s+["']([^"']+)["']/gm;
   // 反引号也要收：`await import(\`../../server/x\`)` 是合法的无插值模板串说明符（Codex 对 #50 的
   // 十二轮复审）。静态 import 的说明符按语法只能是引号串，所以上面两条不用管反引号。
-  const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]/g;
+  const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["'`]([^"'`]+)["'`]/g;
 
   it('含 "use client" 的文件与 src/app、src/components 下的共享模块不从 @/server 或 @/db 导入任何东西（含 import type）', () => {
     expect(clientFiles.length).toBeGreaterThan(0);
     const found = violations(clientFiles, (raw, file) => {
-      const content = scanText(file);
+      // 抹掉注释再扫：`import /* c */ ("../../server/x")` 这种插在中间的注释会把匹配挡掉，
+      // 注释掉的 import 也不该算数（Codex 对 #50 的十七轮复审）
+      const content = stripCode(scanText(file));
       const out: string[] = [];
       for (const match of content.matchAll(IMPORT_FROM_RE)) {
         const [, typeOnly, specifier] = match;
