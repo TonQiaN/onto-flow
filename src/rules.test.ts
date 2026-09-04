@@ -886,7 +886,11 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       // 反引号栏的信息串里不能再有反引号（CommonMark），带反引号的那行根本不是围栏
       if (fence && !(run.startsWith("`") && info.includes("`"))) {
         opener = run;
-        openerColumn = prefix.length;
+        // 出栏列只由**显式的容器标记**（`>` 或列表标记）确立。裸缩进不算：围栏本身就允许
+        // 1–3 格的可选缩进，而更深的缩进要区分「顶层缩进的栏」与「列表项里的栏」得有块解析器。
+        // 代价是「列表续行里开的栏又忘了收栏」会一直抹到显式收栏为止——那要先有一份忘写收栏的
+        // 记录才碰得上，而按裸缩进出栏会让合法的缩进围栏被当正文扫，是天天碰得上的误报。
+        openerColumn = quotes > 0 || startsItem ? prefix.length : 0;
         openerQuotes = quotes;
         kept.push("");
       } else kept.push(line);
