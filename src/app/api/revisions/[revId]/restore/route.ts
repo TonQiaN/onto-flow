@@ -1,8 +1,8 @@
-import { NextResponse } from "next/server";
 // 副作用导入：五个库在此把自己的写入器注册进修订注册表，回滚才能复用 PUT 的写入路径
 import "@/server/writers";
-import { handle, jsonError } from "@/lib/http";
+import { handle } from "@/lib/http";
 import { restoreRevision } from "@/server/revisions";
+import { respond } from "@/server/writers/types";
 
 export const dynamic = "force-dynamic";
 
@@ -17,8 +17,6 @@ type Params = { params: Promise<{ revId: string }> };
 export async function POST(_request: Request, { params }: Params) {
   return handle(async () => {
     const { revId } = await params;
-    const result = restoreRevision(revId);
-    if (!result.ok) return jsonError(result.status, result.error);
-    return NextResponse.json(result.data);
+    return respond(restoreRevision(revId));
   });
 }

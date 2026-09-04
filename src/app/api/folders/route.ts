@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { handle, jsonError } from "@/lib/http";
 import { createFolder, isFolderEntityKind, listEntityLeaves, listFolders } from "@/server/folders";
+import { respond } from "@/server/writers/types";
 
 export const dynamic = "force-dynamic";
 
@@ -28,8 +29,6 @@ export async function POST(request: Request) {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw))
       return jsonError(400, "请求体必须是 JSON 对象");
     const body = raw as Record<string, unknown>;
-    const result = createFolder(body.name, body.parentId);
-    if (!result.ok) return jsonError(result.status, result.error);
-    return NextResponse.json(result.data);
+    return respond(createFolder(body.name, body.parentId));
   });
 }

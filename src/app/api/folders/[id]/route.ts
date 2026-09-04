@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
 import { handle, jsonError } from "@/lib/http";
 import { deleteFolder, updateFolder } from "@/server/folders";
+import { respond } from "@/server/writers/types";
 
 export const dynamic = "force-dynamic";
 
@@ -17,12 +17,12 @@ export async function PATCH(request: Request, { params }: Params) {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw))
       return jsonError(400, "请求体必须是 JSON 对象");
     const body = raw as Record<string, unknown>;
-    const result = updateFolder(id, {
-      name: body.name,
-      parentId: body.parentId,
-    });
-    if (!result.ok) return jsonError(result.status, result.error);
-    return NextResponse.json(result.data);
+    return respond(
+      updateFolder(id, {
+        name: body.name,
+        parentId: body.parentId,
+      }),
+    );
   });
 }
 
@@ -30,8 +30,6 @@ export async function PATCH(request: Request, { params }: Params) {
 export async function DELETE(_request: Request, { params }: Params) {
   return handle(async () => {
     const { id } = await params;
-    const result = deleteFolder(id);
-    if (!result.ok) return jsonError(result.status, result.error);
-    return NextResponse.json(result.data);
+    return respond(deleteFolder(id));
   });
 }

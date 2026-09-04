@@ -1,6 +1,6 @@
 # 简化：修掉 docs/harness/ 里指向已删代码与已变测试的四处陈述
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -53,7 +53,7 @@ src/app/tools/tool-form.ts:146-147     ← 只剩给 Tool 作者的模板注释
 ——这两个 `ToolContext` 字段（`src/server/harness/tool-contract.ts:82,84`、`tool-plugin.ts:248-249`）今天
 零生产消费者，但 [ADR-0017](../../adr/0017-tool-is-a-contract.md) 把它们定为契约面，**本记录不提议删**，
 只把散文改成中性陈述（该字段的处置见
-[knip 归零](2026-09-03-knip-to-zero-then-gate.md) 的「已考察」段）。
+[knip 归零](../proposed/2026-09-03-knip-to-zero-then-gate.md) 的「已考察」段）。
 **测试 / 文档消费者：** `catalog.test.ts` 只钉包名与版本，不钉这四句。
 
 **打败了哪条已记录的理由：** `docs/harness/AGENTS.md:26`「组文档不是目录的复述……改决定时两边一起改，别
@@ -88,3 +88,32 @@ src/app/tools/tool-form.ts:146-147     ← 只剩给 Tool 作者的模板注释
 低。改的都是散文；`catalog.test.ts` 的包名整词断言在同一次运行里证明文档仍满足机械核对。
 
 预估净删 ≈ 0（四处改写）；风险等级：低。
+
+## 落地
+
+PR: https://github.com/TonQiaN/onto-flow/pull/40
+
+**与提议的差异：** 无，四处照提议改。具体措辞：
+
+- `10-本项目自有.md` 的举例换成记录建议的那句——「Tool 是能力，解题 Action 不该看见验收用的 `run_python`」，
+  并在同段点名 LeetCode 工作流的形状（工作流 Tool 集只有 `run_python`，只有「LC·测试」勾了它，「LC·解题」的
+  清单里没有它，`scripts/seed-leetcode.ts`）；`ctx.dbPath` / `ctx.dataDir` 那句改成中性陈述（契约给的绝对路径，
+  今天两个种子 Tool 都不用这两个字段，它们是 ADR-0017 定下的契约面而非某个 Tool 的遗留），按记录**不提议删**这两个字段。
+- `docs/harness/AGENTS.md` 的「子串原样匹配」→「整词匹配」，补上「后面不能紧跟 `[\w.-]`」与「不能靠更长的
+  包名蒙混过关」（写了 `@deepseek-ai/dsh-web-search-deepseek` 不算写了 `@deepseek-ai/dsh-web`），与
+  `catalog.test.ts` 那条断言的行内注释同款措辞。正则本身没有逐字抄进散文（嵌套反引号会破坏 Markdown 行内代码），
+  改为指名那条断言 + 写出 `(?![\w.-])` 这半句。
+- `07-宿主与界面.md` 的「监控台」→「系统健康页」，并顺手把今天真有的「运行页」补进那份页面清单。
+- `08-遥测与身份.md` 改成「运行页从 `run_events` 投影时间轴与事件，轨迹的权威源则是运行目录里的会话 JSONL（组 4）」。
+
+`catalog.ts` / `composition.ts` 一行未动；根 `AGENTS.md` 与 `.github/REVIEW.md` 现场 `rg` 复核后确认无需改。
+`docs/DESIGN-V3.md` 里仍有「监控台」字样，那是各批当时为真的进度记录（该文自陈「每个 stacked PR 都是当时为真的
+状态」），不在本记录范围内，未动。
+
+**验收实际跑了什么：**
+
+- `rg -n "归档工具|归档类 Tool|子串原样匹配|监控台" docs/harness/` → 无结果（退出码 1）。
+- `npx vitest run src/server/harness/catalog.test.ts` → 11 passed 1 skipped（跳过的是 `_reference/` 克隆缺席时的
+  上游文件核对）；包名整词匹配与 README 版本核对都绿。
+- `npm run check`（typecheck + lint + fmt:check + vitest）→ 绿。
+- e2e：不适用（纯文档）。付费冒烟：不需要（不碰 `catalog.ts` / `composition.ts`，不碰 harness 接缝行为）。

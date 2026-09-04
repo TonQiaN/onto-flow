@@ -7,7 +7,8 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
 import * as schema from "../db/schema";
-import type { FolderDto, Result } from "./folders";
+import type { WriteResult } from "./writers/types";
+import type { FolderDto } from "./folders";
 
 const sqlite = new Database(":memory:");
 sqlite.pragma("foreign_keys = ON");
@@ -33,8 +34,8 @@ CREATE INDEX entity_folders_by_folder ON entity_folders (folder_id);
 
 const { createFolder, deleteFolder, listFolders, updateFolder } = await import("./folders");
 
-/** 展开 Result，失败时直接让用例挂掉 */
-function unwrap<T>(r: Result<T>): T {
+/** 展开 WriteResult，失败时直接让用例挂掉 */
+function unwrap<T>(r: WriteResult<T>): T {
   if (!r.ok) throw new Error(`${r.status}: ${r.error}`);
   return r.data;
 }

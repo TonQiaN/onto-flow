@@ -1,6 +1,6 @@
 # 简化：两份私有 Result 与第三份 WriteOutcome 一起收敛到 WriteResult
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -69,3 +69,29 @@ skills、tools、workflows、settings、internal/resume-matches）；`settings.t
 已逐条对比。
 
 预估净删 35 行；风险等级：低。
+
+## 落地
+
+PR [#36](https://github.com/TonQiaN/onto-flow/pull/36)。与提议无差异：`folders.ts` / `revisions.ts` 的私有 `Result` / `ok` / `fail`、`revisions.ts` 的
+`WriteOutcome` 与 `hasEntityWriter` 都删了，`EntityWriter` 改成 `(id, payload) => WriteResult<unknown> | void`，
+点名的 6 个 route 拆包改 `return respond(...)`，`folders.test.ts` 的 `unwrap` 改吃 `WriteResult`。
+`AGENTS.md:139` 与 `.github/REVIEW.md` §2 第 1 条同改；`src/rules.test.ts` 确认无对应断言。
+
+验收（都在自己的工作树、自己的 `data/ontoflow.db` 上跑）：
+
+```
+npm run check                                   ✅ typecheck / oxlint / oxfmt / vitest 46 文件 387 通过
+npm run build                                   ✅
+npx playwright test e2e/library-v2.spec.ts      ✅ 4 passed（文件夹建 / 改 / 删 / 指派、修订面板）
+npx playwright test e2e/workflow-editor.spec.ts ✅ 4 passed（含 /api/revisions/[revId]/restore 回滚）
+```
+
+另对 3593 上的临时 dev server 逐条核对改动过的 6 个 route 的响应体与状态码：建文件夹 200 / 同名 409 /
+改名 200 / 不存在 404、指派 200 `{"ok":true}` / 实体不存在 404、删文件夹 200 `{"ok":true}`、
+修订 PATCH 200（pinned+note 落库）/ 非布尔 400 / 不存在 404、回滚 200（对象类型确实回到 v1 内容）/
+不存在 404——与改前逐字相同。未跑付费冒烟（不碰引擎接缝）。
+
+顺带发现、本 PR 没做：`src/server/monitor/cleanup.ts:305` 的 `deleteRun` 返回的是行内写死的
+`{ ok: true } | { ok: false; status: 404 | 409; error: string }`，形状与 `WriteResult` 相同但没复用；
+它的调用方 `api/runs/[id]` DELETE 还包了一层 `try/catch CleanupError`，成功体也不是 `result.data`，
+所以不在这条记录点名的范围内，另作候选。
