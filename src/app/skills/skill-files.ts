@@ -79,10 +79,3 @@ export function defaultFilePath(file: { name: string; webkitRelativePath?: strin
   const relative = file.webkitRelativePath ?? "";
   return relative !== "" ? relative : file.name;
 }
-
-/** base64 字符串对应的字节数（修订面板估算大小用，不解码整份内容） */
-export function base64ByteLength(encoded: string): number {
-  if (encoded === "") return 0;
-  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
-  return Math.floor((encoded.length * 3) / 4) - padding;
-}
