@@ -3,7 +3,10 @@
  * 能写产物、能交出结构化输出、能干净收束（ADR-0006 / ADR-0007）。
  *
  * 运行：DEEPSEEK_API_KEY=... npx tsx scripts/smoke-harness.ts
- * 会真实调用模型并产生费用。
+ * 会真实调用模型并产生费用。**任何一项检查不过即非零退出**：断言只钉「产物真的在盘上」
+ * 「关键子串出现」「结构化输出的形状对得上 schema」，不钉行数与模型措辞。
+ * 断言就地写而不复用 smoke-fixture：那个模块引 src/db，本冒烟刻意不碰数据库，
+ * 验的就是「子进程这一层自己能不能立起来」。
  * SMOKE_EFFORT=off|low|high|max 指定思考强度（默认 high）；SMOKE_KEEP=1 保留运行目录。
  */
 import { readFile, rm } from "node:fs/promises";
@@ -13,6 +16,10 @@ import { launchRun } from "../src/server/harness/launch";
 
 const t0 = Date.now();
 const el = (): string => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+
+function assertSmoke(condition: boolean, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
 
 async function main(): Promise<void> {
   if (!process.env.DEEPSEEK_API_KEY) {
@@ -44,6 +51,7 @@ async function main(): Promise<void> {
     required: ["artifact", "line_count"],
   };
 
+  let disposal: { code: number | null; expected: boolean } | undefined;
   try {
     await proc.runTurn(
       "node-1",
@@ -64,12 +72,23 @@ async function main(): Promise<void> {
 
     const out = await proc.sessionOutput("node-1");
     console.log(`[${el()}] 结构化输出：${JSON.stringify(out)}`);
+    // 结构化输出是 scope 注册的工具的两阶段提交结果：没捕获到就等于这条链路没打通。
+    assertSmoke(out.captured, "会话没有交出结构化输出（structured_output 未捕获）");
+    const value = out.value as { artifact?: unknown; line_count?: unknown } | undefined;
+    assertSmoke(
+      typeof value?.artifact === "string" && Number.isInteger(value.line_count),
+      `结构化输出的形状与 schema 对不上：${JSON.stringify(out.value)}`,
+    );
 
     const artifact = path.join(ws.workspaceDir, "hello.md");
-    console.log(`[${el()}] 产物：\n---\n${await readFile(artifact, "utf8")}---`);
+    const content = await readFile(artifact, "utf8");
+    console.log(`[${el()}] 产物：\n---\n${content}---`);
+    assertSmoke(content.includes("# 你好"), `产物 hello.md 里没有要求的首行「# 你好」：${content}`);
     console.log(`[${el()}] 会话事件数：${proc.eventCountOf("node-1")}`);
+    assertSmoke(proc.eventCountOf("node-1") > 0, "会话一条事件都没有，事件通道没有打通");
   } finally {
     const exit = await proc.dispose();
+    disposal = { code: exit.code, expected: exit.expected };
     console.log(
       `[${el()}] 子进程收束：code=${String(exit.code)} expected=${String(exit.expected)}`,
     );
@@ -80,6 +99,9 @@ async function main(): Promise<void> {
       console.log(`[${el()}] 运行目录已清理`);
     }
   }
+  // 收束判定放在 finally 之外：在 finally 里抛会顶掉 try 里真正的首个错误。
+  assertSmoke(disposal?.expected === true, `子进程不是预期收束：code=${String(disposal?.code)}`);
+  console.log(`[${el()}] harness 冒烟通过。`);
 }
 
 await main();

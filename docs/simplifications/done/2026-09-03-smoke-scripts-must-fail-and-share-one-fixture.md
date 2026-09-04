@@ -1,6 +1,6 @@
 # 简化：付费冒烟共用一份夹具与终态断言，不再「打印后总是退出 0」
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -89,3 +89,54 @@ real model call」——这条理由成立的前提是**冒烟会在真实调用
 终态为 success」「声明的产物存在」「关键子串出现」，不断言字数、行数、模型措辞。
 
 预估净删约 140 行（新增 `smoke-fixture.ts` 约 100 行，删除四份重复约 240 行）；风险等级：中。
+
+## 落地
+
+PR 待开。
+
+**与提议的差异（五处）**
+
+1. `smoke-fixture.ts` 比预估的「约 100 行」大（417 行），净行数因此不是 −140 而是 **+12**
+   （五个脚本 1343 → 1355 行，其中四份重复共删 800 行）。多出来的是提议自己要求的东西：走写入器
+   的 upsert 必须带「定义没变就不写」的幂等比对（这段原本只在 `smoke-parallel` 有，占约 150 行），
+   外加共用的产物断言与三条纪律的注释。重复是真的没了：四份 `upsertObjectType` → 一份、两份
+   `upsertAction` → 一份、四份轮询打印 → 两份，`smoke-parallel` 自己从 375 行缩到 178 行。
+2. **多抽了三个共用件**：`requireCredential()` / `requireModel()`（四个脚本各写一遍的凭据与模型行
+   检查）与 `assertDeclaredArtifacts(runId)`。后者是「声明的产物存在」这条断言的落点：路径从
+   `run_nodes.outputs` 读而不是自己拼——回边重入的第 N 轮产物在 `rounds/N/` 下，拼路径必然拼错
+   （图冒烟的裁决书实测就在 `workspace/rounds/2/verdict.md`）。它按**节点 id** 建键：`run_nodes.label`
+   对 Action 节点存的是 Action 名而不是画布标签，第一版拿标签当键，付费跑第一次就红了。
+3. **`printNodes` 拆成 `printNodes` + `printEvents`**：提议把「轮询 + 打印节点 + 统计事件」当一段，
+   但让一个叫 printNodes 的函数顺手打事件是名不副实，拆成两个各自一行调用。
+4. **`smoke-harness` 不引 `smoke-fixture`**，断言就地写（四行）。夹具模块 import `../src/db`，
+   而 harness 冒烟刻意不碰数据库——它验的就是「子进程这一层自己能不能立起来」，为省四行给它接上
+   数据库是倒退。它的收束断言放在 `finally` **之外**：在 finally 里抛会顶掉 try 里真正的首个错误。
+5. **`smoke-graph` 补了提议点名却没人做的那条断言**：「真模型真的报出了『打回』这个出口名」。
+   现在断言裁决走过 `打回` 与 `通过` 两个出口、起草被推到第 2 轮。断言宽度按「风险」段收着写：
+   只钉终态 success、声明的产物存在、关键子串（`# 你好`、`青山不改`、`【冒烟印章】`）与出口名，
+   不钉字数、行数、模型措辞；`smoke-harness` 原提议里的「三行」没有断言。
+   顺带把 `smoke-capabilities` 的 Skill / Tool 也改走写入器（`createSkill` / `writeTool` 同族，
+   写入器自己会物化技能投影），与 Codex 复审要求的「不推广直插捷径」同一条理由。
+
+**验收实际跑了什么**
+
+免费：`npm run check`（vitest 46 文件 389 通过 1 跳过）、`npm run build`，均绿。
+
+付费（本条改的就是付费门，必须真跑；工作树自建 `data/`，八次运行合计 **CNY 0.3638**，
+另有三次 harness 子进程冒烟不入库、量级 0.01 以下）：
+
+| 命令 | 退出码 | 终态与关键核对 |
+|---|---|---|
+| `npx tsx scripts/smoke-harness.ts` | **0** | 结构化输出 `{captured:true,{artifact,line_count}}`、产物含 `# 你好`、`code=0 expected=true` |
+| `npx tsx scripts/smoke-engine.ts` | **0** | 终态 success；4 份产物逐一核在盘上；事件 18 条 |
+| 人为失败①：`smoke-harness` 的提示词改成写 `# 再见`（断言不动） | **1** | `Error: 产物 hello.md 里没有要求的首行「# 你好」` |
+| 人为失败②：`smoke-engine` 起草的产物路径改成工作区里必然已存在的目录 `inputs` | **1** | 终态 **failed**（`声明的产物没有写出来：inputs`）→ `Error: 运行终态是 failed…，冒烟要求 success`。**这就是本记录的验收关键点**：改前同一情形打印 `终态：failed` 后照样退出 0 |
+| `npx tsx scripts/smoke-graph.ts` | **0** | 终态 success；`裁决走过的出口：打回 → 通过；起草共 2 轮`；裁决书落在 `rounds/2/verdict.md` |
+| `npx tsx scripts/smoke-capabilities.ts` | **0** | 六项全过：技能 symlink、Tool 包装插件、口令 `青山不改`、印章 `【冒烟印章】`、可见工具里**没有** bash、有 `smoke_stamp` |
+| `npx tsx scripts/smoke-parallel.ts 2` | **0** | 2 个运行全 success，用量与标记互不串号，启动/收束区间完整重叠 |
+
+两次人为失败验完即还原（`rg` 复核脚本里没有残留）。中途还有一次真实的红：`smoke-graph` 第一版
+把产物键写成标签，退出码 1、报「裁决书没有落盘」——正是这套断言该有的行为，改成按节点 id 建键后
+重跑退出 0。
+
+e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。

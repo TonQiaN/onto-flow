@@ -10,7 +10,7 @@
 - [ ] 关掉一条 lint 规则只在 `.oxlintrc.json` 里带理由地关，行内 `oxlint-disable-next-line` 必须带 `-- 理由`；没有整文件关闭（Checks / ADR-0019）
 - [ ] diff 触及 `src/app/`、`next.config.ts` 或 `tsconfig.json` → 写明跑过 `npm run build`；`build` 抓得到 `typecheck` 抓不到的路由与配置破损（Checks）
 - [ ] 用户可见的改动 → 跑了**对应的那一个** e2e spec 并写明是哪个，不是「跑了全套」也不是没跑（Checks）
-- [ ] 触及 harness 接缝（会话、事件、用量、取消、组合）→ 写明是否跑了付费冒烟（`smoke-harness` / `smoke-engine`）与结论；没跑要说为什么可以不跑（The harness seam）
+- [ ] 触及 harness 接缝（会话、事件、用量、取消、组合）→ 写明是否跑了付费冒烟（`smoke-harness` / `smoke-engine`）与退出码；冒烟失败即非零退出，退出码就是结论；没跑要说为什么可以不跑（The harness seam）
 - [ ] 新增原生或 server-only 依赖 → `next.config.ts` 的 `serverExternalPackages` 有它；Turbopack `root` 钉住没动（Checks）
 - [ ] `@deepseek-ai/*` 版本精确钉死，没有 `^` / `~`；不是 `latest`；`@deepseek-ai/dsh-*` 直接与传递依赖同时在 `overrides` 里同版（Pin `@deepseek-ai` versions exactly）
 
