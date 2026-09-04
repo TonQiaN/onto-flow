@@ -360,10 +360,10 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
   // 反引号也要收：`await import(\`../../server/x\`)` 是合法的无插值模板串说明符（Codex 对 #50 的
   // 十二轮复审）。静态 import 的说明符按语法只能是引号串，所以上面两条不用管反引号。
   const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["'`]([^"'`]+)["'`]/g;
-  // TS 的 import 赋值：`import type Server = require("../server/x")`——既没有 from 也没有 import(，
-  // 类型形式还会被擦掉，typecheck 不报（Codex 对 #50 的十八轮复审）
-  const IMPORT_EQUALS_RE =
-    /^[ \t]*(?:export\s+)?import\s+(?:type\s+)?[A-Za-z_$][\w$]*\s*=\s*require\s*\(\s*["'`]([^"'`]+)["'`]/gm;
+  // 所有 `require("…")`：既盖 TS 的 import 赋值（`import type Server = require("../server/x")`，
+  // 既没有 from 也没有 import(，类型形式还会被擦掉），也盖普通表达式
+  // （`const types = require("@/server/monitor/types")`）（Codex 对 #50 的十八、二十一两轮复审）。
+  const REQUIRE_RE = /\brequire\s*\(\s*["'`]([^"'`]+)["'`]/g;
 
   it('含 "use client" 的文件与 src/app、src/components 下的共享模块不从 @/server 或 @/db 导入任何东西（含 import type）', () => {
     expect(clientFiles.length).toBeGreaterThan(0);
@@ -383,8 +383,8 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
       for (const match of content.matchAll(DYNAMIC_IMPORT_RE)) {
         if (crossesBoundary(match[1], file)) out.push(`动态导入 ${match[1]}`);
       }
-      for (const match of content.matchAll(IMPORT_EQUALS_RE)) {
-        if (crossesBoundary(match[1], file)) out.push(`import 赋值 ${match[1]}`);
+      for (const match of content.matchAll(REQUIRE_RE)) {
+        if (crossesBoundary(match[1], file)) out.push(`require 引入 ${match[1]}`);
       }
       return out;
     });

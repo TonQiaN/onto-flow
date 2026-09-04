@@ -384,7 +384,20 @@ restore 那条没被完全盖住，那它就该留在人工位上，只是范围
 | `src/lib/` 下 900 字节注释之后才 `"use client"`，再 `import type … from "@/server/…"` | 红 | 红「import type 来自 @/server/monitor/types」 |
 | 原样 | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，二十轮改写对现有 route 与现有
+第二十一轮：普通表达式 `const types = require("@/server/monitor/types")` 也能把服务端模块带进
+客户端包，而第十八轮那条正则只认 `import X = require(…)`。把它换成通用的 `require("…")` 扫描，
+两种一起盖。
+
+八十二种写法反向验证过。除前面七十八种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `const types = require("@/server/monitor/types");` | 红 | 红「require 引入 @/server/monitor/types」 |
+| `import type Server = require("../../server/monitor/cleanup");`（回归） | 红 | 红 |
+| `const ok = require("./lib");` | 绿 | 绿 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，二十一轮改写对现有 route 与现有
 客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
