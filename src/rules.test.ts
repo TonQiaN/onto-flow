@@ -837,8 +837,12 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     return out;
   }
 
-  /** 块引用与列表项的容器前缀：`>` 与列表标记的任意组合，缩进不设上限。 */
-  const CONTAINER_PREFIX = String.raw`[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*`;
+  /**
+   * 块引用与列表项的容器前缀：`>` 与列表标记的任意组合，缩进不设上限。列表标记后面必须有空白
+   * （或就是行尾的空项）才算标记——`-\`\`\`markdown` 按 CommonMark 是普通段落文字，剥掉那个
+   * `-` 会把它当成开栏，之后的真链接被静默抹掉；`>` 则不要求后随空白。
+   */
+  const CONTAINER_PREFIX = String.raw`[ \t]*(?:>[ \t]*|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|(?=$)))*`;
   const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}`);
 
   /** 制表符按 CommonMark 的 4 列停位展开；展开之后列宽就等于字符数，缩进判定不必再分两套。 */
