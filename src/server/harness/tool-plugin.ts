@@ -25,10 +25,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { tools } from "@/db";
+import { TOOL_PUBLIC_NAME_PATTERN } from "@/lib/tool-names";
 import { DATA_DIR } from "@/server/fs-safety";
 import { assertSafeId } from "./ids";
 import {
-  TOOL_PUBLIC_NAME_PATTERN,
   TOOL_RUN_DEFAULT_TIMEOUT_MS,
   TOOL_RUN_MAX_TIMEOUT_MS,
   type ToolContract,

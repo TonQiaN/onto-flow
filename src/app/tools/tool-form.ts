@@ -1,69 +1,13 @@
 /**
  * Tool 编辑器的纯函数：把表单文本解析成契约字段，并在客户端先做一遍写入口
  * （src/server/writers/tool.ts、harness/tool-schema.ts）的形状校验，让作者在编辑器里
- * 看到问题而不是在保存被 400 打回时。这里只镜像了形状规则（对象根、type 数组、公名、超时、
- * 保留名、@deepseek-ai 引用）；上游 assertObjectJsonSchema 的完整子集断言只在写入口跑，
- * 所以门禁仍在服务端。公名正则与保留名清单与 src/server/harness/tool-contract.ts 是同一份
- * ——客户端不能从 @/server 导入运行时值，tool-form.test.ts 钉住两边一致。
+ * 看到问题而不是在保存被 400 打回时。公名规则、execute 模块检查与对象根 schema 的形状半边
+ * 都从 `@/lib/` 取，与写入口同一份实现，不再两处各抄一遍；上游 assertObjectJsonSchema 的
+ * 完整子集断言只在写入口跑（@deepseek-ai 只准在 harness/ 导入），所以门禁仍在服务端。
  */
-
-export const TOOL_PUBLIC_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
-
-/** 与 tool-contract.ts 的 TOOL_RESERVED_PUBLIC_NAMES 同一份：上游内建工具名与会话数据面工具名 */
-export const TOOL_RESERVED_PUBLIC_NAMES: ReadonlySet<string> = new Set([
-  "bash",
-  "edit",
-  "read",
-  "read_image",
-  "write",
-  "glob",
-  "grep",
-  "skill",
-  "str_replace_editor",
-  "todo_write",
-  "web_search",
-  "web_fetch",
-  "run_code",
-  "structured_output",
-]);
-
-/** 与 tool-contract.ts 的 TOOL_RESERVED_PUBLIC_NAME_PREFIX 同一份：MCP 工具的公名空间 */
-export const TOOL_RESERVED_PUBLIC_NAME_PREFIX = "mcp__";
+import { objectSchemaShapeProblem } from "@/lib/json-schema-shape";
 
 export type SchemaParse<T> = { ok: true; value: T } | { ok: false; error: string };
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** 深度遍历，找到第一处 type 数组；返回它的 JSON 路径，没有则返回 null。 */
-function findTypeArray(node: unknown, path: string): string | null {
-  if (Array.isArray(node)) {
-    for (const [index, item] of node.entries()) {
-      const found = findTypeArray(item, `${path}[${index}]`);
-      if (found) return found;
-    }
-    return null;
-  }
-  if (!isPlainObject(node)) return null;
-  if (Array.isArray(node.type)) return `${path}.type`;
-  for (const [key, value] of Object.entries(node)) {
-    const found = findTypeArray(value, `${path}.${key}`);
-    if (found) return found;
-  }
-  return null;
-}
-
-/** 对象根 schema：本身是对象、type 恒为 "object"、任何层级不出现 type 数组。 */
-export function objectSchemaProblem(value: unknown, label: string): string | null {
-  if (!isPlainObject(value)) return `${label} 必须是 JSON 对象`;
-  if (value.type !== "object") return `${label} 必须是对象根 schema（type 为 "object"）`;
-  const typeArray = findTypeArray(value, label);
-  if (typeArray) {
-    return `${typeArray} 不能是数组：上游 JSON Schema 子集不支持 type 数组，可空字段请省略而不是标成 null`;
-  }
-  return null;
-}
 
 /** 参数 schema 文本框：必填，须是对象根 schema */
 export function parseObjectSchemaText(
@@ -76,7 +20,7 @@ export function parseObjectSchemaText(
   } catch {
     return { ok: false, error: `${label} 不是合法的 JSON` };
   }
-  const problem = objectSchemaProblem(parsed, label);
+  const problem = objectSchemaShapeProblem(parsed, label);
   if (problem) return { ok: false, error: problem };
   return { ok: true, value: parsed as Record<string, unknown> };
 }
@@ -97,24 +41,6 @@ export function parseTimeoutText(text: string): SchemaParse<number | null> {
   if (!/^\d+$/.test(trimmed) || Number(trimmed) <= 0 || !Number.isSafeInteger(Number(trimmed)))
     return { ok: false, error: "timeoutMs 必须是正整数（毫秒）" };
   return { ok: true, value: Number(trimmed) };
-}
-
-export function publicNameProblem(publicName: string): string | null {
-  if (!TOOL_PUBLIC_NAME_PATTERN.test(publicName))
-    return `模型可见的工具名「${publicName}」非法：小写字母开头，只含小写字母、数字与下划线，最长 64 位`;
-  if (TOOL_RESERVED_PUBLIC_NAMES.has(publicName))
-    return `模型可见的工具名「${publicName}」是上游内建工具或会话数据面工具的名字，契约 Tool 不能占用`;
-  if (publicName.startsWith(TOOL_RESERVED_PUBLIC_NAME_PREFIX))
-    return `模型可见的工具名「${publicName}」用了 MCP 工具的前缀 ${TOOL_RESERVED_PUBLIC_NAME_PREFIX}，契约 Tool 不能占用`;
-  return null;
-}
-
-/** execute 模块：非空，且不得引用上游闭包（那是又在写裸插件） */
-export function toolCodeProblem(code: string): string | null {
-  if (code.trim() === "") return "execute 模块源码不能为空";
-  if (code.includes("@deepseek-ai/"))
-    return "execute 模块不能引用 @deepseek-ai/*：Tool 只经 ctx 拿能力，上游 API 由平台包装承接（ADR-0017）";
-  return null;
 }
 
 export function formatSchema(value: Record<string, unknown> | null): string {
