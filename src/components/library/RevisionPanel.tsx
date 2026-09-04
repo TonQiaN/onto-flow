@@ -426,20 +426,20 @@ export function RevisionPanel({
     }
   };
 
-  const patch = async (revId: string, body: { pinned?: boolean; note?: string }) => {
+  const patchNote = async (revId: string, note: string) => {
     setBusyId(revId);
     setError(null);
     try {
       const res = await fetch(`/api/revisions/${encodeURIComponent(revId)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ note }),
       });
       if (!res.ok) {
         setError(await readError(res));
         return;
       }
-      setRevisions((prev) => (prev ?? []).map((r) => (r.id === revId ? { ...r, ...body } : r)));
+      setRevisions((prev) => (prev ?? []).map((r) => (r.id === revId ? { ...r, note } : r)));
     } catch {
       setError("网络错误，修订未更新");
     } finally {
@@ -519,24 +519,11 @@ export function RevisionPanel({
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs text-zinc-500">{isOpen ? "▾" : "▸"}</span>
                       <span className="text-sm font-medium text-zinc-900">v{rev.versionNo}</span>
-                      {rev.pinned && (
-                        <span className="rounded border border-amber-200 bg-amber-50 px-1 text-[10px] text-amber-700">
-                          已固定
-                        </span>
-                      )}
                       <span className="text-xs text-zinc-400">{formatTime(rev.createdAt)}</span>
                     </div>
                     <p className="mt-0.5 pl-5 text-xs text-zinc-500">{rev.note || "（无备注）"}</p>
                   </button>
                   <div className="flex shrink-0 gap-2">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void patch(rev.id, { pinned: !rev.pinned })}
-                      className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-700 hover:bg-zinc-50 disabled:opacity-50"
-                    >
-                      {rev.pinned ? "取消固定" : "固定"}
-                    </button>
                     <button
                       type="button"
                       disabled={busy}
@@ -572,7 +559,7 @@ export function RevisionPanel({
                       type="button"
                       disabled={busy}
                       onClick={() =>
-                        void patch(rev.id, { note: noteDraft }).then(() => setNoteEditId(null))
+                        void patchNote(rev.id, noteDraft).then(() => setNoteEditId(null))
                       }
                       className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs text-white hover:bg-zinc-700 disabled:opacity-50"
                     >

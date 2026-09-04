@@ -48,13 +48,3 @@ export function StatusBadge({ status }: { status: string }) {
     </span>
   );
 }
-
-/** 时间线节点圆点配色 */
-export const STATUS_DOT: Record<string, string> = {
-  running: "animate-pulse bg-blue-500",
-  success: "bg-emerald-500",
-  failed: "bg-red-500",
-  cancelled: "bg-zinc-400",
-  pending: "bg-zinc-300",
-  skipped: "bg-amber-400",
-};

@@ -17,7 +17,7 @@ export async function GET(_request: Request, { params }: Params) {
   });
 }
 
-/** PATCH /api/revisions/[revId]  body: { pinned?, note? } */
+/** PATCH /api/revisions/[revId]  body: { note? } */
 export async function PATCH(request: Request, { params }: Params) {
   return handle(async () => {
     const { revId } = await params;
@@ -25,11 +25,6 @@ export async function PATCH(request: Request, { params }: Params) {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw))
       return jsonError(400, "请求体必须是 JSON 对象");
     const body = raw as Record<string, unknown>;
-    return respond(
-      patchRevision(revId, {
-        pinned: body.pinned,
-        note: body.note,
-      }),
-    );
+    return respond(patchRevision(revId, { note: body.note }));
   });
 }

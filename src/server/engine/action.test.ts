@@ -304,7 +304,9 @@ describe("Action 执行时边界", () => {
     await expect(runActionNode(admitted)).resolves.toMatchObject({ selectedExit: null });
     expect(renderedPrompt).toContain("写报告");
     expect(renderedPrompt).not.toContain("网页改写后的任务");
-    const row = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
+    const row = sqlite.prepare("select snapshot from run_node_rounds").get() as {
+      snapshot: string;
+    };
     expect(JSON.parse(row.snapshot)).toMatchObject({
       prompt: "写报告",
       ports: { outputs: [{ artifactPath: "result.md" }] },
@@ -340,7 +342,9 @@ describe("Action 执行时边界", () => {
       }),
     );
 
-    const row = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
+    const row = sqlite.prepare("select snapshot from run_node_rounds").get() as {
+      snapshot: string;
+    };
     expect(JSON.parse(row.snapshot)).toMatchObject({
       skills: [
         {
@@ -390,7 +394,9 @@ describe("Action 执行时边界", () => {
     expect(renderedPrompt.startsWith(`/${first.slug}\n/${second.slug}\n\n写报告`)).toBe(true);
     // 每个手势独占一行，满足上游 (^|\s)/name(?=\s|$) 的扫描。
     expect(renderedPrompt).toMatch(new RegExp(`(^|\\n)/${first.slug}(\\n|$)`));
-    const snapshot = sqlite.prepare("select snapshot from run_nodes").get() as { snapshot: string };
+    const snapshot = sqlite.prepare("select snapshot from run_node_rounds").get() as {
+      snapshot: string;
+    };
     expect(JSON.parse(snapshot.snapshot).renderedPrompt).toBe(renderedPrompt);
 
     sqlite.exec(

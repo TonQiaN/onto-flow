@@ -111,12 +111,11 @@ function cleanWorkspaces(cutoff: number, beforeDays: number, dryRun: boolean): C
 // ---------------- events ----------------
 
 /**
- * 删 N 天前的 run_events 行（进行中的运行不动），并把够龄运行的轮次行与节点行上三个重载荷列
+ * 删 N 天前的 run_events 行（进行中的运行不动），并把够龄运行的轮次行上三个重载荷列
  *（inputs / outputs / snapshot）置空。
  *
  * 行本身不删：轮次行的骨架（轮次、会话、起止、终态、出口、错误）每行几十字节，是事件清理后
- * 回放退化到轮次级仍要保留的依据；能省下空间的是那三列（ADR-0018）。`run_nodes` 上的同名三列
- * 是最新一轮的副本，不一起清就仍会整行经 `/api/runs/[id]` 返回，等于没清。
+ * 回放退化到轮次级仍要保留的依据；能省下空间的是那三列（ADR-0018）。
  *
  * **置空的资格按运行算**（已终态且 `finished_at` 早于截止），不是按「该运行有够龄事件行」算：
  * 免费的输入→输出运行没有任何 `run_events` 行，首个事件之前就失败的 Action 也没有，
@@ -160,25 +159,12 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
       where d.run_id in (${eligibleRuns})
         and (d.inputs is not null or d.outputs is not null or d.snapshot is not null)
     `);
-  // run_nodes 的三列是最新一轮的副本，同一资格下一起清；同样只数还带着载荷的行。
-  const nodeStat = db.get<{ count: number; bytes: number }>(sql`
-      select count(*) as count,
-        coalesce(sum(
-          length(cast(coalesce(n.inputs, '') as blob))
-          + length(cast(coalesce(n.outputs, '') as blob))
-          + length(cast(coalesce(n.snapshot, '') as blob))
-        ), 0) as bytes
-      from run_nodes n
-      where n.run_id in (${eligibleRuns})
-        and (n.inputs is not null or n.outputs is not null or n.snapshot is not null)
-    `);
   const count = stat?.count ?? 0;
   const rounds = roundStat?.count ?? 0;
-  const nodes = nodeStat?.count ?? 0;
-  const bytes = (stat?.bytes ?? 0) + (roundStat?.bytes ?? 0) + (nodeStat?.bytes ?? 0);
+  const bytes = (stat?.bytes ?? 0) + (roundStat?.bytes ?? 0);
 
   let vacuumNote = "";
-  if (!dryRun && count + rounds + nodes > 0) {
+  if (!dryRun && count + rounds > 0) {
     db.run(sql`
       delete from run_events where id in (
         select e.id
@@ -193,11 +179,6 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
       where run_id in (${eligibleRuns})
         and (inputs is not null or outputs is not null or snapshot is not null)
     `);
-    db.run(sql`
-      update run_nodes set inputs = null, outputs = null, snapshot = null
-      where run_id in (${eligibleRuns})
-        and (inputs is not null or outputs is not null or snapshot is not null)
-    `);
     try {
       db.run(sql`vacuum`);
       vacuumNote = "；已 VACUUM 回收文件空间";
@@ -207,8 +188,8 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
   }
 
   const detail =
-    `${beforeDays} 天前的事件明细 ${count} 条，另清空 ${rounds} 行轮次、${nodes} 个节点的` +
-    `输入输出与快照（合计约 ${formatBytes(bytes)}）；运行、节点与轮次骨架保留，` +
+    `${beforeDays} 天前的事件明细 ${count} 条，另清空 ${rounds} 行轮次的输入输出与快照` +
+    `（合计约 ${formatBytes(bytes)}）；运行、节点与轮次骨架保留，` +
     `只是不再能回看逐条日志与那几轮的输入输出${vacuumNote}`;
 
   return { target: "events", affected: { count, bytes }, deleted: !dryRun, detail };

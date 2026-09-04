@@ -67,6 +67,7 @@ import {
   type WorkflowRow,
 } from "../src/server/writers/workflow";
 import { EMPTY_WORKFLOW_SETTINGS } from "../src/lib/workflow-settings";
+import { readLatestSuccessfulOutputs } from "../src/server/run-rounds";
 import { totalUsageTokens } from "./token-total";
 
 export type ModelRow = typeof models.$inferSelect;
@@ -490,21 +491,23 @@ export function printNodes(runId: string): void {
       `  ${n.label.padEnd(8)} ${n.status.padEnd(8)} tokens=${totalUsageTokens(n)} 思考=${n.reasoningTokens}` +
         `${n.error ? ` 错误=${n.error}` : ""}`,
     );
-    if (n.outputs) console.log(`         产物 ${JSON.stringify(n.outputs)}`);
+    // 产物只在轮次行上；打印最后一轮成功的那份（run_nodes 已不留副本）。
+    const outputs = readLatestSuccessfulOutputs(runId, n.nodeId);
+    if (outputs) console.log(`         产物 ${JSON.stringify(outputs)}`);
   }
 }
 
 /**
  * 逐项核对本次运行的产物，返回「节点 id·端口名 → 绝对路径」供后续查内容。
  *
- * `required` 是本冒烟**必须**拿到的键，一个都不能少：只扫 `run_nodes.outputs` 里已有的项
- * 是不够的——回归让某个 Action 的输出压根没落进 outputs 时，扫描会静静跳过它，而输入节点
- * 物化出来的那份文件已经让「至少有产物」成立（Codex 对本 PR 的三轮复审）。分支 Action 只
- * 点名本次该走的那个出口的端口：另一个出口的产物本来就不该存在。
+ * `required` 是本冒烟**必须**拿到的键，一个都不能少：只扫已有的产物项是不够的——回归让某个
+ * Action 的输出压根没落进轮次行时，扫描会静静跳过它，而输入节点物化出来的那份文件已经让
+ *「至少有产物」成立（Codex 对本 PR 的三轮复审）。分支 Action 只点名本次该走的那个出口的端口：
+ * 另一个出口的产物本来就不该存在。
  *
  * 键用节点 id 而不是标签：`run_nodes.label` 对 Action 节点存的是 Action 名而不是画布标签，
  * 拿标签当键的断言实测会漏（本记录的落地段）。引擎自己也做一次落盘检查
- * （`collectArtifacts`），冒烟再独立看一眼盘：`run_nodes.outputs` 记的是本轮真实生效的路径
+ * （`collectArtifacts`），冒烟再独立看一眼盘：轮次行的 `outputs` 记的是那一轮真实生效的路径
  *（重入的第 N 轮带 `rounds/` 前缀），所以路径从它读，不要自己拼。
  */
 export function assertDeclaredArtifacts(
@@ -513,7 +516,9 @@ export function assertDeclaredArtifacts(
 ): Map<string, string> {
   const found = new Map<string, string>();
   for (const node of db.select().from(runNodes).where(eq(runNodes.runId, runId)).all()) {
-    for (const [portName, value] of Object.entries(node.outputs ?? {})) {
+    for (const [portName, value] of Object.entries(
+      readLatestSuccessfulOutputs(runId, node.nodeId) ?? {},
+    )) {
       const file = (value as { kind?: string; file?: { path?: string } } | null)?.file;
       if ((value as { kind?: string } | null)?.kind !== "file" || !file?.path) continue;
       const abs = path.join(DATA_DIR, file.path);

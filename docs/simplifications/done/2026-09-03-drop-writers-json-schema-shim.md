@@ -36,7 +36,7 @@ compatibility layers」，为「调用方不变」而留的转出层正是这一
 - `AGENTS.md:169` 的「in `src/server/writers/json-schema.ts`」改成 `src/server/harness/tool-schema.ts`，
   保留它旁边那句「(mirrored client-side in `src/app/tools/tool-form.ts`)」。
 - `rg -n "json-schema" .github/REVIEW.md` 若有命中同改。
-- **与 [把纯常量与纯校验搬进 src/lib/](../proposed/2026-09-03-share-pure-validators-in-lib.md) 的关系**：那份提议把
+- **与 [把纯常量与纯校验搬进 src/lib/](2026-09-03-share-pure-validators-in-lib.md) 的关系**：那份提议把
   `objectSchemaProblem` 的**形状半边**搬进 `src/lib/json-schema-shape.ts`，由 `harness/tool-schema.ts`
   调它再加上游 `assertObjectJsonSchema`。两份都落地时，本条的 import 终点是
   `@/server/harness/tool-schema`（writer 侧仍要上游断言那半边），`AGENTS.md:169` 的点名一次改到位；
@@ -75,7 +75,7 @@ PR [#39](https://github.com/TonQiaN/onto-flow/pull/39)。
 objectSchemaProblem" src/rules.test.ts` 也无命中——这条约定没有机械断言，本来就只靠 AGENTS.md 那句话，
 而那句话在订正前是错的。
 
-与 [把纯常量与纯校验搬进 src/lib/](../proposed/2026-09-03-share-pure-validators-in-lib.md) 的先后：落地时那份还在
+与 [把纯常量与纯校验搬进 src/lib/](2026-09-03-share-pure-validators-in-lib.md) 的先后：落地时那份还在
 `proposed/`（`src/lib/json-schema-shape.ts` 尚不存在），所以本条的 import 终点就是提议里写的
 `@/server/harness/tool-schema`；那份将来落地时只改 `tool-schema.ts` 内部，本条的终点不用再动。
 两份记录的互链按目录写全（本文写 `../proposed/…`，那份写 `../done/…`）；那份记录移进 `done/` 时，
