@@ -110,6 +110,8 @@ describe("简历评分种子的实际接线", () => {
   });
 
   it("边集合与受理时要求的固定编排完全一致：少一条结论边或多一条合法边都红", () => {
+    // 期望集合按 roles 里的节点 id 展开，所以先钉住评委确实是六位，否则少一位时两边一起缩水。
+    expect(seedGraph.roles.critics).toHaveLength(RESUME_MATCH_CRITIC_ACTION_NAMES.length);
     const actual = resumeMatchEdgeKeys(
       seedGraph.edges.map(
         (edge) => [edge.sourceNodeId, edge.sourcePort, edge.targetNodeId, edge.targetPort] as const,
@@ -122,12 +124,15 @@ describe("简历评分种子的实际接线", () => {
     const expected = resumeMatchExpectedPorts(TYPES);
     expect(portKeys(seedPorts.parse.inputs)).toEqual(expectedPortKeys(expected.parse.inputs));
     expect(portKeys(seedPorts.parse.outputs)).toEqual(expectedPortKeys(expected.parse.outputs));
-    seedPorts.critics.forEach((critic, index) => {
+    // 先比条数再逐位比：只遍历种子返回的那几位，少一位评委这条断言反而会绿。
+    expect(seedPorts.critics).toHaveLength(expected.critics.length);
+    expected.critics.forEach((expectedCritic, index) => {
+      const critic = seedPorts.critics[index];
       expect(portKeys(critic.inputs), RESUME_MATCH_CRITIC_ACTION_NAMES[index]).toEqual(
-        expectedPortKeys(expected.critics[index].inputs),
+        expectedPortKeys(expectedCritic.inputs),
       );
       expect(portKeys(critic.outputs), RESUME_MATCH_CRITIC_ACTION_NAMES[index]).toEqual(
-        expectedPortKeys(expected.critics[index].outputs),
+        expectedPortKeys(expectedCritic.outputs),
       );
     });
     expect(portKeys(seedPorts.report.inputs)).toEqual(expectedPortKeys(expected.report.inputs));
