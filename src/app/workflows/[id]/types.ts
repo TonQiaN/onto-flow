@@ -71,8 +71,6 @@ export interface WorkflowSets {
   toolIds: string[];
 }
 
-/** 五个可按工作流切换的插件开关的界面文案；键顺序与 COMPOSITION_TOGGLE_KEYS 一致 */
-
 /** 三态开关的选项值：继承全局 / 强制开 / 强制关 */
 export type ToggleChoice = "inherit" | "on" | "off";
 
@@ -160,13 +158,6 @@ export function actionNamesByEntity(
     }
   }
   return result;
-}
-
-/** Action 端口签名：「输入们 → 输出们」 */
-export function portSignature(action: ActionDto): string {
-  const ins = actionPorts(action, "input").map((p) => p.name);
-  const outs = actionPorts(action, "output").map((p) => p.name);
-  return `${ins.join("、") || "无输入"} → ${outs.join("、") || "无输出"}`;
 }
 
 /** 按 position 排序后的某方向端口 */

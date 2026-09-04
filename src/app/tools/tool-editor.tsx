@@ -19,15 +19,14 @@ import {
   RevisionPanel,
   type ToolRow,
 } from "@/components/library";
+import { publicNameProblem, toolCodeProblem } from "@/lib/tool-names";
 import {
   formatSchema,
   parseObjectSchemaText,
   parseOptionalObjectSchemaText,
   parseTimeoutText,
-  publicNameProblem,
   TOOL_EXECUTE_TEMPLATE,
   TOOL_PARAMETERS_TEMPLATE,
-  toolCodeProblem,
 } from "./tool-form";
 
 type TabKey = "basic" | "refs" | "revisions";
