@@ -803,34 +803,38 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   });
 
   /**
-   * `](` 的配对右括号下标，找不到配对时返回 -1。目标里允许成对的圆括号（`](a-(b).md)`）与反斜杠
-   * 转义，用正则截到第一个 `)` 会把这种链接整条丢掉——被丢掉的链接正是坏链接的静默通道。
-   * 上面扫 TS 源码的 `parenClose` 不复用：那个不认转义、括号不配对时抛异常，Markdown 正文里
-   * 出现不配对的括号是常事，抛异常等于让整份记录扫不下去。
+   * 从 `](` 之后读出行内链接的**目标**，读不出就是空串。只解析目标、不去找配对的右括号：
+   * 目标之后可以跟标题（`"…"` / `'…'`），标题里的括号不必配对，一起数深度会把整条链接丢掉；
+   * 而被丢掉的链接正是坏链接的静默通道。目标本身允许成对的圆括号（`](a-(b).md)`）与反斜杠转义，
+   * `<…>` 裹住的则原样取到配对的 `>`（容纳带空格的路径）。
    */
-  function markdownLinkEnd(text: string, open: number): number {
+  function linkDestination(text: string, from: number): string {
+    let i = from;
+    while (/\s/.test(text[i] ?? "")) i += 1;
+    let out = "";
+    if (text[i] === "<") {
+      for (i += 1; i < text.length; i += 1) {
+        const ch = text[i] ?? "";
+        if (ch === "\\") out += text[(i += 1)] ?? "";
+        else if (ch === "\n") return "";
+        else if (ch === ">") return out;
+        else out += ch;
+      }
+      return "";
+    }
     let depth = 0;
-    for (let i = open; i < text.length; i += 1) {
-      const ch = text[i];
-      if (ch === "\\") i += 1;
-      else if (ch === "(") depth += 1;
-      else if (ch === ")") {
-        depth -= 1;
-        if (depth === 0) return i;
+    for (; i < text.length; i += 1) {
+      const ch = text[i] ?? "";
+      if (ch === "\\") out += text[(i += 1)] ?? "";
+      else if (/\s/.test(ch)) break;
+      else if (ch === ")" && depth === 0) break;
+      else {
+        if (ch === "(") depth += 1;
+        else if (ch === ")") depth -= 1;
+        out += ch;
       }
     }
-    return -1;
-  }
-
-  /**
-   * `](…)` 的括号里可能是「目标」也可能是「目标 + 可选标题」，目标还允许用 `<…>` 裹住以容纳空格。
-   * 只取目标：把「带标题的链接」当成不认识的形状跳过，同样是给坏链接留通道。
-   */
-  function linkTarget(inside: string): string {
-    const trimmed = inside.trim();
-    const angled = /^<([^>]*)>/.exec(trimmed);
-    const destination = angled ? (angled[1] ?? "") : (trimmed.split(/\s/)[0] ?? "");
-    return (destination.split("#")[0] ?? "").replaceAll("\\", "");
+    return out;
   }
 
   /**
@@ -844,9 +848,7 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
         const text = read(path.join(dir, name));
         for (let open = text.indexOf("]("); open >= 0; open = text.indexOf("](", open + 2)) {
-          const close = markdownLinkEnd(text, open + 1);
-          if (close < 0) break;
-          const target = linkTarget(text.slice(open + 2, close));
+          const target = linkDestination(text, open + 2).split("#")[0] ?? "";
           if (!target.endsWith(".md")) continue;
           if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue;
           if (!fs.existsSync(path.resolve(dir, target)))
