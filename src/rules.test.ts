@@ -312,9 +312,13 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
    */
   // 客户端代码 = 含 "use client" 的文件 ∪ src/app（api/ 除外）与 src/components 下没有指令的共享模块：
   // 后者被客户端页面 import，同样不能把 @/server 的运行时值带进浏览器包。
+  // 指令按「整行只有这个串」找，不设字节窗口：窗口卡在 600 字节时，前面堆够注释就能把指令挤出扫描
+  // 范围，那个文件整条断言都不再受检（Codex 对 #50 的二十轮复审）。注释已抹成空白，所以前面有多少
+  // 注释都不影响；多认一个文件只会让判定更严，方向是误报不是漏放。
+  const CLIENT_DIRECTIVE_RE = /^[ \t]*["']use client["']\s*;?[ \t]*$/m;
   const clientFiles = sourceFiles.filter((file) => {
     if (isTest(file)) return false;
-    if (/["']use client["']/.test(read(file).slice(0, 600))) return true;
+    if (CLIENT_DIRECTIVE_RE.test(stripCode(read(file)))) return true;
     const r = rel(file);
     return (
       (r.startsWith("src/app/") && !r.startsWith("src/app/api/")) || r.startsWith("src/components/")

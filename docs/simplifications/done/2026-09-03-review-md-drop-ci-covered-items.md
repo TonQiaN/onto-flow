@@ -374,7 +374,17 @@ restore 那条没被完全盖住，那它就该留在人工位上，只是范围
 | `/* c */ import { useState } from "react";` | 绿 | 绿 |
 | 原样 | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十九轮改写对现有 route 与现有
+第二十轮：`"use client"` 的识别卡了个 600 字节窗口，前面堆够注释就能把指令挤出扫描范围，那个文件
+整条断言都不再受检。改成按「整行只有这个指令串」在抹过注释的文本里找，不设窗口。
+
+七十八种写法反向验证过。除前面七十六种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `src/lib/` 下 900 字节注释之后才 `"use client"`，再 `import type … from "@/server/…"` | 红 | 红「import type 来自 @/server/monitor/types」 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，二十轮改写对现有 route 与现有
 客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
