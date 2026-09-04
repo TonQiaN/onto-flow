@@ -868,7 +868,8 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   }
 
   /**
-   * 一份记录里全部链接目标：行内 `[文字](目标)` 与引用式的定义行 `[标签]: 目标`，锚点已切掉。
+   * 一份记录里全部链接目标：行内 `[文字](目标)` 与引用式的定义行 `[标签]: 目标`，查询串
+   * （GitHub 的 `?plain=1` 之类）与锚点都已切掉——不切就不以 `.md` 结尾，整条链接被跳过。
    * 定义的目标允许换到下一行写（CommonMark），只看定义行会取到空目标、把坏链接放过去。
    */
   function recordLinkTargets(raw: string): string[] {
@@ -883,7 +884,7 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       const tail = definition[1] ?? "";
       targets.push(linkDestination(tail.trim() === "" ? (lines[index + 1] ?? "") : tail, 0));
     }
-    return targets.map((target) => target.split("#")[0] ?? "");
+    return targets.map((target) => target.split(/[?#]/)[0] ?? "");
   }
 
   /**
