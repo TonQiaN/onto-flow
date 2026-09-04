@@ -92,7 +92,7 @@ stops obeying it。`AGENTS.md`「Stance: no compatibility layers」覆盖 `undic
 
 ## 落地
 
-PR 待开。
+PR：https://github.com/TonQiaN/onto-flow/pull/46
 
 **与提议的差异（两处）**
 
