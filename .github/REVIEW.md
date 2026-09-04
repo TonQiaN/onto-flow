@@ -66,7 +66,7 @@
 - [ ] 重入仍等环体收束（The workflow graph is not a DAG）：回边满足时只排队（`pendingReentries`），受影响节点里还有在 `running` 表里的就不重置，挂起期间 `pickReady` 也不放它们开跑；重入次数在真正重置时才计；取消与整运行失败让排队中的重入作废。直接在回边满足处重置正在跑的节点 = 串轮 + 运行可能在会话仍在飞时被判结束
 - [ ] 子进程收束失败时运行被隔离（留在 `activeRuns`、保留进程句柄），预览 / 清理 / 删除 / 新运行容量 fail-closed
 - [ ] 看一次运行只有 `/runs/<id>`（ADR-0018）：它只读受理时冻结的 `runs.graph`，不回查 `workflow_nodes` / `workflow_edges`；编辑器没有运行条、并行切换器与 `?runId=` 深链，发起后跳运行页；导航「运行中」面板每一路深链 `/runs/<id>`
-- [ ] 会话事件到达即写 `run_events`（运行页那条 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写；每条新写入的行都带 `session_id`（`events.ts` 的通用落库与 `action.ts` 自插的 `usage` 事件两处都要写）
+- [ ] 会话事件到达即写 `run_events`（运行页那条 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写；每条新写入的行都带 `session_id`（`events.ts` 的通用落库写入，它是 `run_events` 唯一的写入者）
 - [ ] 用量按 chunk 求和、`outputTokens` 已含推理，没有把推理另算一桶；费用在写入时按到达时刻定价，未知模型为 0 而不是猜价
 - [ ] 每运行组合没有 stdout logger（stdout 属于协议）；`dshHome` / `agentsHome` 钉在运行目录内；节点步数上限仍在
 - [ ] 声明的产物必须真在盘上；模型说写了不算证据（ADR-0008）
@@ -102,7 +102,7 @@
 ## 9. 文字、注释与文档（Conventions / Comments and documentation）
 
 - [ ] 用户可见文字、错误信息、代码注释、测试名是中文；标识符是英文
-- [ ] 没有删掉记录「为什么要这么绕」的注释（`longHaulFetch`、每工作区事件泵、`SUM` 汇总、`LIKE` 转义、静默 tick 收流）；新注释说的是行为、失败、时序、归属，不是复述控制流
+- [ ] 没有删掉记录「为什么要这么绕」的注释（`SUM` 汇总、`LIKE` 转义、静默 tick 收流）；新注释说的是行为、失败、时序、归属，不是复述控制流
 - [ ] 新增的 `any` 带注释说明为何无法窄化
 - [ ] 改了 `docs/DESIGN.md` / `docs/DESIGN-V2.md` 所陈述的契约 → 同一 PR 更新那份文档；定了新术语 → `CONTEXT.md` 只放词汇与语义，不放实现
 - [ ] README 与 AGENTS.md 的 Commands 块、引擎 spec 三者要一起改或都不改（README 复述了它们）

@@ -58,7 +58,7 @@ export interface HealthDisk {
   uploads: DiskDirStat & { files: number };
 }
 
-/** 孤儿运行明细：状态仍是 running 但进程内已无事件泵路由 */
+/** 孤儿运行明细：状态仍是 running 但进程内没有它的子进程句柄 */
 export interface OrphanRun {
   id: string;
   workflowName: string;
