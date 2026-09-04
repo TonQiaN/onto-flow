@@ -71,6 +71,39 @@ describe("AGENTS.md · Conventions · handle()", () => {
   const STAR_EXPORT_RE = /^export\s*\*/gm;
   const LEADING_TRIVIA_RE = /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
 
+  /**
+   * 把字符串、模板串与注释里的内容抹成空白再扫：分号、花括号、方法名都可能出现在字面量里
+   * （`export const helper = "x;", POST = …` 就靠字符串里的分号把语句边界骗断，Codex 对 #50 的
+   * 六轮复审）。正则字面量不识别——route 里唯一一个不含引号；真出现引号会让整段被抹白，下面
+   * 「顶层 export 数量不变」那条自检会红，不会悄悄放行。
+   */
+  const stripLiterals = (content: string): string => {
+    let out = "";
+    for (let i = 0; i < content.length; i += 1) {
+      const ch = content[i];
+      if (ch === '"' || ch === "'" || ch === "`") {
+        out += " ";
+        for (i += 1; i < content.length && content[i] !== ch; i += 1) {
+          if (content[i] === "\\") i += 1;
+          out += content[i] === "\n" ? "\n" : " ";
+        }
+        out += " ";
+        continue;
+      }
+      if (ch === "/" && (content[i + 1] === "/" || content[i + 1] === "*")) {
+        const stop =
+          content[i + 1] === "/"
+            ? content.indexOf("\n", i) + 1 || content.length
+            : content.indexOf("*/", i + 2) + 2 || content.length;
+        for (; i < stop; i += 1) out += content[i] === "\n" ? "\n" : " ";
+        i -= 1;
+        continue;
+      }
+      out += ch;
+    }
+    return out;
+  };
+
   /** 本条语句的结尾：括号全配平后的第一个 `;`。多声明符的 `const a = 1, POST = …` 要整条一起看 */
   const statementEnd = (content: string, from: number): number => {
     let depth = 0;
@@ -98,8 +131,14 @@ describe("AGENTS.md · Conventions · handle()", () => {
 
   it("唯一例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));
-    const found = violations(files, (content) => {
+    const found = violations(files, (raw) => {
       const out: string[] = [];
+      const content = stripLiterals(raw);
+      // 自检：抹字面量不该抹掉任何顶层 export（route 里 export 不会写在字面量里）。数量对不上说明
+      // 扫描把一整段当成了字符串，后面的判断都不可信，直接记违规。
+      const topLevelExports = (text: string): number => text.match(/^export\b/gm)?.length ?? 0;
+      if (topLevelExports(content) !== topLevelExports(raw))
+        out.push("抹字面量后顶层 export 数量变了，扫描不可信");
       let methods = 0;
       for (const match of content.matchAll(FUNCTION_METHOD_RE)) {
         methods += 1;
@@ -126,7 +165,8 @@ describe("AGENTS.md · Conventions · handle()", () => {
         }
       if (STAR_EXPORT_RE.test(content)) out.push("route 里有 export *，可能带出方法");
       if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
-      if (!/import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(content))
+      // 这一条要看原文：`"@/lib/http"` 本身就是字符串，抹掉就没了
+      if (!/import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(raw))
         out.push("没有从 @/lib/http 导入 handle");
       return out;
     });

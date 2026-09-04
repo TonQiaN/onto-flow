@@ -134,7 +134,29 @@ first statement is `return handle(` — never a `const`, an alias, or a re-expor
 | `export * from "./elsewhere";` | 红 | 红「route 里有 export *，可能带出方法」 |
 | `export async function POST() { return handle(…) }` | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，五轮改写对现有 route 的判定一次
+第六轮点出字面量：`export const helper = "x;", POST = …` 用字符串里的分号把语句边界骗断。补法是
+扫之前先把字符串、模板串与注释的内容抹成空白（`stripLiterals`），并加一条自检——抹完顶层
+`export` 的条数必须不变，变了说明扫描把一整段当成了字符串，直接记违规而不是继续判断。
+`import { handle } from "@/lib/http"` 那一条仍看原文（它本身就是字符串）。route 里唯一的正则
+字面量不含引号，不受影响。
+
+十种写法反向验证过（临时加进一个 route，跑完随即还原，`git diff` 干净）：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| 体内先 `return new Response(…)` 再 `return handle(…)` | 红 | 红「POST 的方法体第一句不是 return handle(」 |
+| `export const PUT = async () => new Response(…)` | 红 | 红「PUT 写成了 export const / let / var」 |
+| `const post = …; export { post as DELETE };` | 红 | 红「DELETE 走了 export { … } 再导出」 |
+| `const raw = …; export const POST = raw;` | 红 | 红 |
+| `const wrapped = async () => handle(…); export const POST = wrapped;` | 红 | 红（合规实现走 const 也不许） |
+| `export const helper = 1, POST = async () => …`（多声明符） | 红 | 红 |
+| `export const helper = "x;", POST = …`（字符串里的分号） | 红 | 红 |
+| 注释里、模板串里的分号，同上两种 | 红 | 红 |
+| 未闭合引号 | 红 | 红「抹字面量后顶层 export 数量变了，扫描不可信」 |
+| `export * from "./elsewhere";` | 红 | 红「route 里有 export *，可能带出方法」 |
+| `export async function POST() { return handle(…) }`、`export const MAX_X = 1;` | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，六轮改写对现有 route 的判定一次
 都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
