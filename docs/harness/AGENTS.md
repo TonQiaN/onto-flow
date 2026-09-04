@@ -28,7 +28,7 @@
 
 ## package 字符串与家族行
 
-- 测试对每一行做的是**子串原样匹配**：目录里 `package` 字段的字符串必须一字不差地出现在它那组的文档里。写成行内代码即可，但不能改大小写、加空格、拆行、换成中文名。
+- 测试对每一行做的是**整词匹配**（`catalog.test.ts` 的「目录每一行的包名出现在它那组的文档里」用一条 `(?![\w.-])` 收尾的正则，即包名后面不能紧跟 `[\w.-]` 里的字符）：目录里 `package` 字段的字符串必须一字不差地出现在它那组的文档里，且不能靠更长的包名蒙混过关——写了 `@deepseek-ai/dsh-web-search-deepseek` 不算写了 `@deepseek-ai/dsh-web`，后者仍得自己整词出现一次。写成行内代码即可，但不能改大小写、加空格、拆行、换成中文名。
 - 家族行用通配写法（`@deepseek-ai/dsh-client-*`、`@deepseek-ai/dsh-host-*`、`@deepseek-ai/dsh-typert-*`、`@deepseek-ai/dsh-pwsh-*`）或斜杠并列写法（`@deepseek-ai/dsh-subagent-acp / claude-code / codex / dsh-sdk`、`@deepseek-ai/dsh-hooks-* / hook-protocol`、`@deepseek-ai/dsh-*-demo / test-support`）：文档里一节带过，但标题里的字符串必须与目录**完全一致**，包括空格与斜杠。
 - 自有行的 `package` 是仓库内路径或带锚点的路径（`src/server/harness/rpc/server.ts#composeNodeScope`、`<run>/plugins/tool-*.ts`），同样原样出现。
 - 只有决定值得说的行才单独立条；但目录里有的每一行都必须出现在文档里，哪怕只在一句话里带过。
