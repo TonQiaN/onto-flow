@@ -78,7 +78,7 @@ REVIEW.md 与 AGENTS.md 的两处声明必须同一个 commit 改。
 
 ## 落地
 
-PR 待开。
+[PR #50](https://github.com/TonQiaN/onto-flow/pull/50)。
 
 **与提议的差异：** 用户拍板选路 1（撤掉）。撤的 6 条、收窄的 1 条、§0 新增的 1 条都按提议做了；
 另有两处提议没点名、但不改就会自相矛盾的连带：
