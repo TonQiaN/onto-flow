@@ -11,6 +11,7 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { FOLDER_ENTITY_KINDS, db, entityFolders, folders, type FolderEntityKind } from "@/db";
 import { entityExists, listEntities } from "@/server/references";
+import { type WriteResult, writeFail, writeOk } from "@/server/writers/types";
 
 export interface FolderDto {
   id: string;
@@ -24,15 +25,6 @@ export interface FolderRef {
   name: string;
   path: string;
 }
-
-export type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
-
-const ok = <T>(data: T): Result<T> => ({ ok: true, data });
-const fail = (status: number, error: string): Result<never> => ({
-  ok: false,
-  status,
-  error,
-});
 
 export function isFolderEntityKind(v: string): v is FolderEntityKind {
   return (FOLDER_ENTITY_KINDS as readonly string[]).includes(v);
@@ -74,19 +66,19 @@ export function listEntityLeaves(
 }
 
 /** 文件夹名规范化：折叠连续空白、去首尾空白；拒绝空名与含 `/`（层级由 parentId 表达） */
-function normalizeFolderName(raw: unknown): Result<string> {
-  if (typeof raw !== "string") return fail(400, "文件夹名必须是字符串");
+function normalizeFolderName(raw: unknown): WriteResult<string> {
+  if (typeof raw !== "string") return writeFail(400, "文件夹名必须是字符串");
   const collapsed = raw.replace(/\s+/g, " ").trim();
-  if (collapsed === "") return fail(400, "文件夹名不能为空");
-  if (collapsed.includes("/")) return fail(400, "文件夹名不能包含 /（层级请用子文件夹表达）");
-  return ok(collapsed);
+  if (collapsed === "") return writeFail(400, "文件夹名不能为空");
+  if (collapsed.includes("/")) return writeFail(400, "文件夹名不能包含 /（层级请用子文件夹表达）");
+  return writeOk(collapsed);
 }
 
 /** parentId 入参解析：undefined/null = 根层级，其余必须是字符串 */
-function parseParentId(raw: unknown): Result<string | null> {
-  if (raw === undefined || raw === null) return ok(null);
-  if (typeof raw !== "string" || raw === "") return fail(400, "parentId 必须是字符串或 null");
-  return ok(raw);
+function parseParentId(raw: unknown): WriteResult<string | null> {
+  if (raw === undefined || raw === null) return writeOk(null);
+  if (typeof raw !== "string" || raw === "") return writeFail(400, "parentId 必须是字符串或 null");
+  return writeOk(raw);
 }
 
 function folderById(id: string): typeof folders.$inferSelect | undefined {
@@ -111,20 +103,20 @@ function siblingNameTaken(name: string, parentId: string | null, excludeId?: str
 }
 
 /** 创建：校验 parent 存在（parentId 可 null）、同级同名 409 */
-export function createFolder(rawName: unknown, rawParentId: unknown): Result<FolderDto> {
+export function createFolder(rawName: unknown, rawParentId: unknown): WriteResult<FolderDto> {
   const name = normalizeFolderName(rawName);
   if (!name.ok) return name;
   const parentId = parseParentId(rawParentId);
   if (!parentId.ok) return parentId;
-  if (parentId.data !== null && !folderById(parentId.data)) return fail(404, "父文件夹不存在");
+  if (parentId.data !== null && !folderById(parentId.data)) return writeFail(404, "父文件夹不存在");
   if (siblingNameTaken(name.data, parentId.data))
-    return fail(409, `同级已有文件夹「${name.data}」`);
+    return writeFail(409, `同级已有文件夹「${name.data}」`);
   const row = db
     .insert(folders)
     .values({ name: name.data, parentId: parentId.data })
     .returning()
     .get();
-  return ok(toDto(row));
+  return writeOk(toDto(row));
 }
 
 /**
@@ -134,9 +126,9 @@ export function createFolder(rawName: unknown, rawParentId: unknown): Result<Fol
 export function updateFolder(
   id: string,
   patch: { name?: unknown; parentId?: unknown },
-): Result<FolderDto> {
+): WriteResult<FolderDto> {
   const existing = folderById(id);
-  if (!existing) return fail(404, "文件夹不存在");
+  if (!existing) return writeFail(404, "文件夹不存在");
 
   let nextName = existing.name;
   if (patch.name !== undefined) {
@@ -151,14 +143,14 @@ export function updateFolder(
     if (!parentId.ok) return parentId;
     nextParentId = parentId.data;
     if (nextParentId !== null) {
-      if (!folderById(nextParentId)) return fail(404, "目标文件夹不存在");
+      if (!folderById(nextParentId)) return writeFail(404, "目标文件夹不存在");
       if (subtreeIds(id).includes(nextParentId))
-        return fail(400, "不能把文件夹移到自己或自己的子孙下");
+        return writeFail(400, "不能把文件夹移到自己或自己的子孙下");
     }
   }
 
   if (siblingNameTaken(nextName, nextParentId, id))
-    return fail(409, `同级已有文件夹「${nextName}」`);
+    return writeFail(409, `同级已有文件夹「${nextName}」`);
 
   const row = db
     .update(folders)
@@ -166,16 +158,16 @@ export function updateFolder(
     .where(eq(folders.id, id))
     .returning()
     .get();
-  return ok(toDto(row));
+  return writeOk(toDto(row));
 }
 
 /**
  * 删除：事务内把子文件夹 parentId、entity_folders.folderId 全部改成被删文件夹的
  * parentId（父为 null 时实体指派行直接删除＝变未归类），然后删文件夹。实体永不跟随删除。
  */
-export function deleteFolder(id: string): Result<{ ok: true }> {
+export function deleteFolder(id: string): WriteResult<{ ok: true }> {
   const existing = folderById(id);
-  if (!existing) return fail(404, "文件夹不存在");
+  if (!existing) return writeFail(404, "文件夹不存在");
   // 内容上移前先查重：子文件夹将移到被删文件夹的父级，若与该层级现有文件夹重名，
   // 会打破「同级同名由服务层拒绝」的不变量（createFolder/updateFolder 都是 409，
   // 这里保持一致）。excludeId 传本文件夹 id：与被删文件夹自身同名的子文件夹
@@ -187,7 +179,10 @@ export function deleteFolder(id: string): Result<{ ok: true }> {
     .all();
   for (const child of children) {
     if (siblingNameTaken(child.name, existing.parentId, id))
-      return fail(409, `删除后子文件夹「${child.name}」将与目标层级现有文件夹重名，请先重命名`);
+      return writeFail(
+        409,
+        `删除后子文件夹「${child.name}」将与目标层级现有文件夹重名，请先重命名`,
+      );
   }
   db.transaction((tx) => {
     tx.update(folders).set({ parentId: existing.parentId }).where(eq(folders.parentId, id)).run();
@@ -201,7 +196,7 @@ export function deleteFolder(id: string): Result<{ ok: true }> {
     }
     tx.delete(folders).where(eq(folders.id, id)).run();
   });
-  return ok({ ok: true });
+  return writeOk({ ok: true });
 }
 
 /** 单归属指派：folderId 为 null 时删除指派行（变未归类）。整体替换语义（先删后插） */
@@ -209,9 +204,9 @@ export function assignEntityFolder(
   kind: FolderEntityKind,
   entityId: string,
   folderId: string | null,
-): Result<{ ok: true }> {
-  if (!entityExists(kind, entityId)) return fail(404, "实体不存在");
-  if (folderId !== null && !folderById(folderId)) return fail(404, "文件夹不存在");
+): WriteResult<{ ok: true }> {
+  if (!entityExists(kind, entityId)) return writeFail(404, "实体不存在");
+  if (folderId !== null && !folderById(folderId)) return writeFail(404, "文件夹不存在");
   db.transaction((tx) => {
     tx.delete(entityFolders)
       .where(and(eq(entityFolders.entityKind, kind), eq(entityFolders.entityId, entityId)))
@@ -219,7 +214,7 @@ export function assignEntityFolder(
     if (folderId !== null)
       tx.insert(entityFolders).values({ entityKind: kind, entityId, folderId }).run();
   });
-  return ok({ ok: true });
+  return writeOk({ ok: true });
 }
 
 /** 全部文件夹的 id → 行 映射，路径拼接与子树遍历共用 */

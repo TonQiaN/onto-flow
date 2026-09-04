@@ -22,7 +22,7 @@
 
 ## 2. 写路径与数据库（Conventions）
 
-- [ ] 写路径返回结果对象（`WriteResult` + `writeOk` / `writeFail`）；只有引擎 `throw`，由 `runner.ts` 变成 `run_nodes.error`。没有出现第四种 `Result<T>` 副本（`folders.ts` / `revisions.ts` 的两份要向 `WriteResult` 收敛，不再复制）
+- [ ] 写路径返回结果对象（`WriteResult` + `writeOk` / `writeFail`），没有新长出私有副本；成功体就是 `result.data` 的 route 用 `respond()` 而不是手抄三行拆包。只有引擎 `throw`，由 `runner.ts` 变成 `run_nodes.error`
 - [ ] 没有 `await db.…`：better-sqlite3 是同步的，Drizzle 调用以 `.get()` / `.all()` / `.run()` 结尾
 - [ ] 名称冲突交给数据库：writer 没有预查名字，`handle()` 把 `UNIQUE constraint failed` 映射成 409；folders 是唯一例外（根级 parent 为 NULL 无法约束）
 - [ ] 实体体校验在 writer 的 `parse…Payload` 里，route 只窄化自己的非实体参数；仍是手写 `typeof` 窄化，没有引入 schema 库
