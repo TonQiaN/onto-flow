@@ -93,7 +93,7 @@ server 侧的 `SORT_KEYS` / `SortKey` / `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE` �
 
 ## 落地
 
-PR 待开。四组手抄按提议全部收敛到 `src/lib/`：
+PR [#47](https://github.com/TonQiaN/onto-flow/pull/47)。四组手抄按提议全部收敛到 `src/lib/`：
 
 - `src/lib/skill-files.ts`：两个导出上限 + 内部的 `SKILL_FILE_PATH_MAX_LENGTH` + `skillFilePathProblem` +
   `foldSkillPath`。`writers/skill.ts` 与 `app/skills/skill-files.ts` 各自只留自己那半边（前者 base64 /
