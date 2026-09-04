@@ -319,6 +319,8 @@ export function upsertWorkflow(input: WorkflowFixture): WorkflowRow {
     // 按名字找不到就按节点 id 认领：`workflow_nodes.id` 是全表主键，冒烟的节点 id 是固定值，
     // 工作流一旦在网页上被改名，「按名字新建一份」就会拿这些 id 撞主键，冒烟还没花钱就先红。
     // 认领回来之后名字由下面的整体替换改回去（Codex 对本 PR 的十一轮复审）。
+    // 认领的门槛是**整套节点 id 都归它**：只对上一个 id 就改名重写，等于把一张碰巧用了同名
+    // 节点 id 的用户图整个覆盖掉；对不齐就响亮失败，让人自己去解冲突（十二轮复审）。
     const anchor = input.nodes[0];
     const owner = anchor
       ? db
@@ -328,8 +330,25 @@ export function upsertWorkflow(input: WorkflowFixture): WorkflowRow {
           .get()
       : undefined;
     if (owner) {
-      wf = db.select().from(workflows).where(eq(workflows.id, owner.workflowId)).get();
-      if (wf) console.log(`按节点 id 认领了改过名的工作流：「${wf.name}」→「${input.name}」`);
+      const owned = new Set(
+        db
+          .select({ id: workflowNodes.id })
+          .from(workflowNodes)
+          .where(eq(workflowNodes.workflowId, owner.workflowId))
+          .all()
+          .map((row) => row.id),
+      );
+      const candidate = db.select().from(workflows).where(eq(workflows.id, owner.workflowId)).get();
+      const missing = input.nodes.filter((node) => !owned.has(node.id)).map((node) => node.id);
+      if (missing.length > 0) {
+        throw new Error(
+          `节点 id「${anchor?.id}」已属于工作流「${candidate?.name ?? owner.workflowId}」，` +
+            `但那张图缺少本夹具的其余节点（${missing.join("、")}），不是改过名的冒烟工作流；` +
+            `请改掉那张图的节点 id，或换掉本冒烟的固定节点 id 再跑`,
+        );
+      }
+      wf = candidate;
+      if (wf) console.log(`按整套节点 id 认领了改过名的工作流：「${wf.name}」→「${input.name}」`);
     }
   }
   if (!wf) {
