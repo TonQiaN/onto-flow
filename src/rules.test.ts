@@ -850,25 +850,42 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   function outsideFences(text: string): string {
     const kept: string[] = [];
     let opener: string | null = null;
+    let openerIndent = 0;
+    let openerMarkers = "";
     for (const line of text.split("\n")) {
       // 围栏也能嵌在块引用或列表项里（`> ```markdown`），先剥容器前缀再认，否则栏内的
       // 字面示例会被当成真链接报出来
-      const fence = /^(`{3,}|~{3,})(.*)$/.exec(line.replace(CONTAINER_PREFIX_RE, ""));
+      const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? "";
+      const indent = (/^[ \t]*/.exec(line)?.[0] ?? "").length;
+      const markers = prefix.replace(/[ \t]/g, "");
+      const fence = /^(`{3,}|~{3,})(.*)$/.exec(line.slice(prefix.length));
       const run = fence?.[1] ?? "";
       const info = fence?.[2] ?? "";
-      if (opener === null) {
-        // 反引号栏的信息串里不能再有反引号（CommonMark），带反引号的那行根本不是围栏
-        if (fence && !(run.startsWith("`") && info.includes("`"))) {
-          opener = run;
+      if (opener !== null) {
+        // 收栏只认「同字符、不短于开栏、后面没有别的内容」；栏内的 ```not-close 不是收栏，
+        // 把它当收栏会让真正的收栏重新开栏，之后整份记录的链接就被静默抹掉
+        if (fence && run[0] === opener[0] && run.length >= opener.length && info.trim() === "") {
+          opener = null;
           kept.push("");
-        } else kept.push(line);
-        continue;
-      }
-      // 收栏只认「同字符、不短于开栏、后面没有别的内容」；栏内的 ```not-close 不是收栏，
-      // 把它当收栏会让真正的收栏重新开栏，之后整份记录的链接就被静默抹掉
-      if (fence && run[0] === opener[0] && run.length >= opener.length && info.trim() === "")
+          continue;
+        }
+        // 容器结束，没写收栏的栏也跟着结束：块引用退回顶层、列表项换下一条，那一行已经不在
+        // 栏内了。判据是「缩进变浅或容器标记变少」，顶层开的栏（缩进 0、无标记）因此永远不会
+        // 提前出栏。宁可判早：判早只是多扫几行（误报，响的），判晚会静默抹掉真链接。
+        const hasContent = line.slice(prefix.length).trim() !== "";
+        if (!hasContent || (indent >= openerIndent && markers.length >= openerMarkers.length)) {
+          kept.push("");
+          continue;
+        }
         opener = null;
-      kept.push("");
+      }
+      // 反引号栏的信息串里不能再有反引号（CommonMark），带反引号的那行根本不是围栏
+      if (fence && !(run.startsWith("`") && info.includes("`"))) {
+        opener = run;
+        openerIndent = indent;
+        openerMarkers = markers;
+        kept.push("");
+      } else kept.push(line);
     }
     return kept.join("\n");
   }
