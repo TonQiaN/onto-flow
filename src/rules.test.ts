@@ -26,9 +26,13 @@ function walk(dir: string, out: string[] = []): string[] {
 const rel = (file: string): string => path.relative(ROOT, file).split(path.sep).join("/");
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isSource = (file: string): boolean => /\.tsx?$/.test(file);
-/** `/` 前面是这些就当正则字面量的开头，否则当除号（判错只会多抹白，不会漏放） */
+/**
+ * `/` 前面是这些就当正则字面量的开头，否则当除号。关键字列表取「除号的左操作数不可能是它」的那一批，
+ * 宁滥勿缺：多认一个只会把某段多抹白 → 误报（红），少认一个才会让藏在正则里的假代码蒙混过关
+ * （Codex 对 #50 的九、十二、十三轮各点出一种前缀）。
+ */
 const REGEX_START_RE =
-  /(?:^|[=(,:[!&|?{};+\-*%^~<>])\s*$|\b(?:return|typeof|case|in|of|do|else|void|delete|new|yield|await)\s*$/;
+  /(?:^|[=(,:[!&|?{};+\-*%^~<>])\s*$|\b(?:return|throw|typeof|instanceof|in|of|do|else|case|new|delete|void|yield|await|if|while|for|switch|with|as|satisfies)\s*$/;
 
 /**
  * 抹掉注释；`literals` 为真时连字符串 / 模板串的**内容**一起抹成空白（换行与长度都保留）。
