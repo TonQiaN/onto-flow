@@ -1,6 +1,6 @@
 # 简化：删掉 /api/references/counts——引用数已随库列表信封下发
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -45,3 +45,17 @@ $ rg -an 'references/counts|/counts' src/components src/app --glob '!src/app/api
 低。删的是一条零消费者的 GET，`npm run build` 会抓到任何遗漏的路由引用。
 
 预估净删 21 行；风险等级：低。
+
+## 落地
+
+PR 待开。
+
+与提议的差异：无。提议三条全做：删 `src/app/api/references/counts/` 整个目录、删 `docs/DESIGN-V2.md`
+第三节表里那一行、`AGENTS.md` 仓库布局的「36 route handlers」改成 35（改前 `find src/app/api -name
+route.ts | wc -l` = 36，改后 = 35）。`refCounts` / `listEntities` / `isEntityKind` 都还有别的消费者，
+按提议保留：`refCounts` 在 `writers/list.ts:160` 与 `references.ts:276`（`orphans()`），`listEntities`
+在 `folders.ts:69` 与 `references.ts:277`，`isEntityKind` 在另外三条 references / revisions 路由里。
+`src/rules.test.ts` 确认无需改（`rg -n '\b36\b' src/rules.test.ts` 无结果，`force-dynamic` 断言遍历现存
+文件），`.github/REVIEW.md` 无命中。
+
+验收实际跑了什么：见 PR 描述。

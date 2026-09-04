@@ -77,7 +77,6 @@ refCount: number   // 被引用次数，见第三节
 | 路由 | 方法 | 说明 |
 |---|---|---|
 | `/api/references?kind=&id=` | GET | 谁在引用这个实体 |
-| `/api/references/counts?kind=` | GET | `{ [entityId]: number }`，供列表页批量取引用数 |
 | `/api/references/orphans?kind=` | GET | 未被任何人引用的实体清单（系统健康页的孤儿检测复用） |
 | `/api/references/impact` | POST | 改动前的影响预览，见下 |
 

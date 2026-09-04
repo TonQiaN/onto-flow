@@ -12,7 +12,7 @@ OntoFlow is a local workbench: Actions wired into workflow graphs, each run gett
 
 ```
 src/app/          Next 16 App Router: every page and every REST route; no middleware, no auth
-  api/              36 route handlers, each `export const dynamic = "force-dynamic"`
+  api/              35 route handlers, each `export const dynamic = "force-dynamic"`
   workflows/[id]/   xyflow canvas editor; editor.tsx (1.2k lines) is the largest file here. It
                     only edits and launches: a started run goes to /runs/<id> (ADR-0018), the
                     canvas has no run bar, no switcher and no ?runId= deep link;
