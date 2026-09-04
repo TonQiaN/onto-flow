@@ -292,7 +292,24 @@ await if while for switch with as satisfies`），并把取舍写进注释：宁
 | `/* c */ import "@/server/writers";`（restore route） | 绿 | 绿 |
 | 原样 | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十四轮改写对现有 route 与现有
+第十五轮两条改名类的洞：`import { handle as wrapped } from "@/lib/http"` 绑的本地名不是 `handle`
+（route 就能自己声明一个 `handle`，每个方法照样以 `return handle(` 起头却绕开真正的错误包装）；
+`import { sql as rawSql } from "drizzle-orm"` 让按名字扫 `sql\`` 的白名单形同虚设。两条都补成
+机械核对：`handle` 后面只许跟 `,` 或 `}`；新增一条断言「drizzle 的 `sql` 只以 `sql` 这个名字导入，
+没有 `sql as`，也没有 `drizzle-orm` 的命名空间导入」。后者是新断言，按三处同改的规矩，AGENTS.md
+的 raw-SQL 那句同时补上「imported from `drizzle-orm` under that name」与理由。
+
+五十九种写法反向验证过。除前面五十四种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `import { handle as wrapped } …` + 自建 `const handle` | 红 | 红「没有从 @/lib/http 原名导入 handle」 |
+| `import { jsonError, handle } …` | 绿 | 绿 |
+| `import { sql as rawSql } from "drizzle-orm";`（非白名单文件） | 红 | 红「把 sql 改名导入」 |
+| `import * as d from "drizzle-orm";` | 红 | 红「命名空间导入 drizzle-orm」 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十五轮改写对现有 route 与现有
 客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：

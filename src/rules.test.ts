@@ -236,8 +236,11 @@ describe("AGENTS.md · Conventions · handle()", () => {
           out.push(`第 ${line} 行的 export 形状不认识，只允许函数声明或 export const <标识符> = …`);
         }
       if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
-      if (!matchesAsCode(raw, /^[ \t]*import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/m))
-        out.push("没有从 @/lib/http 导入 handle");
+      // `handle` 后面只许跟 `,` 或 `}`：`import { handle as wrapped }` 绑的本地名不是 handle，
+      // route 就能自己声明一个 handle，让每个方法都以 return handle( 起头却绕开真正的错误包装
+      // （Codex 对 #50 的十五轮复审）。
+      if (!matchesAsCode(raw, /^[ \t]*import \{[^}]*\bhandle\s*(?:,[^}]*)?\} from "@\/lib\/http"/m))
+        out.push("没有从 @/lib/http 原名导入 handle");
       return out;
     });
     expect(found).toEqual([]);
@@ -541,6 +544,27 @@ describe("AGENTS.md · Conventions · raw SQL", () => {
     const listed = sourceFiles.filter((file) => ALLOWED_FILES.includes(rel(file)));
     expect(listed.map(rel).sort()).toEqual([...ALLOWED_FILES].sort());
     expect(listed.filter((file) => !RAW_SQL.test(read(file))).map(rel)).toEqual([]);
+  });
+
+  it("drizzle 的 sql 只以 sql 这个名字导入：没有 `sql as`，也没有 drizzle-orm 的命名空间导入", () => {
+    // 上面两条按名字扫 `sql\`` / `sql<T>\``；改名导入（`sql as rawSql`）或命名空间导入
+    // （`import * as d from "drizzle-orm"` 后 `d.sql\`…\``）都会让它们看不见，白名单形同虚设
+    // （Codex 对 #50 的十五轮复审）。仓库今天两种写法都没有，这条把现状钉住。
+    const found = violations(
+      sourceFiles.filter((file) => !isTest(file)),
+      (raw) => {
+        const out: string[] = [];
+        for (const match of stripCode(raw).matchAll(
+          /^[ \t]*import\s+([^;]*?)\s+from\s+"drizzle-orm[^"]*"/gm,
+        )) {
+          const clause = match[1].trim();
+          if (/\bsql\s+as\s+/.test(clause)) out.push(`把 sql 改名导入：${clause}`);
+          if (/^\*\s+as\s+/.test(clause)) out.push(`命名空间导入 drizzle-orm：${clause}`);
+        }
+        return out;
+      },
+    );
+    expect(found).toEqual([]);
   });
 
   it("「User input inside LIKE is escaped and paired with escape '\\'」——插值进 like 的那一行带 escape '\\'", () => {
