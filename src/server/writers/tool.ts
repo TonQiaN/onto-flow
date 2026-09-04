@@ -5,8 +5,8 @@ import {
   TOOL_RESERVED_PUBLIC_NAME_PREFIX,
   TOOL_RESERVED_PUBLIC_NAMES,
 } from "@/server/harness/tool-contract";
+import { objectSchemaProblem } from "@/server/harness/tool-schema";
 import { recordRevision } from "@/server/revisions";
-import { objectSchemaProblem } from "./json-schema";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
 
 /**

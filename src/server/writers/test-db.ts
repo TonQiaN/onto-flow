@@ -26,7 +26,8 @@ export async function createTestDb(): Promise<{ sqlite: Database.Database; db: T
 /** 按依赖顺序清空全部业务表，beforeEach 用；settings 单行表一并清。 */
 export function resetTestDb(sqlite: Database.Database): void {
   sqlite.exec(`
-    DELETE FROM run_events; DELETE FROM node_usage; DELETE FROM run_results; DELETE FROM run_nodes; DELETE FROM runs;
+    DELETE FROM run_events; DELETE FROM node_usage; DELETE FROM run_results;
+    DELETE FROM run_node_rounds; DELETE FROM run_nodes; DELETE FROM runs;
     DELETE FROM workflow_edges; DELETE FROM workflow_nodes; DELETE FROM workflow_skills; DELETE FROM workflow_tools;
     DELETE FROM workflows;
     DELETE FROM action_ports; DELETE FROM action_preloads; DELETE FROM action_tools; DELETE FROM actions;

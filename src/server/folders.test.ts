@@ -3,34 +3,12 @@
  * src/db/index.ts 会优先复用 globalThis 上已有的 ontoflowDb 单例，
  * 所以必须在（动态）import 服务层之前把内存库塞进全局，避免碰真实 data/ontoflow.db。
  */
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
-import * as schema from "../db/schema";
 import type { WriteResult } from "./writers/types";
 import type { FolderDto } from "./folders";
+import { createTestDb, resetTestDb } from "./writers/test-db";
 
-const sqlite = new Database(":memory:");
-sqlite.pragma("foreign_keys = ON");
-// 与迁移脚本一致的建表 SQL（契约第一节）
-sqlite.exec(`
-CREATE TABLE folders (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  parent_id TEXT REFERENCES folders(id),
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE INDEX folders_by_parent ON folders (parent_id);
-CREATE TABLE entity_folders (
-  entity_kind TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  folder_id TEXT NOT NULL REFERENCES folders(id),
-  PRIMARY KEY (entity_kind, entity_id)
-);
-CREATE INDEX entity_folders_by_folder ON entity_folders (folder_id);
-`);
-(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
+const { sqlite } = await createTestDb();
 
 const { createFolder, deleteFolder, listFolders, updateFolder } = await import("./folders");
 
@@ -46,9 +24,9 @@ function rootFoldersNamed(name: string): FolderDto[] {
 
 beforeEach(() => {
   // 自引用外键下父子行删除顺序难保证，清库时临时关掉 FK 检查
-  sqlite.exec(
-    "PRAGMA foreign_keys = OFF; DELETE FROM entity_folders; DELETE FROM folders; PRAGMA foreign_keys = ON;",
-  );
+  sqlite.pragma("foreign_keys = OFF");
+  resetTestDb(sqlite);
+  sqlite.pragma("foreign_keys = ON");
 });
 
 describe("deleteFolder 内容上移的同级重名防护", () => {
