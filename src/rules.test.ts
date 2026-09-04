@@ -875,10 +875,13 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       // 围栏自己的可选缩进最多三格（相对容器）：顶层的 `    \`\`\`` 是缩进代码块而不是围栏，
       // 当成开栏会一路吞到文件末尾。容器标记之后的那段空白才是围栏自己的缩进，其中属于标记的
       // 那部分要先扣掉——`>` 后一格、列表标记后 1–4 格都是标记自带的填充，不是缩进。
+      // 已在栏内时，缩进要相对**开栏所在容器的内容列**量：`-    \`\`\`` 的内容列是 5，
+      // 同项里的收栏与其后的正文都缩进 5 格，按绝对列量会判成缩进代码、一路吞到容器结束。
       const afterMarker = /(>|[-*+]|\d{1,9}[.)])( *)$/.exec(prefix);
       const padding = (afterMarker?.[2] ?? "").length;
-      const fenceIndent = !afterMarker
-        ? prefix.length
+      // 显式标注类型：fenceIndent → opener → run → fence → fenceIndent 是一圈推断循环
+      const fenceIndent: number = !afterMarker
+        ? Math.max(0, prefix.length - (opener === null ? 0 : openerColumn))
         : afterMarker[1] === ">"
           ? Math.max(0, padding - 1)
           : padding <= 4
