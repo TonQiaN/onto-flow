@@ -22,23 +22,21 @@
 import { useCallback, useState } from "react";
 import type { PortKind, ReasoningEffort } from "@/components/canvas/node-model";
 import {
+  type ActionDto,
   FolderPicker,
   type FolderRef,
   KindBadge,
+  type ModelRow,
   notifyFoldersChanged,
+  type ObjectTypeRow,
   readError,
   ReferencesPanel,
   RevisionPanel,
+  type SkillRow,
+  type ToolRow,
 } from "@/components/library";
 import { MAX_REENTRIES } from "@/lib/graph";
 import { estimateTokens } from "@/lib/workflow-settings";
-import {
-  type ActionDto,
-  type ModelRow,
-  type ObjectTypeRow,
-  type SkillRow,
-  type ToolRow,
-} from "./shared";
 
 interface PortDraft {
   key: string;

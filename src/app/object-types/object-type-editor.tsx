@@ -10,21 +10,11 @@ import {
   FolderPicker,
   type FolderRef,
   notifyFoldersChanged,
+  type ObjectTypeRow,
   readError,
   ReferencesPanel,
   RevisionPanel,
 } from "@/components/library";
-
-export interface ObjectTypeRow {
-  id: string;
-  name: string;
-  kind: PortKind;
-  description: string;
-  jsonSchema: string | null;
-  builtin: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
 
 type TabKey = "basic" | "refs" | "revisions";
 

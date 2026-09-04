@@ -19,12 +19,13 @@ import {
   LibraryLayout,
   LibraryToolbar,
   type ListEnvelope,
+  type ObjectTypeRow,
   readError,
   RefCount,
   useLibraryQuery,
   type WithLibraryMeta,
 } from "@/components/library";
-import { ObjectTypeEditor, type ObjectTypeRow } from "./object-type-editor";
+import { ObjectTypeEditor } from "./object-type-editor";
 
 type ObjectTypeItem = ObjectTypeRow & WithLibraryMeta;
 

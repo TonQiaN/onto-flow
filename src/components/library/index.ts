@@ -1,4 +1,12 @@
 export { FolderBadge, KIND_STYLE, KindBadge, RefCount } from "./entity-card";
+export type {
+  ActionDto,
+  ActionPortDto,
+  ModelRow,
+  ObjectTypeRow,
+  SkillRow,
+  ToolRow,
+} from "./entity-dto";
 export { FolderPicker } from "./FolderPicker";
 export { FolderTree } from "./FolderTree";
 export { LibraryLayout } from "./LibraryLayout";

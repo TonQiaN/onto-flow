@@ -20,10 +20,11 @@ import {
   type ListEnvelope,
   readError,
   RefCount,
+  type ToolRow,
   useLibraryQuery,
   type WithLibraryMeta,
 } from "@/components/library";
-import { ToolEditor, type ToolRow } from "./tool-editor";
+import { ToolEditor } from "./tool-editor";
 
 type ToolItem = ToolRow & WithLibraryMeta;
 
