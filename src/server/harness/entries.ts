@@ -53,14 +53,7 @@ export function renderCompositionYaml(
 export const MCP_SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
 
 /** MCP entry 的稳定 id 前缀；插件面板与连接状态投影按它识别 MCP entry。 */
-export const MCP_ENTRY_ID_PREFIX = "mcp-";
-
-export interface McpServerReconnectSpec {
-  enabled?: boolean;
-  initialDelayMs?: number;
-  maxDelayMs?: number;
-  maxAttempts?: number;
-}
+const MCP_ENTRY_ID_PREFIX = "mcp-";
 
 /**
  * 一台 MCP 服务器的组合规格。env/headers 的值会原样落入组合配置文件，
@@ -76,8 +69,6 @@ export interface McpServerSpec {
   env?: Readonly<Record<string, string>>;
   url?: string;
   headers?: Readonly<Record<string, string>>;
-  toolCallTimeoutMs?: number;
-  reconnect?: McpServerReconnectSpec;
 }
 
 /**
@@ -88,8 +79,6 @@ export function mcpCompositionEntry(spec: McpServerSpec): CompositionEntry {
   const shared = {
     serverName: spec.name,
     failOnStartupError: false,
-    ...(spec.toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs: spec.toolCallTimeoutMs }),
-    ...(spec.reconnect === undefined ? {} : { reconnect: spec.reconnect }),
   };
   const config: Record<string, unknown> =
     spec.transport === "stdio"
@@ -115,22 +104,10 @@ export function mcpCompositionEntry(spec: McpServerSpec): CompositionEntry {
   };
 }
 
-/** 模型目录条目；目录是发现面展示用的 advisory 数据，未列出的模型 id 照样透传。 */
-export interface DeepSeekModelSpec {
-  id: string;
-  name?: string;
-  description?: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  inputModalities?: readonly ("text" | "image")[];
-}
-
 /** llm-deepseek 的组合规格；apiKeyEnv 是凭据引用名，不是值。 */
 export interface DeepSeekProviderSpec {
   apiKeyEnv?: string;
   baseURL?: string;
-  maxTokens?: number;
-  models?: readonly DeepSeekModelSpec[];
 }
 
 /** 模型凭据的默认引用名。只记名字，值永远不进配置、日志与运行目录。 */
@@ -145,8 +122,6 @@ export function deepseekCompositionEntry(spec: DeepSeekProviderSpec = {}): Compo
   const config: Record<string, unknown> = {
     apiKeyEnv: spec.apiKeyEnv ?? DEFAULT_CREDENTIAL_ENV,
     ...(spec.baseURL === undefined ? {} : { baseURL: spec.baseURL }),
-    ...(spec.maxTokens === undefined ? {} : { maxTokens: spec.maxTokens }),
-    ...(spec.models === undefined ? {} : { models: spec.models.map((m) => ({ ...m })) }),
   };
   return { id: "llm-deepseek", name: "@deepseek-ai/dsh-llm-deepseek", config };
 }

@@ -19,24 +19,29 @@ import { assertSafeId, assertSafeName, newRunId } from "./ids";
 /** 工作区内的项目级技能根，对齐上游 skill-filesystem 相对 cwd 的发现路径。 */
 export const WORKSPACE_SKILLS_SUBDIR = path.join(".agents", "skills");
 /** 工作区内的指令文件名，对齐上游 agent-instructions 的发现清单。 */
-export const WORKSPACE_INSTRUCTIONS_FILE = "AGENTS.md";
+const WORKSPACE_INSTRUCTIONS_FILE = "AGENTS.md";
 /** 运行 home 内的用户级指令文件名：上游固定读 $DSH_HOME/AGENTS.md。 */
-export const HOME_INSTRUCTIONS_FILE = "AGENTS.md";
+const HOME_INSTRUCTIONS_FILE = "AGENTS.md";
 /** 运行目录内的组合配置文件名。 */
-export const RUN_COMPOSITION_FILE = "cordis.yml";
+const RUN_COMPOSITION_FILE = "cordis.yml";
 /** 运行目录内 Action 子进程 cwd 的子目录名。 */
-export const RUN_WORKSPACE_SUBDIR = "workspace";
+const RUN_WORKSPACE_SUBDIR = "workspace";
 /** 运行目录内隔离的 harness home（DSH_HOME）子目录名。 */
-export const RUN_HOME_SUBDIR = "home";
+const RUN_HOME_SUBDIR = "home";
 /** 运行目录内 cordis 插件（Tool）的物化子目录名。 */
-export const RUN_PLUGINS_SUBDIR = "plugins";
+const RUN_PLUGINS_SUBDIR = "plugins";
+/**
+ * 运行目录内的会话持久化根目录名：组合把 session-persistence-jsonl 的 root 钉在
+ * 这里，轨迹面板按同一个名字回读，两处必须同名。
+ */
+export const RUN_SESSIONS_SUBDIR = "sessions";
 /**
  * 运行目录内 agent 临时文件的子目录名：经 TMPDIR 注入子进程，bash 的 mktemp、
  * Python 的 tempfile、Poppler 与上游沙箱围栏的 os.tmpdir() 三方因此对齐，运行
  * 删除时一并清掉，磁盘统计按运行目录计时自动包含。它是工作区的兄弟目录，
  * 不是子目录：上游 sandbox-local 断言临时根不得位于工作区内部。
  */
-export const RUN_TMP_SUBDIR = "tmp";
+const RUN_TMP_SUBDIR = "tmp";
 /** 运行输入落盘的工作区子目录名。 */
 export const WORKSPACE_INPUTS_SUBDIR = "inputs";
 
@@ -71,8 +76,6 @@ export interface CreateRunWorkspaceOptions {
   homeInstructions?: string;
   /** 链接到 workspace/.agents/skills/ 的技能：经 cwd 发现对全部 Action 可见。 */
   skills?: readonly ImportSpec[];
-  /** 整图重跑时引用的原运行 id。 */
-  rerunOf?: string;
 }
 
 export interface RunWorkspace {
@@ -92,7 +95,7 @@ export interface RunWorkspace {
   imports: { instructionsDigest: string; items: ImportRecord[] };
 }
 
-export class RunWorkspaceError extends Error {}
+class RunWorkspaceError extends Error {}
 
 /**
  * 对目录内容做确定性摘要：按相对路径排序，逐文件混入路径与字节。
@@ -234,9 +237,4 @@ export async function createRunWorkspace(
     }
     throw cause;
   }
-}
-
-/** 删除一个运行目录。只接受已结束的运行：调用方负责先证明没有存活属主。 */
-export async function removeRunDir(runDir: string): Promise<void> {
-  await rm(runDir, { recursive: true, force: true });
 }
