@@ -3,6 +3,7 @@
  * 不会被会话收束窗口里晚到的成功结果覆盖，不启动真实 harness。
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -126,7 +127,8 @@ let cancelRun: typeof import("./runner").cancelRun;
 let isRunExecutionActive: typeof import("./runner").isRunExecutionActive;
 let deleteRun: typeof import("../monitor/cleanup").deleteRun;
 let UnsettledRunLaunchError: typeof import("../harness/launch").UnsettledRunLaunchError;
-const runnerTestRoot = "/tmp/ontoflow-runner-test";
+// 夹具目录逐进程唯一：固定路径下，多个工作树同时 `npm test` 会互相 rmSync 掉对方跑到一半的运行目录。
+const runnerTestRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ontoflow-runner-test-"));
 
 function executionSnapshot(
   actionIds: string[],
@@ -812,13 +814,13 @@ beforeEach(() => {
     async ({ workflowId, runId }: { workflowId: string; runId: string }) => ({
       runId,
       workflowId,
-      runDir: "/tmp/ontoflow-runner-test/run",
-      workspaceDir: "/tmp/ontoflow-runner-test/workspace",
-      logsDir: "/tmp/ontoflow-runner-test/logs",
-      homeDir: "/tmp/ontoflow-runner-test/home",
-      pluginsDir: "/tmp/ontoflow-runner-test/plugins",
-      tmpDir: "/tmp/ontoflow-runner-test/tmp",
-      compositionPath: "/tmp/ontoflow-runner-test/cordis.yml",
+      runDir: path.join(runnerTestRoot, "run"),
+      workspaceDir: path.join(runnerTestRoot, "workspace"),
+      logsDir: path.join(runnerTestRoot, "logs"),
+      homeDir: path.join(runnerTestRoot, "home"),
+      pluginsDir: path.join(runnerTestRoot, "plugins"),
+      tmpDir: path.join(runnerTestRoot, "tmp"),
+      compositionPath: path.join(runnerTestRoot, "cordis.yml"),
       imports: { instructionsDigest: "test", items: [] },
     }),
   );

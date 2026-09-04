@@ -801,4 +801,27 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     }
     expect(problems).toEqual([]);
   });
+
+  /**
+   * 记录之间互相引用；一份记录从 proposed/ 搬到 done/ 时，指向它的相对链接必须跟着改，
+   * 否则链接静默指向不存在的路径。归档只移动文件、不改链接是这里咬住的那个疏漏。
+   */
+  it("记录里的相对 .md 链接都能从所在目录解析到真实文件", () => {
+    const problems: string[] = [];
+    for (const state of STATES) {
+      const dir = path.join(ROOT_DIR, state);
+      for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
+        for (const match of read(path.join(dir, name)).matchAll(/]\(([^)\s]+)\)/g)) {
+          const link = match[1] ?? "";
+          if (/^[a-z][a-z0-9+.-]*:/i.test(link) || link.startsWith("#") || link.startsWith("//"))
+            continue;
+          const target = link.split("#")[0] ?? "";
+          if (!target.endsWith(".md")) continue;
+          if (!fs.existsSync(path.resolve(dir, target)))
+            problems.push(`${state}/${name}: 链接「${link}」解析不到文件`);
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+  });
 });
