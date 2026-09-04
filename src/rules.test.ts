@@ -871,9 +871,11 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
    * 一份记录里全部链接目标：行内 `[文字](目标)` 与引用式的定义行 `[标签]: 目标`，查询串
    * （GitHub 的 `?plain=1` 之类）与锚点都已切掉——不切就不以 `.md` 结尾，整条链接被跳过。
    * 定义的目标允许换到下一行写（CommonMark），只看定义行会取到空目标、把坏链接放过去；
-   * 定义还可以嵌在块引用或列表项里（`> [标签]: 目标`），容器前缀要先剥掉才认得出。
+   * 定义还可以嵌在块引用或列表项里（`> [标签]: 目标`），容器前缀要先剥掉才认得出；缩进不设
+   * 上限，因为列表项的续行缩进四格及以上仍是合法定义（这里剥的是缩进，不是把它当代码块——
+   * 记录的列表续行普遍缩进四格，当代码块会一次漏掉一大批真链接）。
    */
-  const CONTAINER_PREFIX = String.raw` {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*`;
+  const CONTAINER_PREFIX = String.raw`[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*`;
   const DEFINITION_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}\[[^\]]+]:(.*)$`);
   const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}`);
 
