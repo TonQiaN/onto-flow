@@ -1,6 +1,6 @@
 # 简化：四个库页各自抄的四段原语归位到 src/components/library/
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -73,3 +73,24 @@ page grows its own **tree, toolbar, folder picker, or revision panel**」。四�
 相同，整段搬即可；`npm run build` 会抓到类名拼错导致的编译问题，视觉由上面四个 spec 的可见性断言兜底。
 
 预估净删约 180 行（移出约 65 行到共享模块，四页各减约 60 行）；风险等级：低。
+
+## 落地
+
+[PR #38](https://github.com/TonQiaN/onto-flow/pull/38)。与 [Kind / EFFORT_LABEL 各只留一份](2026-09-03-one-kind-badge-one-effort-label.md) 合成同一个 PR
+落地——两条共用 `src/components/library/entity-card.tsx`，提议里就写了「两条一起实施更省事」。
+
+与提议的差异：
+
+- 新文件除 `FolderBadge` / `RefCount` 外还收了 `KIND_STYLE` / `KindBadge`（另一条卡的内容）。
+- 四个库页的 `type FolderRef` import 一并删掉：`folderRefFrom` 搬走后它只剩注释里提到，成了未用导入。
+- 没有加「四个库页里不出现 `function FolderBadge|…`」的文本扫描断言（提议里标为可选项）：那要与
+  REVIEW.md 一条新行一起加，而枚举改成按面核对之后，机械断言又会退回逐名枚举。
+- `AGENTS.md` 与 `.github/REVIEW.md` 的那句改成「no page grows its own list, folder, reference, or
+  revision UI」/「没有长出自己的列表 / 文件夹 / 引用 / 修订 UI」，并各带一句为什么（四份逐字相同的
+  副本从枚举的缝里过了评审）。
+
+验收实际跑了：`npm run check`（typecheck + oxlint + oxfmt --check + vitest 46 文件 387 通过）、
+`npm run build`（全路由构建通过）、`npx playwright test -c playwright.clean.config.ts
+e2e/library-v2.spec.ts e2e/tools.spec.ts e2e/object-types.spec.ts e2e/actions.spec.ts`（13 通过）与
+`e2e/skills.spec.ts`（3 通过），都在本 PR 自己的工作树 + 自己的 `data/ontoflow.db` + 3595 端口上跑。
+不涉及付费冒烟。
