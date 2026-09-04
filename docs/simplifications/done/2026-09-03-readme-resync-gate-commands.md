@@ -67,7 +67,7 @@ B：`rg -n "npm run (check|test|typecheck|build|lint|fmt)" README.md` 只剩「�
 
 ## 落地
 
-PR 待开。
+[PR #54](https://github.com/TonQiaN/onto-flow/pull/54)。
 
 **与提议的差异：** 用户拍板选路 A（同步）。`AGENTS.md:211` 与 `.github/REVIEW.md` 的「三者一起改」
 那条规则一字未动——这次正是按它把 README 补齐。除提议点名的三处外，测试块还多补了两行：
