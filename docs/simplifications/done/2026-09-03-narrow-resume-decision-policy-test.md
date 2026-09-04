@@ -84,7 +84,7 @@ both values」），审阅者更新 pin 时短语被删掉也不会红。
 
 ## 落地
 
-PR：#PENDING
+PR：[#43](https://github.com/TonQiaN/onto-flow/pull/43)
 
 **与提议的差异：**
 
