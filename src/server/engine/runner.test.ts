@@ -5,14 +5,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as schema from "../../db/schema";
 import { MAX_NODE_ROUNDS } from "../../lib/graph";
 import type { PortValue } from "../../lib/values";
 import type { ResolvedActionDefinition, ResolvedWorkflow } from "../resolve";
 import type { SettingsDocument } from "../settings";
+import { createTestDb } from "../writers/test-db";
 
 const controls = vi.hoisted(() => ({
   resolveWorkflow: vi.fn(),
@@ -100,48 +98,7 @@ vi.mock("@/server/skill-library", () => ({
   releaseSkillProjections: controls.releaseSkillProjections,
 }));
 
-const sqlite = new Database(":memory:");
-sqlite.exec(`
-CREATE TABLE runs (
-  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
-  workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
-  settings_snapshot TEXT,
-  graph TEXT NOT NULL DEFAULT '{"version":1,"nodes":[],"edges":[]}',
-  started_at INTEGER NOT NULL, finished_at INTEGER
-);
-CREATE TABLE run_results (
-  run_id TEXT PRIMARY KEY, kind TEXT NOT NULL, content TEXT NOT NULL,
-  sha256 TEXT NOT NULL, created_at INTEGER NOT NULL
-);
-CREATE TABLE run_nodes (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, label TEXT NOT NULL,
-  status TEXT NOT NULL, snapshot TEXT, input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  cost REAL NOT NULL DEFAULT 0, inputs TEXT, outputs TEXT, session_id TEXT, error TEXT,
-  started_at INTEGER, finished_at INTEGER, UNIQUE(run_id, node_id)
-);
-CREATE TABLE run_node_rounds (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, round INTEGER NOT NULL,
-  session_id TEXT, status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER,
-  exit_name TEXT, error TEXT, inputs TEXT, outputs TEXT, snapshot TEXT,
-  UNIQUE(run_id, node_id, round)
-);
-CREATE TABLE run_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT, session_id TEXT,
-  ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
-);
-`);
-(
-  globalThis as unknown as {
-    ontoflowDb?: unknown;
-    ontoflowCancelledRuns?: Set<string>;
-    ontoflowRunProcesses?: Map<string, unknown>;
-    ontoflowActiveRuns?: Set<string>;
-    ontoflowRunDisposalFailures?: Set<string>;
-    ontoflowPendingUsageSettlements?: Map<string, Promise<void>>;
-  }
-).ontoflowDb = drizzle(sqlite, { schema });
+const { sqlite } = await createTestDb();
 (globalThis as unknown as { ontoflowCancelledRuns?: Set<string> }).ontoflowCancelledRuns =
   new Set();
 const runProcesses = new Map<string, unknown>();
@@ -840,6 +797,16 @@ beforeAll(async () => {
 
 beforeEach(() => {
   sqlite.exec("DELETE FROM run_results; DELETE FROM run_node_rounds; DELETE FROM run_events;");
+  // runs 外键指向 workflows：各用例只清 runs / run_nodes，六个夹具工作流的父行常驻。
+  sqlite.exec(`
+    INSERT OR IGNORE INTO workflows (id, name, created_at, updated_at) VALUES
+      ('workflow-1', '取消竞态测试', 0, 0),
+      ('workflow-materialization', '输入物化测试', 0, 0),
+      ('workflow-loop', '回边重入测试', 0, 0),
+      ('workflow-passthrough', '直通测试', 0, 0),
+      ('workflow-nested-loop', '嵌套回边测试', 0, 0),
+      ('workflow-fanout-loop', '扇出环体测试', 0, 0);
+  `);
   controls.createRunWorkspace.mockReset();
   controls.createRunWorkspace.mockImplementation(
     async ({ workflowId, runId }: { workflowId: string; runId: string }) => ({
