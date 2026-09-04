@@ -815,7 +815,9 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     if (text[i] === "<") {
       for (i += 1; i < text.length; i += 1) {
         const ch = text[i] ?? "";
-        if (ch === "\\") out += text[(i += 1)] ?? "";
+        // 反斜杠连同被转义的字符一起留着：`\&period;` 里的 `&` 不该参与字符引用解析，
+        // 谁被转义过要一路带到解引用那一步才知道（转义在 resolveDestination 里统一去掉）
+        if (ch === "\\") out += ch + (text[(i += 1)] ?? "");
         else if (ch === "\n") return "";
         else if (ch === ">") return out;
         else out += ch;
@@ -825,7 +827,7 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     let depth = 0;
     for (; i < text.length; i += 1) {
       const ch = text[i] ?? "";
-      if (ch === "\\") out += text[(i += 1)] ?? "";
+      if (ch === "\\") out += ch + (text[(i += 1)] ?? "");
       else if (/\s/.test(ch)) break;
       else if (ch === ")" && depth === 0) break;
       else {
@@ -993,24 +995,26 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     amp: "&",
   };
 
-  /** 解完之后还剩下的命名引用：表里没有，不猜。 */
-  const NAMED_LEFTOVER_RE = /&[a-zA-Z][a-zA-Z0-9]{1,31};/;
-
   /**
-   * 内联解析这一层：字符引用（`missing&#46;md` / `&#x2e;` / `&period;`）解成字符，结果才是
-   * 这条链接真正的 URL。`&amp;` 与其余命名引用同一遍解，`&amp;#46;` 因此只解一次、留下字面的
-   * `&#46;`，不会被二次解成 `.`。
+   * 内联解析这一层，一遍扫完：反斜杠转义、字符引用（`&#46;` / `&#x2e;` / `&period;`）一起处理。
+   * 必须同一遍——`\&period;md` 里的 `&` 被转义过，那串是字面文字而不是引用；先去转义再解引用
+   * 会把它解成 `.`，链接指向的其实是另一个文件。`&amp;#46;` 同理只解一次，留下字面的 `&#46;`。
+   * `unresolved` 记「碰到了表外的命名引用」：不猜，交给调用方报出来。
    */
-  function decodeCharacterReferences(destination: string): string {
-    return destination
-      .replace(/&#[xX]([0-9a-fA-F]{1,6});/g, (_all, hex: string) =>
-        fromCodePoint(Number.parseInt(hex, 16)),
-      )
-      .replace(/&#(\d{1,7});/g, (_all, decimal: string) => fromCodePoint(Number(decimal)))
-      .replace(
-        /&([a-zA-Z][a-zA-Z0-9]{1,31});/g,
-        (all, name: string) => NAMED_REFERENCES[name] ?? all,
-      );
+  function resolveDestination(destination: string): { url: string; unresolved: boolean } {
+    let unresolved = false;
+    const url = destination.replace(
+      /\\[\s\S]|&#[xX]([0-9a-fA-F]{1,6});|&#(\d{1,7});|&([a-zA-Z][a-zA-Z0-9]{1,31});/g,
+      (all: string, hex?: string, decimal?: string, name?: string) => {
+        if (all.startsWith("\\")) return all.slice(1);
+        if (hex !== undefined) return fromCodePoint(Number.parseInt(hex, 16));
+        if (decimal !== undefined) return fromCodePoint(Number(decimal));
+        const named = NAMED_REFERENCES[name ?? ""];
+        if (named === undefined) unresolved = true;
+        return named ?? all;
+      },
+    );
+    return { url, unresolved };
   }
 
   /**
@@ -1038,9 +1042,9 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
           // 顺序照 Markdown 来：先解字符引用得到真正的 URL，再判外链（`&#58;` 解出来就是
           // 真 scheme），再切查询串与锚点，最后才解百分号编码——把百分号解码提到判外链之前，
           // `notes%3Aold.md` 会解出个 `notes:old.md` 冒充外链溜过去。
-          const url = decodeCharacterReferences(destination);
+          const { url, unresolved } = resolveDestination(destination);
           if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//")) continue;
-          if (NAMED_LEFTOVER_RE.test(url)) {
+          if (unresolved) {
             // 解不动就报出来：静默跳过等于给坏链接留通道，改法也现成——把 `&period;` 写成 `.`
             problems.push(`${state}/${name}: 链接「${url}」含表外的命名字符引用，核对不了`);
             continue;
