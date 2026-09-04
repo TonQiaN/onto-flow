@@ -1,6 +1,6 @@
 # 简化：清理面板的静态文案与 ADR-0018 之后的真实删除范围对齐
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -75,3 +75,39 @@ Chrome 里打开 `/monitor`，对事件项点一次「预览影响」，确认�
 低。不碰 `cleanup.ts`，只改客户端字符串常量；没有 e2e 断言这几个字符串。
 
 预估净删 ≈ +2 行（三条文案改写）；风险等级：低。
+
+## 落地
+
+PR：[#31](https://github.com/TonQiaN/onto-flow/pull/31)（PR 待开）
+
+**与提议的差异：**
+
+- 工作区项 `what` 按提议改成 `data/runs/<工作流>/<运行>/` 与真实目录内容（`workspace/`、`sessions/`、
+  `logs/`、`tmp/`、`plugins/`），判据改成「开始时间早于 N 天的运行工作区，以及目录修改时间早于 N 天、
+  库里已无记录的孤儿目录」。措辞上点明删的是**整个运行目录**（`removeDir` 对 `run_dir` 整棵 `rmSync`），
+  而不是「目录下的某些东西」。
+- 事件项 `impact` 保留了原文末尾「运行页的回放退化到轮次级」这句——它今天仍然成立（事件行真的被删），
+  提议只要求去掉「快照保留」。另外「抽屉的这两个页签显示已清理」改写成「抽屉这两个页签只剩一句已清空的
+  说明」，因为抽屉的真实文案是「这一轮没有端口值：事件清理会把它们连同快照一起清空」，不是「已清理」四个字。
+- 姊妹记录「删掉 run_nodes 三列」尚未落地，所以文案仍同时提轮次行与节点行（与 `cleanup.ts:192,197` 一致）。
+- `AGENTS.md` / `.github/REVIEW.md` / `docs/DESIGN.md` 三处经 `rg` 现场复核后确认已经是对的，未改。
+
+**验收实际跑了什么：**
+
+- `rg -n "opencode" src` → 无结果（exit 1）。
+- `npm run check` 全绿（typecheck、oxlint、oxfmt、vitest 46 文件 387 通过 1 跳过）。
+- `npm run build` 通过（触及 `src/app/`）。
+- `npx playwright test -c playwright.clean.config.ts e2e/monitor.spec.ts`（工作树自建 `data/ontoflow.db`、
+  独立 3594 端口）→ 4 passed，含「清理面板三项『预览影响』都返回成功并显示影响面（不点执行清理）」。
+- **dryRun 预览路径没变的证据：`src/server/monitor/cleanup.ts` 零改动**，`cleanup.test.ts:248`
+  `expect(deleted.detail).toBe(preview.detail)` 原样重跑通过。
+- **现场 dryRun 证据**（工作树自己的库，合成一条 60 天前的已结束运行 + 1 轮次 + 1 节点 + 1 事件，
+  在 `http://localhost:3594/monitor` 对事件项点一次「预览影响」）：
+
+  常驻文案：「删除 run_events 中早于 N 天的事件行（文本增量、工具调用、会话错误/空闲），并把够龄运行的
+  轮次行与节点行上的输入输出与快照置空。」
+
+  服务端 `detail`：「30 天前的事件明细 1 条，另清空 1 行轮次、1 个节点的输入输出与快照（合计约 2.0 KB）；
+  运行、节点与轮次骨架保留，只是不再能回看逐条日志与那几轮的输入输出」
+
+  两段说的是同一件事；改之前常驻文案说的是「快照……全部保留」，与 `detail` 相反。**没有点执行清理。**
