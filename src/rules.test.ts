@@ -841,6 +841,13 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   const CONTAINER_PREFIX = String.raw`[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*`;
   const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}`);
 
+  /** 制表符按 CommonMark 的 4 列停位展开；展开之后列宽就等于字符数，缩进判定不必再分两套。 */
+  function expandTabs(line: string): string {
+    let out = "";
+    for (const ch of line) out += ch === "\t" ? " ".repeat(4 - (out.length % 4)) : ch;
+    return out;
+  }
+
   /**
    * ``` / ~~~ 围栏之间是逐字引用（rg 输出、示例 Markdown），里面的 `](…)` 渲染不成链接，
    * 要在记录里写一条字面的坏链接就放进围栏。行内的 `` `…` `` **不剥**：这些记录里的行内代码
@@ -852,7 +859,8 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     let opener: string | null = null;
     let openerColumn = 0;
     let openerQuotes = 0;
-    for (const line of text.split("\n")) {
+    for (const raw of text.split("\n")) {
+      const line = expandTabs(raw);
       // 围栏也能嵌在块引用或列表项里（`> ```markdown`），先剥容器前缀再认，否则栏内的
       // 字面示例会被当成真链接报出来
       const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? "";
@@ -865,9 +873,17 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       // 其余行按（引用之后的）容器前缀宽度算。
       const column = startsItem ? (/^[ \t]*/.exec(inner)?.[0] ?? "").length : inner.length;
       // 围栏自己的可选缩进最多三格（相对容器）：顶层的 `    \`\`\`` 是缩进代码块而不是围栏，
-      // 当成开栏会一路吞到文件末尾。容器标记之后的那段空白才是围栏自己的缩进。
-      const afterMarker = /(?:>|[-*+]|\d{1,9}[.)])([ \t]*)$/.exec(prefix);
-      const fenceIndent = afterMarker ? (afterMarker[1] ?? "").length : prefix.length;
+      // 当成开栏会一路吞到文件末尾。容器标记之后的那段空白才是围栏自己的缩进，其中属于标记的
+      // 那部分要先扣掉——`>` 后一格、列表标记后 1–4 格都是标记自带的填充，不是缩进。
+      const afterMarker = /(>|[-*+]|\d{1,9}[.)])( *)$/.exec(prefix);
+      const padding = (afterMarker?.[2] ?? "").length;
+      const fenceIndent = !afterMarker
+        ? prefix.length
+        : afterMarker[1] === ">"
+          ? Math.max(0, padding - 1)
+          : padding <= 4
+            ? 0
+            : padding - 1;
       const fence = fenceIndent <= 3 ? /^(`{3,}|~{3,})(.*)$/.exec(line.slice(prefix.length)) : null;
       const run = fence?.[1] ?? "";
       const info = fence?.[2] ?? "";
