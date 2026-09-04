@@ -112,12 +112,13 @@ function roundWhere(key: RoundKey) {
 /**
  * 一轮落态：只写终态相关的列，begin 时写下的会话、输入与快照原样保留。
  *
+ * 可选列一律不传即保持，只有终态与 `finishedAt` 无条件改写：Action 收束时已记下的出口与产物
+ * 是这一轮真跑出来的事实，随后落下的取消只该改终态，不该顺手把它们清成 null。
+ *
  * 行不存在就补一行零时长的（`startedAt` = `finishedAt`）：输入节点、输出节点与被跳过的
  * 节点没有 begin 这一步，它们同样要在时间轴上占一行，否则回放到末尾这些节点还是等待。
  */
 export function settleRound(settle: RoundSettle, writer: RoundWriter = db): void {
-  const exitName = settle.exitName ?? null;
-  const error = settle.error ?? null;
   writer
     .insert(runNodeRounds)
     .values({
@@ -128,8 +129,8 @@ export function settleRound(settle: RoundSettle, writer: RoundWriter = db): void
       status: settle.status,
       startedAt: settle.finishedAt,
       finishedAt: settle.finishedAt,
-      exitName,
-      error,
+      exitName: settle.exitName ?? null,
+      error: settle.error ?? null,
       inputs: settle.inputs ?? null,
       outputs: settle.outputs ?? null,
       snapshot: null,
@@ -139,8 +140,8 @@ export function settleRound(settle: RoundSettle, writer: RoundWriter = db): void
       set: {
         status: settle.status,
         finishedAt: settle.finishedAt,
-        exitName,
-        error,
+        ...(settle.exitName === undefined ? {} : { exitName: settle.exitName }),
+        ...(settle.error === undefined ? {} : { error: settle.error }),
         ...(settle.inputs === undefined ? {} : { inputs: settle.inputs }),
         ...(settle.outputs === undefined ? {} : { outputs: settle.outputs }),
       },
@@ -175,7 +176,8 @@ function nextRoundNumbers(
  *
  * 取消可能在 Action 正等最后一次 sessionOutput / closeSession 时到达：`cancelRun` 先把这一行
  * 写成 cancelled，Action 侧随后再无条件写 success 就把取消覆盖掉了。先到的终态赢。
- * 与 `settleRound` 的另一个区别是它从不补行——调用它的路径一定先 `beginRound` 过。
+ * 与 `settleRound` 的另一个区别是它从不补行——调用它的路径一定先 `beginRound` 过；
+ * 可选列的规则与 `settleRound` 相同：不传即保持。
  */
 export function settleRoundIfRunning(settle: RoundSettle, writer: RoundWriter = db): void {
   writer
@@ -183,8 +185,8 @@ export function settleRoundIfRunning(settle: RoundSettle, writer: RoundWriter = 
     .set({
       status: settle.status,
       finishedAt: settle.finishedAt,
-      exitName: settle.exitName ?? null,
-      error: settle.error ?? null,
+      ...(settle.exitName === undefined ? {} : { exitName: settle.exitName }),
+      ...(settle.error === undefined ? {} : { error: settle.error }),
       ...(settle.inputs === undefined ? {} : { inputs: settle.inputs }),
       ...(settle.outputs === undefined ? {} : { outputs: settle.outputs }),
     })
