@@ -92,6 +92,9 @@ PR：[#35](https://github.com/TonQiaN/onto-flow/pull/35)
 - **按 Codex 复审补的一条**：`cleanEvents()` 的两条资格是**互相独立**的——事件行按每条事件自己的
   `ts < cutoff`（运行只要不在跑就行），置空按运行的 `finished_at < cutoff`。一次开始得早、刚结束的长运行
   会被删掉早期事件却**不**置空载荷。所以文案把两条判据分开写，`impact` 也不再说「事件日志变空」。
+- **按 Codex 二轮复审再收窄一次**：事件行是**逐行**按 `e.ts` 删的，一个跨过截止时间的轮次里较新的
+  事件仍在，`visualsAt()` 照样能用它们逐条回放。所以 `impact` 不说「那几轮退化」，改成
+  「回放只在被删事件覆盖的那段时间退化到轮次级」。
 - 姊妹记录「删掉 run_nodes 三列」尚未落地，所以文案仍同时提轮次行与节点行（与 `cleanup.ts:192,197` 一致）。
 - `AGENTS.md` / `.github/REVIEW.md` / `docs/DESIGN.md` 三处经 `rg` 现场复核后确认已经是对的，未改。
 
