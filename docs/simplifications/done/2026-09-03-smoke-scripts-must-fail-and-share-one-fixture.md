@@ -156,3 +156,12 @@ e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。
    `#disposeRequested` 置真，所以 shutdown 挂死之后被 SIGTERM / SIGKILL 打掉的子进程同样是
    `expected: true`。`smoke-harness` 的收束断言改成 `expected && code === 0 && signal === null`，
    打印也带上 signal。重跑：`code=0 signal=null expected=true`，退出码 0。
+
+**Codex 三轮复审的一条（成立，已改并重跑四个脚本）**
+
+4. **「至少有产物」不是断言**：某个 Action 的输出根本没落进 `run_nodes.outputs` 时，扫描会静静
+   跳过它，而输入节点物化出来的那份文件已经让 `found.size > 0` 成立——`smoke-engine` 因此可能在
+   缺草稿或缺摘要的情况下退出 0。`assertDeclaredArtifacts(runId, required)` 加了必须命中的键：
+   engine 点名 `起草·草稿` + `摘要·摘要`，graph 点名两份评语 + 最后一轮草稿 + 「通过」出口的
+   裁决书（「打回」出口的意见刻意不点名——最后一轮走的是「通过」，那份产物本来就不该存在），
+   capabilities 点名 `报口令·回执`。改完四个付费脚本各重跑一次，退出码全 0。

@@ -185,7 +185,7 @@ async function main(): Promise<void> {
   const runRow = await awaitTerminal(started.runId, { timeoutMs: 600_000 });
   console.log(`导入摘要：${JSON.stringify(runRow.imports)}`);
   printNodes(started.runId);
-  const artifacts = assertDeclaredArtifacts(started.runId);
+  const artifacts = assertDeclaredArtifacts(started.runId, [`${N_ACTION}·回执`]);
 
   const runDir = runRow.runDir;
   assertSmoke(runDir !== null, "成功的运行没有运行目录");
@@ -202,8 +202,8 @@ async function main(): Promise<void> {
   console.log(`工具插件：已物化 ${plugin}`);
 
   // ③④ 口令来自技能、印章来自工具调用
-  const receipt = artifacts.get(`${N_ACTION}·回执`);
-  assertSmoke(receipt !== undefined, "产物 receipt.md 没有落盘");
+  // required 里点了名，assertDeclaredArtifacts 没抛就一定有这一项。
+  const receipt = artifacts.get(`${N_ACTION}·回执`)!;
   const text = fs.readFileSync(receipt, "utf8");
   console.log(`\n产物 receipt.md：\n${text}`);
   assertSmoke(text.includes(PASSPHRASE), `产物里没有技能里的口令「${PASSPHRASE}」`);

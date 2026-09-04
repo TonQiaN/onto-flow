@@ -128,7 +128,8 @@ async function main(): Promise<void> {
   await awaitTerminal(started.runId, { timeoutMs: 600_000 });
   printNodes(started.runId);
   printEvents(started.runId);
-  assertDeclaredArtifacts(started.runId);
+  // 两个 Action 各自声明的产物都必须在，缺一个就不算通过。
+  assertDeclaredArtifacts(started.runId, [`${N_DRAFT}·草稿`, `${N_SUMMARY}·摘要`]);
   console.log("\n引擎冒烟通过。");
 }
 

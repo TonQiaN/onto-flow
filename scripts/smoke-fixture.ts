@@ -433,13 +433,22 @@ export function printNodes(runId: string): void {
 }
 
 /**
- * 每个节点声明的产物都要真的在盘上，返回「节点 id·端口名 → 绝对路径」供后续查内容。
+ * 逐项核对本次运行的产物，返回「节点 id·端口名 → 绝对路径」供后续查内容。
+ *
+ * `required` 是本冒烟**必须**拿到的键，一个都不能少：只扫 `run_nodes.outputs` 里已有的项
+ * 是不够的——回归让某个 Action 的输出压根没落进 outputs 时，扫描会静静跳过它，而输入节点
+ * 物化出来的那份文件已经让「至少有产物」成立（Codex 对本 PR 的三轮复审）。分支 Action 只
+ * 点名本次该走的那个出口的端口：另一个出口的产物本来就不该存在。
+ *
  * 键用节点 id 而不是标签：`run_nodes.label` 对 Action 节点存的是 Action 名而不是画布标签，
- * 拿标签当键的断言实测会漏（`docs/simplifications` 里这条记录的落地段）。
- * 引擎自己也做这一检查（`collectArtifacts`），冒烟再独立看一眼盘：`run_nodes.outputs`
- * 记的是本轮真实生效的路径（重入的第 N 轮带 `rounds/` 前缀），所以路径从它读，不要自己拼。
+ * 拿标签当键的断言实测会漏（本记录的落地段）。引擎自己也做一次落盘检查
+ * （`collectArtifacts`），冒烟再独立看一眼盘：`run_nodes.outputs` 记的是本轮真实生效的路径
+ *（重入的第 N 轮带 `rounds/` 前缀），所以路径从它读，不要自己拼。
  */
-export function assertDeclaredArtifacts(runId: string): Map<string, string> {
+export function assertDeclaredArtifacts(
+  runId: string,
+  required: readonly string[],
+): Map<string, string> {
   const found = new Map<string, string>();
   for (const node of db.select().from(runNodes).where(eq(runNodes.runId, runId)).all()) {
     for (const [portName, value] of Object.entries(node.outputs ?? {})) {
@@ -452,7 +461,12 @@ export function assertDeclaredArtifacts(runId: string): Map<string, string> {
       console.log(`  产物 ${node.label}·${portName} → ${file.path}`);
     }
   }
-  assertSmoke(found.size > 0, "这次运行没有落下任何产物");
+  for (const key of required) {
+    assertSmoke(
+      found.has(key),
+      `本次运行少了必须的产物「${key}」；实际只有：${[...found.keys()].join("、") || "（一份都没有）"}`,
+    );
+  }
   return found;
 }
 

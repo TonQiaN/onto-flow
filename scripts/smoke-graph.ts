@@ -231,9 +231,14 @@ async function main(): Promise<void> {
   assertSmoke(exits.includes("通过"), `裁决从未报出「通过」出口（实际：${exits.join(" → ")}）`);
   assertSmoke(draftRounds >= 2, `起草只有 ${draftRounds} 轮，回边重入没有真的发生`);
 
-  // 「通过」出口的裁决书是这次运行的最终产物；路径从 run_nodes.outputs 读，重入轮带 rounds/ 前缀。
-  const artifacts = assertDeclaredArtifacts(started.runId);
-  assertSmoke(artifacts.has(`${N_JUDGE}·裁决书`), "「通过」出口声明的裁决书没有落盘");
+  // 扇出的两份评语、最后一轮的草稿，以及「通过」出口的裁决书都必须在；「打回」出口的
+  // 意见不点名——最后一轮走的是「通过」，那个出口的产物本来就不该存在。
+  assertDeclaredArtifacts(started.runId, [
+    `${N_DRAFT}·草稿`,
+    `${N_CRITIC_A}·评语`,
+    `${N_CRITIC_B}·评语`,
+    `${N_JUDGE}·裁决书`,
+  ]);
   console.log("\n图能力冒烟通过。");
 }
 
