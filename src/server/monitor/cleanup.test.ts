@@ -1,10 +1,8 @@
 /** 清理测试：隔离临时 data 根与内存 SQLite，绝不触碰真实运行历史。 */
 import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as schema from "../../db/schema";
+import { createTestDb, resetTestDb } from "../writers/test-db";
 
 const testPaths = vi.hoisted(() => ({
   dataDir: `/tmp/ontoflow-cleanup-${process.pid}-${Math.random().toString(16).slice(2)}`,
@@ -20,35 +18,8 @@ vi.mock("@/server/fs-safety", () => ({
   },
 }));
 
-const sqlite = new Database(":memory:");
-sqlite.exec(`
-CREATE TABLE runs (
-  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
-  workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
-  started_at INTEGER NOT NULL, finished_at INTEGER
-);
-CREATE TABLE run_results (
-  run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL, content TEXT NOT NULL, sha256 TEXT NOT NULL, created_at INTEGER NOT NULL
-);
-CREATE TABLE run_nodes (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, started_at INTEGER,
-  inputs TEXT, outputs TEXT, snapshot TEXT
-);
-CREATE TABLE run_node_rounds (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-  node_id TEXT NOT NULL, round INTEGER NOT NULL, started_at INTEGER NOT NULL,
-  inputs TEXT, outputs TEXT, snapshot TEXT
-);
-CREATE TABLE run_events (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, ts INTEGER NOT NULL, payload TEXT);
-CREATE TABLE node_usage (run_id TEXT NOT NULL);
-`);
-sqlite.pragma("foreign_keys = ON");
+const { sqlite } = await createTestDb();
 const activeRuns = new Set<string>();
-(globalThis as unknown as { ontoflowDb?: unknown; ontoflowActiveRuns?: Set<string> }).ontoflowDb =
-  drizzle(sqlite, {
-    schema,
-  });
 (globalThis as unknown as { ontoflowActiveRuns?: Set<string> }).ontoflowActiveRuns = activeRuns;
 
 const { deleteRun, runCleanup } = await import("./cleanup");
@@ -68,9 +39,15 @@ function storedRunDir(absolutePath: string): string {
 
 beforeEach(() => {
   activeRuns.clear();
-  sqlite.exec(
-    "DELETE FROM node_usage; DELETE FROM run_events; DELETE FROM run_node_rounds; DELETE FROM run_nodes; DELETE FROM run_results; DELETE FROM runs",
-  );
+  resetTestDb(sqlite);
+  // runs 外键指向 workflows：本文件每个夹具运行的父工作流行先落。
+  sqlite.exec(`
+    INSERT INTO workflows (id, name, created_at, updated_at) VALUES
+      ('workflow-1', '工作区清理', 0, 0), ('workflow-9', '目录不一致', 0, 0),
+      ('workflow-null', '无 run_dir', 0, 0), ('workflow-settling', '收束中', 0, 0),
+      ('workflow-failed-delete', '删除失败', 0, 0), ('workflow-batch', '批量删除', 0, 0),
+      ('workflow-silent', '无事件行', 0, 0), ('workflow-events', '事件清理', 0, 0);
+  `);
   fs.rmSync(testPaths.dataDir, { recursive: true, force: true });
   fs.mkdirSync(path.join(testPaths.dataDir, "runs"), { recursive: true });
 });
@@ -160,7 +137,7 @@ describe("运行工作区清理", () => {
       )
       .run("run-settling", "workflow-settling", "cancelled", storedRunDir(workspace), old);
     sqlite
-      .prepare("insert into run_events (run_id, ts, payload) values (?, ?, ?)")
+      .prepare("insert into run_events (run_id, ts, type, payload) values (?, ?, 'tool', ?)")
       .run("run-settling", old, JSON.stringify({ phase: "disposing" }));
     activeRuns.add("run-settling");
 
@@ -216,20 +193,30 @@ describe("运行工作区清理", () => {
     }
     activeRuns.add("run-active");
     sqlite.exec(`
-      INSERT INTO run_nodes (id, run_id) VALUES
-        ('na1', 'run-a'), ('na2', 'run-a'), ('nb1', 'run-b'),
-        ('nc1', 'run-active'), ('nc2', 'run-active'), ('nc3', 'run-active'),
-        ('nc4', 'run-active'), ('nc5', 'run-active');
-      INSERT INTO run_node_rounds (id, run_id, node_id, round, started_at) VALUES
-        ('d1', 'run-a', 'n1', 0, ${old}), ('d2', 'run-a', 'n1', 1, ${old}),
-        ('d3', 'run-a', 'n2', 0, ${old}),
-        ('d4', 'run-b', 'n1', 0, ${old}), ('d5', 'run-b', 'n1', 1, ${old}),
-        ('d6', 'run-active', 'n1', 0, ${old}), ('d7', 'run-active', 'n1', 1, ${old});
-      INSERT INTO run_events (run_id, ts, payload) VALUES
-        ('run-a', ${old}, '{}'), ('run-b', ${old}, '{}'), ('run-active', ${old}, '{}');
-      INSERT INTO node_usage (run_id) VALUES
-        ('run-a'), ('run-b'), ('run-b'), ('run-b'),
-        ('run-active'), ('run-active'), ('run-active'), ('run-active');
+      INSERT INTO run_nodes (id, run_id, node_id, label, status) VALUES
+        ('na1', 'run-a', 'n1', '甲', 'success'), ('na2', 'run-a', 'n2', '乙', 'success'),
+        ('nb1', 'run-b', 'n1', '甲', 'success'),
+        ('nc1', 'run-active', 'n1', '甲', 'success'), ('nc2', 'run-active', 'n2', '乙', 'success'),
+        ('nc3', 'run-active', 'n3', '丙', 'success'), ('nc4', 'run-active', 'n4', '丁', 'success'),
+        ('nc5', 'run-active', 'n5', '戊', 'success');
+      INSERT INTO run_node_rounds (id, run_id, node_id, round, status, started_at) VALUES
+        ('d1', 'run-a', 'n1', 0, 'success', ${old}), ('d2', 'run-a', 'n1', 1, 'success', ${old}),
+        ('d3', 'run-a', 'n2', 0, 'success', ${old}),
+        ('d4', 'run-b', 'n1', 0, 'success', ${old}), ('d5', 'run-b', 'n1', 1, 'success', ${old}),
+        ('d6', 'run-active', 'n1', 0, 'success', ${old}),
+        ('d7', 'run-active', 'n1', 1, 'success', ${old});
+      INSERT INTO run_events (run_id, ts, type, payload) VALUES
+        ('run-a', ${old}, 'tool', '{}'), ('run-b', ${old}, 'tool', '{}'),
+        ('run-active', ${old}, 'tool', '{}');
+      INSERT INTO node_usage (id, run_id, node_id, session_id, message_id, ts) VALUES
+        ('ua1', 'run-a', 'n1', 'n1', 'turn1-step1', ${old}),
+        ('ub1', 'run-b', 'n1', 'n1', 'turn1-step1', ${old}),
+        ('ub2', 'run-b', 'n1', 'n1', 'turn1-step2', ${old}),
+        ('ub3', 'run-b', 'n1', 'n1', 'turn1-step3', ${old}),
+        ('uc1', 'run-active', 'n1', 'n1', 'turn1-step1', ${old}),
+        ('uc2', 'run-active', 'n1', 'n1', 'turn1-step2', ${old}),
+        ('uc3', 'run-active', 'n1', 'n1', 'turn1-step3', ${old}),
+        ('uc4', 'run-active', 'n1', 'n1', 'turn1-step4', ${old});
       INSERT INTO run_results (run_id, kind, content, sha256, created_at) VALUES
         ('run-a', 'resume-match', '{}', '${"a".repeat(64)}', ${old}),
         ('run-b', 'resume-match', '{}', '${"b".repeat(64)}', ${old}),
@@ -254,6 +241,16 @@ describe("运行工作区清理", () => {
     expect(sqlite.prepare("select count(*) as count from run_node_rounds").get()).toEqual({
       count: 2,
     });
+    // 删 runs 行由外键把四张子表一起带走：手写 DDL 时代这三张是裸表，级联从没被验到过。
+    expect(
+      sqlite.prepare("select distinct run_id as runId from run_nodes order by runId").all(),
+    ).toEqual([{ runId: "run-active" }]);
+    expect(
+      sqlite.prepare("select distinct run_id as runId from run_events order by runId").all(),
+    ).toEqual([{ runId: "run-active" }]);
+    expect(
+      sqlite.prepare("select distinct run_id as runId from node_usage order by runId").all(),
+    ).toEqual([{ runId: "run-active" }]);
   });
 
   it("没有事件行的运行同样被置空：资格按运行算，不是按「有事件行」算", () => {
@@ -270,13 +267,13 @@ describe("运行工作区清理", () => {
       )
       .run("run-live", old);
     sqlite.exec(`
-      INSERT INTO run_node_rounds (id, run_id, node_id, round, started_at, inputs, outputs, snapshot)
-        VALUES ('s1', 'run-silent', 'in-1', 0, ${old}, '{"value":1}', '{"value":1}', NULL),
-               ('s2', 'run-silent', 'out-1', 0, ${old}, '{"value":1}', '{"value":1}', NULL),
-               ('s3', 'run-live', 'in-1', 0, ${old}, '{"value":9}', NULL, NULL);
-      INSERT INTO run_nodes (id, run_id, started_at, inputs, outputs, snapshot)
-        VALUES ('sn1', 'run-silent', ${old}, '{"value":1}', '{"value":1}', NULL),
-               ('sn2', 'run-live', ${old}, '{"value":9}', NULL, NULL);
+      INSERT INTO run_node_rounds (id, run_id, node_id, round, status, started_at, inputs, outputs, snapshot)
+        VALUES ('s1', 'run-silent', 'in-1', 0, 'success', ${old}, '{"value":1}', '{"value":1}', NULL),
+               ('s2', 'run-silent', 'out-1', 0, 'success', ${old}, '{"value":1}', '{"value":1}', NULL),
+               ('s3', 'run-live', 'in-1', 0, 'running', ${old}, '{"value":9}', NULL, NULL);
+      INSERT INTO run_nodes (id, run_id, node_id, label, status, started_at, inputs, outputs, snapshot)
+        VALUES ('sn1', 'run-silent', 'in-1', '输入', 'success', ${old}, '{"value":1}', '{"value":1}', NULL),
+               ('sn2', 'run-live', 'in-1', '输入', 'running', ${old}, '{"value":9}', NULL, NULL);
     `);
 
     const preview = runCleanup({ target: "events", beforeDays: 1, dryRun: true });
@@ -306,12 +303,12 @@ describe("运行工作区清理", () => {
       )
       .run("run-events", old, old);
     sqlite.exec(`
-      INSERT INTO run_events (run_id, ts, payload) VALUES ('run-events', ${old}, '{}');
-      INSERT INTO run_node_rounds (id, run_id, node_id, round, started_at, inputs, outputs, snapshot)
-        VALUES ('e1', 'run-events', 'n1', 0, ${old}, '{"a":1}', '{"b":2}', '{"c":3}'),
-               ('e2', 'run-events', 'n1', 1, ${old}, NULL, NULL, NULL);
-      INSERT INTO run_nodes (id, run_id, started_at, inputs, outputs, snapshot)
-        VALUES ('ne1', 'run-events', ${old}, '{"a":1}', '{"b":2}', '{"c":3}');
+      INSERT INTO run_events (run_id, ts, type, payload) VALUES ('run-events', ${old}, 'tool', '{}');
+      INSERT INTO run_node_rounds (id, run_id, node_id, round, status, started_at, inputs, outputs, snapshot)
+        VALUES ('e1', 'run-events', 'n1', 0, 'success', ${old}, '{"a":1}', '{"b":2}', '{"c":3}'),
+               ('e2', 'run-events', 'n1', 1, 'success', ${old}, NULL, NULL, NULL);
+      INSERT INTO run_nodes (id, run_id, node_id, label, status, started_at, inputs, outputs, snapshot)
+        VALUES ('ne1', 'run-events', 'n1', '甲', 'success', ${old}, '{"a":1}', '{"b":2}', '{"c":3}');
     `);
 
     const preview = runCleanup({ target: "events", beforeDays: 1, dryRun: true });
