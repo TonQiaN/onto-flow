@@ -844,27 +844,45 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
    * 文件与链接、一眼可查。四空格缩进也不当代码块：记录的列表续行普遍缩进四格，那里面全是真链接。
    */
   function outsideFences(text: string): string {
-    let fenced = false;
-    return text
-      .split("\n")
-      .map((line) => {
-        if (/^ {0,3}(?:```|~~~)/.test(line)) {
-          fenced = !fenced;
-          return "";
-        }
-        return fenced ? "" : line;
-      })
-      .join("\n");
+    const kept: string[] = [];
+    let opener: string | null = null;
+    for (const line of text.split("\n")) {
+      const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      const run = fence?.[1] ?? "";
+      const info = fence?.[2] ?? "";
+      if (opener === null) {
+        // 反引号栏的信息串里不能再有反引号（CommonMark），带反引号的那行根本不是围栏
+        if (fence && !(run.startsWith("`") && info.includes("`"))) {
+          opener = run;
+          kept.push("");
+        } else kept.push(line);
+        continue;
+      }
+      // 收栏只认「同字符、不短于开栏、后面没有别的内容」；栏内的 ```not-close 不是收栏，
+      // 把它当收栏会让真正的收栏重新开栏，之后整份记录的链接就被静默抹掉
+      if (fence && run[0] === opener[0] && run.length >= opener.length && info.trim() === "")
+        opener = null;
+      kept.push("");
+    }
+    return kept.join("\n");
   }
 
-  /** 一份记录里全部链接目标：行内 `[文字](目标)` 与引用式的定义行 `[标签]: 目标`，锚点已切掉。 */
+  /**
+   * 一份记录里全部链接目标：行内 `[文字](目标)` 与引用式的定义行 `[标签]: 目标`，锚点已切掉。
+   * 定义的目标允许换到下一行写（CommonMark），只看定义行会取到空目标、把坏链接放过去。
+   */
   function recordLinkTargets(raw: string): string[] {
     const text = outsideFences(raw);
     const targets: string[] = [];
     for (let open = text.indexOf("]("); open >= 0; open = text.indexOf("](", open + 2))
       targets.push(linkDestination(text, open + 2));
-    for (const line of text.match(/^ {0,3}\[[^\]]+]:.*$/gm) ?? [])
-      targets.push(linkDestination(line, line.indexOf("]:") + 2));
+    const lines = text.split("\n");
+    for (const [index, line] of lines.entries()) {
+      const definition = /^ {0,3}\[[^\]]+]:(.*)$/.exec(line);
+      if (!definition) continue;
+      const tail = definition[1] ?? "";
+      targets.push(linkDestination(tail.trim() === "" ? (lines[index + 1] ?? "") : tail, 0));
+    }
     return targets.map((target) => target.split("#")[0] ?? "");
   }
 
