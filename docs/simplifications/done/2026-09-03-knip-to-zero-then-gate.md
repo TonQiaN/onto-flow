@@ -1,6 +1,6 @@
 # 简化：把 knip 归零并加进 CI 门禁——一个配置开关、两个桶、十二个真死导出
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -46,7 +46,7 @@ e2e/helpers.ts:396     const graph = buildLinearGraph(input);   ← createWorkfl
   路由一律 `import { writeTool } from "@/server/writers/tool"`；该文件的注册副作用
   `registerEntityWriter × 5` 与 `rules.test.ts:276` 的「每种 `EntityKind` 一个注册写入器」断言不受影响）
 - **唯一的 unused dependency**：`undici`（见
-  [删掉 opencode 时代的残留](../done/2026-09-03-remove-undici-and-opencode-era-ghosts.md)）
+  [删掉 opencode 时代的残留](2026-09-03-remove-undici-and-opencode-era-ghosts.md)）
 
 **生产消费者：** 上列 12 条全部为零；两个桶的再导出无人经桶引用。
 **测试 / 文档消费者：** [DESIGN-V3](../../DESIGN-V3.md) 第 5 批一句、`AGENTS.md:111` 一句、
@@ -61,10 +61,10 @@ e2e/helpers.ts:396     const graph = buildLinearGraph(input);   ← createWorkfl
    **推荐 `true`**：本仓没有对外发布面，「本文件自用还挂 export」是噪声而非信号；真要收紧，收紧的方式是
    删 `export` 关键字，那是 100 处一次性提交，不该由 knip 天天报。
 2. **删除动作分派到各领域记录**，本记录只做统计与门禁：harness 侧的 `removeRunDir` / `composition.ts:40`
-   / `ToolExecute` 归 [harness 死导出与无主人的可选项](../done/2026-09-03-harness-dead-exports-and-unowned-options.md)；
+   / `ToolExecute` 归 [harness 死导出与无主人的可选项](2026-09-03-harness-dead-exports-and-unowned-options.md)；
    客户端侧的 `RunDetailResponse` / `STATUS_DOT` / `portSignature` / `ENTITY_KIND_*` 与库桶 14 条归
-   [清掉第 3、4 批之后的死导出](../done/2026-09-03-remove-dead-ui-exports-after-batches-3-4.md)；
-   `hasEntityWriter` 归 [两份私有 Result 收敛](../done/2026-09-03-converge-result-on-writeresult.md)。
+   [清掉第 3、4 批之后的死导出](2026-09-03-remove-dead-ui-exports-after-batches-3-4.md)；
+   `hasEntityWriter` 归 [两份私有 Result 收敛](2026-09-03-converge-result-on-writeresult.md)。
 3. **本记录自己做的**：`src/server/writers/index.ts:23-28` 的 6 条再导出、`src/lib/values.ts:20
    portValueToDisplay`、`src/server/references.ts:86 entityLabel` / `:101 entityName`。
 4. **然后**把 `npm run knip` 加进 `.github/workflows/ci.yml` 的 `check` 作业（**只加步骤，不改作业名**
@@ -97,3 +97,45 @@ include，`identity.ts:16` 的 `rpcPluginModulePath()`），knip 视角的「未
 必须是本轮最后一个合并的 PR**。
 
 预估净删约 45 行（20 行桶 + 25 行本记录自做的死导出），配置 +1 行、CI +1 步；风险等级：低。
+
+## 落地
+
+PR：待开（本轮最后一个合并的 PR，如「风险」段所要求）
+
+**与提议的差异**
+
+1. **剩下的条目比记录写时少得多。** 记录写于第 5 批开头，当时探针配置下剩 33 条。其余各领域的删除
+   记录先行落地之后，合并前实测只剩 **13 条**（20 unused exports + 52 unused exported types = 72，
+   开 `ignoreExportsUsedInFile` 后剩 5 + 8）：`undici` 已随 opencode 残留那条删掉，库桶 14 条、
+   `RunDetailResponse` / `STATUS_DOT` / `portSignature` / `ENTITY_KIND_*`、`removeRunDir`、
+   `composition.ts:40`、`hasEntityWriter`、`values.ts` 的 `portValueToDisplay`、`references.ts` 的
+   `entityLabel` / `entityName` 都已经不在名单上。
+2. **本记录实际删的是三处死再导出**，不是提议里列的那四项（其余三项已被别的 PR 删掉）：
+   - `src/server/writers/index.ts:23-28` 六条（5 个 `write<Kind>()` + `WriteResult`）——提议点名的那个桶。
+     `rg '"@/server/writers"' src scripts e2e` 只剩 11 处副作用 `import` 与两处注释，无人经桶取名字；
+     `registerEntityWriter × 5` 与 `rules.test.ts` 的「每种 `EntityKind` 一个注册写入器」断言不受影响
+     （那条只扫 `registerEntityWriter(` 调用）。
+   - `src/server/harness/trajectory.ts` 的整块展示 DTO 连带导出（6 条）——记录写时还不存在，是同批
+     「轨迹展示类型搬进 `@/lib`」那条落地时长出来的。这个模块的两个消费者（trajectory 路由、它自己的
+     单测）只取函数，一个类型都不取，整块删掉。
+   - `src/app/runs/lib.ts` 的连带导出收成抽屉确实从本模块取的四个，`TrajectorySessionStatus` /
+     `TrajectoryUsage` 无人取。
+3. **`ToolExecute` 的豁免用 knip 的 `tags`，不是 `ignoreIssues`。** 记录只说「用 knip 的 ignore 配置放过」；
+   `ignoreIssues` 只能按文件模式整类关闭（会连同 `tool-contract.ts` 将来真长出来的死代码一起放过），
+   所以改用 `"tags": ["-@public"]` + 该类型上的 `@public` 标记——逐个符号、自带理由，也给 ADR-0017
+   公开面将来的新成员一个现成的位置。`ToolContext` / `ToolRunOptions` / `ToolRunSandbox` /
+   `ToolRunResult` 不需要标记：它们在本文件内互相引用，`ignoreExportsUsedInFile` 已经覆盖。
+   反向验证过：把标记去掉，`npx knip` 报 `ToolExecute` 并退出 1。
+4. **文档同步比提议多两处。** 提议只说改 `AGENTS.md:90/:111` 与 `REVIEW.md` §0；实际还改了 `AGENTS.md`
+   门禁工具清单与 CI `check` 步骤那句、`README.md` 的测试块与门禁段（AGENTS.md 要求 README 与
+   Commands 块同改）、`docs/DESIGN-V3.md` 第 0b 批的「**不进 CI**」与第 5 批的交付物句。
+
+**验收实际跑了什么**
+
+- `npm run knip`：输出为空，`echo $?` 为 0。
+- `npm run check`（已含新加的 knip 步）：typecheck / oxlint / oxfmt --check / knip / vitest 全过，
+  46 个测试文件 391 通过 1 跳过。
+- `npm run build`：通过。
+- `npx playwright test -c playwright.clean.config.ts e2e/library-v2.spec.ts e2e/skills.spec.ts`
+  （工作树自己的 3593 端口与 `data/ontoflow.db`）：7 通过。碰了写入器桶与库页面，这两个 spec 是最贴近的。
+- 付费冒烟：不适用。删的全是没有调用点的再导出，不触及 harness 接缝。
