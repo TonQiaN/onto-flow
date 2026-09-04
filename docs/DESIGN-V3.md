@@ -427,7 +427,8 @@ interface RunGraph {
   `workflow-editor.spec.ts` 补一条：编辑器不再出现 `run-switcher` / 运行条元素。
 - 付费：停掉 dev server 后跑一次 `npx tsx scripts/smoke-engine.ts`，确认真实运行的 `runs.graph`
   非空、`run_node_rounds` 每个 Action 一行、运行页可回放；再跑 `npx tsx scripts/smoke-graph.ts`
-  验证回边重入产生多行轮次且回放能逐轮切换；结论写进 PR。
+  验证回边重入产生多行轮次且回放能逐轮切换；退出码与结论写进 PR（第 5 批之后冒烟失败即非零退出，
+  不再靠人眼读 stdout）。
 - Chrome 验收：打开一条已结束运行，拖光标看节点由等待→运行中→终态、连线随之激活；点节点看三页签，
   拖光标时轨迹高亮跟着走，点轨迹记录光标跳过去；用免费的输入→输出工作流发起一次运行，跳到运行页后
   看直播跟随、往回拖暂停、「跟随」回到现在；导航「运行中」面板深链到运行页。

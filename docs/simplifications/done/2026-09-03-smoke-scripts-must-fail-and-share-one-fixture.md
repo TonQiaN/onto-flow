@@ -1,0 +1,285 @@
+# 简化：付费冒烟共用一份夹具与终态断言，不再「打印后总是退出 0」
+
+状态: done
+
+## 问题
+
+**（一）三个冒烟脚本根本不会失败。** 它们等到运行进入任何终态就 `break`，然后打印，然后进程退出 0：
+
+```ts
+// scripts/smoke-engine.ts:196-200
+if (row && row.status !== "running") {
+  console.log(`\n终态：${row.status}${row.error ? `（${row.error}）` : ""}`);
+  console.log(`运行目录：${row.runDir}`);
+  break;                       // ← failed / cancelled 走的是同一条 break
+}
+```
+
+`scripts/smoke-graph.ts:317-321` 与 `scripts/smoke-capabilities.ts:253` 完全同型。
+`smoke-capabilities.ts` 更进一步，把每一项检查的结果打成字符串就完事
+（`:262/265/271/272/307/308`，如 `技能链接：${fs.existsSync(link) ? … : "不存在 ✗"}`、
+`口令来自技能：${text.includes("青山不改") ? "✓" : "✗"}`）。全仓只有 `smoke-parallel.ts:371`
+`if (failed > 0) throw new Error(...)` 是真断言，`smoke-harness.ts` 靠 `readFile(artifact)` 抛异常做部分
+断言（不校验内容）。
+
+**生产消费者：** `.github/workflows/smoke.yml:41`（`smoke-harness`）与 `:43`（`smoke-engine`）——**每天
+UTC 20:00 定时跑的付费步骤，跑出一个 failed 的运行同样会绿。** `.github/REVIEW.md` §0 第 5 条要求「触及
+harness 接缝 → 写明是否跑了付费冒烟与**结论**」——「结论」今天只能靠人眼读 stdout。
+
+**（二）四份夹具脚手架各写一遍。** `upsertObjectType` 在 `smoke-engine.ts:27-33` 与
+`smoke-graph.ts:34-40` **逐字相同**（`diff` 无输出）；`smoke-capabilities.ts:79-89` 是第三份；
+`smoke-parallel.ts:53-73` 是第四份（它改走写入器）。`upsertAction` 在 engine（`:35-90`）与 graph
+（`:49-105`）是近亲副本，graph 版是严格超集（多 `maxReentries` / `onExhausted` / `exitName`）。「轮询到
+终态 + 打印节点表 + 统计事件」这段在四个脚本里也各写一遍。engine / graph / capabilities 直接
+`db.insert(actions)` 绕开写入器（因此不留修订），parallel 走 `createAction` / `writeAction`——同一件事
+两种做法。
+
+**测试 / 文档消费者：** `smoke-graph` 只被 `AGENTS.md:100` 与 [DESIGN-V3](../../DESIGN-V3.md) 点名；
+`smoke-capabilities` 只被 `AGENTS.md:101` 点名；`smoke-parallel` 只被 `AGENTS.md:102` 点名。
+
+**打败了哪条已记录的理由：** `AGENTS.md`「The harness seam」写「A change on this seam also runs at least
+`smoke-harness`, or the PR says why it can skip it: CI has no credential, so only a paid smoke exercises a
+real model call」——这条理由成立的前提是**冒烟会在真实调用出问题时红**。今天它不会。`smoke-graph` 声称
+验的四件事（扇出、汇总、具名出口、回边重入）已经被免费机械覆盖：`src/server/engine/runner.test.ts` 有
+`describe("回边重入")` / `describe("冻结图与轮次行")` / `describe("回边重入等待环体收束")` /
+`describe("每节点总轮次上限")` 共 20 条用例，`src/lib/graph.test.ts` 覆盖 `classifyEdges` /
+`validateGraph`——所以 `smoke-graph` 的唯一增量价值就是「真模型真的报出了 `打回` 这个出口名」，而这一点
+它恰恰没断言。
+
+## 提议
+
+不删任何一个冒烟脚本（它们是付费门，删一个要更强的理由）。做三件事：
+
+1. **抽出 `scripts/smoke-fixture.ts`**（新文件，约 100 行）：`upsertObjectType` / `upsertAction` /
+   `upsertWorkflow` 一律**走写入器**（`createAction` / `writeAction` 与同族，也就是 `smoke-parallel.ts:53-73`
+   今天的做法），载荷形状取 graph 版的超集（`maxReentries` / `onExhausted` / `exitName`）——不能反过来把
+   engine / graph / capabilities 直插 `db.insert(actions)`、不留修订的捷径推广到唯一合规的那份
+   （`AGENTS.md`「Every entity write records a revision」；Codex 对 #28 的复审指出）。等待与打印分两档：
+   `awaitTerminal(runId, { timeoutMs })` 给单运行脚本，返回终态行、`status !== "success"` 直接抛；
+   `awaitTerminals(runIds, { timeoutMs, onTimeout })` 给 `smoke-parallel`，超时时先调 `onTimeout`
+   （即今天的 `abortRunBatch()`：取消每一次已受理的运行并等执行器退出，`smoke-parallel.ts:340-371`）再抛，
+   一次等待失败也不能把其余付费子进程晾着；`printNodes(runId)` 共用。`smoke-engine` / `smoke-graph` /
+   `smoke-capabilities` / `smoke-parallel` 四个脚本共用；四份 `upsertObjectType`、两份 `upsertAction`、
+   四份轮询与打印随之删除，`smoke-parallel` 的批量取消语义原样保留在 `onTimeout` 里。
+2. **把 `✓/✗` 打印改成失败即抛**：`smoke-capabilities.ts:262/265/271/272/307/308` 六项、
+   `smoke-engine` / `smoke-graph` 的终态判定、`smoke-harness.ts:69` 的产物内容（三行、首行 `# 你好`）与
+   结构化输出形状。`smoke-parallel.ts:340-371` 已经是这个写法，照抄它。
+3. **连带要改的**：`AGENTS.md` Commands 块 `:98-102` 五行注释各补「失败即非零退出」；
+   `.github/REVIEW.md` §0 第 5 条的「与结论」改成「与退出码」；`.github/workflows/smoke.yml` 无需改
+   （步骤本来就按退出码判定，只是过去永远为 0）；[DESIGN-V3](../../DESIGN-V3.md) 第 3 批付费验收口径
+   同步。不碰 `src/`。
+
+## 放弃了什么
+
+「冒烟只报告、由人判断」的宽松姿态：模型偶发的一次不理想输出（比如没恰好写三行）会把定时任务打红，需要
+把断言写得足够宽。抽公共模块后，单个脚本不再「一个文件读完」，读 `smoke-graph` 得同时看 `smoke-fixture`。
+
+## 验收
+
+免费部分：`npm run check`、`npm run build`。
+
+**付费部分（本条改的就是 harness 接缝的付费门，必须有）**：`npx tsx scripts/smoke-harness.ts` 与
+`npx tsx scripts/smoke-engine.ts` 各跑一次，PR 描述贴退出码；再**各造一次人为失败**（例如把 Action 的
+产物路径改错）确认脚本这次**非零退出**——这是本候选唯一的验收关键点。`smoke-graph` /
+`smoke-capabilities` / `smoke-parallel` 至少各跑一次确认改造后仍能跑通，退出码一并写进 PR 描述。
+
+## 风险
+
+改的是付费门本身，改错会让定时任务从「永远绿」变成「永远红」。断言宽度是唯一的调参点：建议只断言「运行
+终态为 success」「声明的产物存在」「关键子串出现」，不断言字数、行数、模型措辞。
+
+预估净删约 140 行（新增 `smoke-fixture.ts` 约 100 行，删除四份重复约 240 行）；风险等级：中。
+
+## 落地
+
+PR：https://github.com/TonQiaN/onto-flow/pull/51
+
+**与提议的差异（五处）**
+
+1. `smoke-fixture.ts` 比预估的「约 100 行」大（417 行），净行数因此不是 −140 而是 **+12**
+   （五个脚本 1343 → 1355 行，其中四份重复共删 800 行）。多出来的是提议自己要求的东西：走写入器
+   的 upsert 必须带「定义没变就不写」的幂等比对（这段原本只在 `smoke-parallel` 有，占约 150 行），
+   外加共用的产物断言与三条纪律的注释。重复是真的没了：四份 `upsertObjectType` → 一份、两份
+   `upsertAction` → 一份、四份轮询打印 → 两份，`smoke-parallel` 自己从 375 行缩到 178 行。
+2. **多抽了三个共用件**：`requireCredential()` / `requireModel()`（四个脚本各写一遍的凭据与模型行
+   检查）与 `assertDeclaredArtifacts(runId)`。后者是「声明的产物存在」这条断言的落点：路径从
+   `run_nodes.outputs` 读而不是自己拼——回边重入的第 N 轮产物在 `rounds/N/` 下，拼路径必然拼错
+   （图冒烟的裁决书实测就在 `workspace/rounds/2/verdict.md`）。它按**节点 id** 建键：`run_nodes.label`
+   对 Action 节点存的是 Action 名而不是画布标签，第一版拿标签当键，付费跑第一次就红了。
+3. **`printNodes` 拆成 `printNodes` + `printEvents`**：提议把「轮询 + 打印节点 + 统计事件」当一段，
+   但让一个叫 printNodes 的函数顺手打事件是名不副实，拆成两个各自一行调用。
+4. **`smoke-harness` 不引 `smoke-fixture`**，断言就地写（四行）。夹具模块 import `../src/db`，
+   而 harness 冒烟刻意不碰数据库——它验的就是「子进程这一层自己能不能立起来」，为省四行给它接上
+   数据库是倒退。它的收束断言放在 `finally` **之外**：在 finally 里抛会顶掉 try 里真正的首个错误。
+5. **`smoke-graph` 补了提议点名却没人做的那条断言**：「真模型真的报出了『打回』这个出口名」。
+   现在断言裁决走过 `打回` 与 `通过` 两个出口、起草被推到第 2 轮。断言宽度按「风险」段收着写：
+   只钉终态 success、声明的产物存在、关键子串（`# 你好`、`青山不改`、`【冒烟印章】`）与出口名，
+   不钉字数、行数、模型措辞；`smoke-harness` 原提议里的「三行」没有断言。
+   顺带把 `smoke-capabilities` 的 Skill / Tool 也改走写入器（`createSkill` / `writeTool` 同族，
+   写入器自己会物化技能投影），与 Codex 复审要求的「不推广直插捷径」同一条理由。
+
+**验收实际跑了什么**
+
+免费：`npm run check`（vitest 46 文件 389 通过 1 跳过）、`npm run build`，均绿。
+
+付费（本条改的就是付费门，必须真跑；工作树自建 `data/`，八次运行合计 **CNY 0.3638**，
+另有三次 harness 子进程冒烟不入库、量级 0.01 以下）：
+
+| 命令 | 退出码 | 终态与关键核对 |
+|---|---|---|
+| `npx tsx scripts/smoke-harness.ts` | **0** | 结构化输出 `{captured:true,{artifact,line_count}}`、产物含 `# 你好`、`code=0 expected=true` |
+| `npx tsx scripts/smoke-engine.ts` | **0** | 终态 success；4 份产物逐一核在盘上；事件 18 条 |
+| 人为失败①：`smoke-harness` 的提示词改成写 `# 再见`（断言不动） | **1** | `Error: 产物 hello.md 里没有要求的首行「# 你好」` |
+| 人为失败②：`smoke-engine` 起草的产物路径改成工作区里必然已存在的目录 `inputs` | **1** | 终态 **failed**（`声明的产物没有写出来：inputs`）→ `Error: 运行终态是 failed…，冒烟要求 success`。**这就是本记录的验收关键点**：改前同一情形打印 `终态：failed` 后照样退出 0 |
+| `npx tsx scripts/smoke-graph.ts` | **0** | 终态 success；`裁决走过的出口：打回 → 通过；起草共 2 轮`；裁决书落在 `rounds/2/verdict.md` |
+| `npx tsx scripts/smoke-capabilities.ts` | **0** | 六项全过：技能 symlink、Tool 包装插件、口令 `青山不改`、印章 `【冒烟印章】`、可见工具里**没有** bash、有 `smoke_stamp` |
+| `npx tsx scripts/smoke-parallel.ts 2` | **0** | 2 个运行全 success，用量与标记互不串号，启动/收束区间完整重叠 |
+
+两次人为失败验完即还原（`rg` 复核脚本里没有残留）。中途还有一次真实的红：`smoke-graph` 第一版
+把产物键写成标签，退出码 1、报「裁决书没有落盘」——正是这套断言该有的行为，改成按节点 id 建键后
+重跑退出 0。
+
+e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。
+
+**Codex 首轮复审的两条（都成立，已改并重跑付费验证）**
+
+1. **印章那项检查证明不了「工具被调用」**：`【冒烟印章】` 这串字模型自己也抄得出来。现在同时要求
+   事件日志里有一条 `smoke_stamp` 的**成功结果**（`tool/result` 落库为 `status: "ok"`）；
+   `smoke-capabilities` 因此从六项变七项。
+2. **Skill / Tool 的写是无条件的**，与夹具自己立的「定义没变就不写」纪律相悖，每跑一次就多两版
+   相同修订并重新物化技能。改成 `upsertSkill` / `upsertTool` 进夹具，与其余三个 upsert 同一套
+   比对。重跑一次能力冒烟核对：`revisions` 里 skill / tool 各仍为 1 行，退出码 0。
+
+**Codex 二轮复审的一条（成立，已改并重跑）**
+
+3. **`exit.expected` 证明不了「干净收束」**：`RunProcess.#performDispose()` 一进门就把
+   `#disposeRequested` 置真，所以 shutdown 挂死之后被 SIGTERM / SIGKILL 打掉的子进程同样是
+   `expected: true`。`smoke-harness` 的收束断言改成 `expected && code === 0 && signal === null`，
+   打印也带上 signal。重跑：`code=0 signal=null expected=true`，退出码 0。
+
+**Codex 三轮复审的一条（成立，已改并重跑四个脚本）**
+
+4. **「至少有产物」不是断言**：某个 Action 的输出根本没落进 `run_nodes.outputs` 时，扫描会静静
+   跳过它，而输入节点物化出来的那份文件已经让 `found.size > 0` 成立——`smoke-engine` 因此可能在
+   缺草稿或缺摘要的情况下退出 0。`assertDeclaredArtifacts(runId, required)` 加了必须命中的键：
+   engine 点名 `起草·草稿` + `摘要·摘要`，graph 点名两份评语 + 最后一轮草稿 + 「通过」出口的
+   裁决书（「打回」出口的意见刻意不点名——最后一轮走的是「通过」，那份产物本来就不该存在），
+   capabilities 点名 `报口令·回执`。改完四个付费脚本各重跑一次，退出码全 0。
+
+**Codex 四轮复审的一条（成立，已改并重跑 engine 与 graph）**
+
+5. **事件计数只打印不断言**：会话事件的落库回调抛异常时 `RunProcess.#onNotification` 会吞掉它
+   （运行目录的 jsonl 才是权威副本），于是节点照样成功、产物照样齐全，只有 `run_events` 空了，
+   而 `smoke-engine` 头注释声称验的「事件落库」永远为真。`printEvents` 改名 `assertEvents`，
+   默认要求 `tool` 与 `session.idle` 两档非空——结构化输出本身就是一次工具调用、每个回合结束都
+   落一条 idle，两者与模型措辞无关；`reasoning` / `text` 看模型当轮心情，刻意不要求。
+   重跑：engine 退出 0（`事件 17 条：reasoning×3 tool×12 session.idle×2`）、graph 退出 0
+   （`事件 197 条：… tool×146 session.idle×8`）。
+
+**Codex 五轮复审的两条（都成立，已改并重跑）**
+
+6. **图冒烟的裸边 id `e1`…`e7` 会撞主键**：`workflow_edges.id` 是全表主键，本机上任何一张同样用
+   短 id 的图都会让 `writeWorkflow` 插入失败，冒烟还没开始就先红。改成 `graph-smoke-e1`…`e7`，
+   相对顺序不变，回边判定的可复现性照旧（这批边 id 是改造前就有的老写法，其余三个脚本本来就带前缀）。
+7. **投影自愈**：`upsertSkill` 的 no-op 分支跳过 `materializeSkill`，而冒烟脚本不经
+   `src/instrumentation.ts` 的启动重建钩子——投影被删过就再也补不回来，受理时要么拒绝要么读到旧版本。
+   no-op 分支现在检查 `data/skills/<slug>/SKILL.md` 是否还在，缺了就按库里的定义重建（补目录，不记修订）。
+   实测：手工 `rm -rf data/skills/<slug>` 后跑能力冒烟，打印「技能投影缺失，已按库里的定义重建」，
+   退出码 0。
+
+**最终一轮付费复跑（全部按最终代码）**：`smoke-harness` 0、`smoke-engine` 0、`smoke-graph` 0、
+`smoke-capabilities` 0、`smoke-parallel 2` 0；两次人为失败仍是 1。全程真实模型花销合计 CNY 0.9545。
+
+**Codex 六轮复审的两条（都成立，已改并在一次付费跑里同时验证）**
+
+8. **工作流的 `settings` 也得由夹具整体声明**：`writeWorkflow` 对缺省的 `settings` 是「沿用现值」
+   （ADR-0016），而这些冒烟工作流常年留在库里——谁在网页上把 `webSearch` 打开，下一次付费冒烟
+   就跑在另一份组合上、为与被测代码无关的原因红。`upsertWorkflow` 的声明面、比对、建与改四处
+   都带上 `EMPTY_WORKFLOW_SETTINGS`。
+9. **投影只查「文件在」不够**：写入器事务提交之后、换链接之前 `materializeSkill` 抛了的话，
+   库里已是新定义而盘上还是旧 `SKILL.md`。现在读出投影的 `SKILL.md` 查三样事实——frontmatter 的
+   `name` 等于目录 slug、描述里带当前中文名、正文与库里一致——任何一样不符就重建（不复刻
+   frontmatter 排版，那是 `skill-library` 的事）。
+   实测（同一次付费跑同时验两条）：手工把 `SKILL.md` 改成陈旧内容、并把工作流 settings 改成
+   `{"toggles":{"webSearch":true}}`，跑能力冒烟 → 打印「技能投影异常（frontmatter 里的 name 与
+   目录名对不上），已按库里的定义重建」、settings 回到 `{"toggles":{},"mcpServers":[]}`、退出码 0。
+
+**Codex 七轮复审的一条（成立，已改并重跑）**
+
+10. **投影的陈旧判据漏了描述**：只改描述的那一次写入若在换链接前抛异常，slug / 库名 / 正文都还
+    对得上，而描述正是模型据以发现技能的那句话。判据补一条 `dto.description || dto.name`
+    （空描述时上游拿库名兜底，与 `materializeSkill` 同源）。实测：把投影里的描述改成别的字样，
+    跑能力冒烟 → 「技能投影异常（描述与库里的定义不一致），已按库里的定义重建」、退出码 0。
+
+**Codex 八轮复审的两条（都成立，改法都是「换掉判据」而不是再补一层）**
+
+11. **事件断言按整次运行汇总不够**：多 Action 的图里一个会话丢光事件、另一个会话补上同样的档，
+    汇总照样通过。改成**逐会话**查：会话 id 从 `run_node_rounds` 取（回边重入的第二轮是另一个
+    会话，同样要落齐），每个成功的 Action 轮次都必须有自己的 `tool` 与 `session.idle`。
+12. **投影的陈旧判据用子串比对，正文被改短时会漏**（旧文件仍包含新正文）。与其把判据越修越细
+    （这已是第四轮修同一行），不如**取消判据**：no-op 分支无条件按库里的行重投一次
+    `materializeSkill`——库里的行是唯一事实源，重投只换目录、不记修订，一个新版本目录立即顶掉旧的。
+    这同时满足了二轮「别重复记修订」与五~八轮「投影必须可信」两个方向的意见。
+    重跑：engine 0、capabilities 0（`revisions` 里 skill / tool 仍各 1 行）、graph 0
+    （8 个会话逐个查过 `tool` 与 `session.idle`）。
+
+**Codex 九轮复审的一条（成立，已改并重跑）**
+
+13. **并行证据只打印不断言**：全部运行成功但被引擎串行跑掉，`failed` 仍是 0、脚本照样退出 0，
+    而这个冒烟验的就是「同时在飞」。`最早收束之前全部已启动` 从提示升格为断言——受理是同步的
+    （`startRun` 落库后即返回，执行异步起），单次运行又要好几秒，这条判据是稳的而不是时序赌博；
+    不满足时报出最晚启动与最早收束两个时刻。重跑 `smoke-parallel 2` 退出码 0。
+
+**Codex 十轮复审的一条（成立，已改并重跑）**
+
+14. **并行证据量错了对象**：`runs.startedAt` 是**受理**时刻（`startRun` 在受理事务里就写它，执行
+    随后异步起），受理全在毫秒内完成，所以哪怕执行被串行化，「全部运行先于最早收束启动」照样成立。
+    判据改成量 **Action 节点行**的起止：最晚开始的 Action 必须早于最早结束的 Action——每个 Action
+    就是一个真在飞的 harness 子进程。重跑 `smoke-parallel 2` 退出码 0，
+    「最早结束的 Action 之前 2 个 Action 会话已全部开始」。
+
+**Codex 十一轮复审的两条（都成立，已改并重跑）**
+
+15. **并行冒烟不查事件**：并发写 `run_events` 失败时用量与产物都还在，`failed` 仍是 0。逐个成功
+    运行调 `assertEvents`。
+16. **固定节点 id 遇到改名会撞主键**：`workflow_nodes.id` 是全表主键；工作流一旦在网页上被改名，
+    `upsertWorkflow` 按名字找不到就新建一份，再拿这些固定 id 插入必然 UNIQUE 失败（改造前 engine /
+    graph 每次重写都换 UUID，所以没这个问题；`smoke-parallel` 的固定 id 一直有）。改成**按名字找不到
+    就按第一个节点 id 认领它今天的属主**，名字随后由整体替换改回去。实测：把工作流改名成
+    「被人改过名的引擎冒烟」再跑 → 打印「按节点 id 认领了改过名的工作流」、工作流 id 不变、
+    名字复位、退出码 0。
+
+**Codex 十二轮复审的一条（成立，已改；负面用例是免费跑的）**
+
+17. **认领门槛太松**：只按第一个节点 id 认领，会把一张碰巧用了同名节点 id 的用户图改名重写。
+    门槛改成**整套节点 id 都归它**，对不齐就抛错点名缺的那些 id，让人自己解冲突，绝不覆盖。
+    负面用例免费核对（脚本在受理前就抛，不调模型）：造一张只共用一个节点 id 的用户图 →
+    「节点 id「claim-check-input」已属于工作流「用户自己的图·认领门槛」，但那张图缺少本夹具的
+    其余节点…」，用例自己清理干净。正面用例重跑 `smoke-engine`：改名后仍被认回、id 不变、
+    名字复位、退出码 0。
+
+**Codex 十三轮复审的一条（成立，已改并重跑）**
+
+18. **汇总没被断言**：图冒烟号称验「汇总」，但只看产物看不出裁决是不是等齐了两位评委——两份评语
+    在运行结束后反正都在盘上。改成逐轮查 `run_node_rounds.inputs`：裁决的每一轮的 `评语` 必须是
+    两个元素（一条入线满足就开跑的回归会让它只收到一份）。重跑 `smoke-graph` 退出码 0。
+
+**Codex 十四轮复审的两条（都成立，已改并重跑三个脚本）**
+
+19. **只查 `tool` 类型不够**：`tool/call` 落库时也是 `type: "tool"`（`status: "running"`），
+    `tool/result` 那条链路断了照样通过、时间轴上留下永远在跑的调用。逐会话再加一条：必须有一条
+    `status: "ok"` 的 `structured_output` 结果事件——成功的 Action 必然交过一次结构化输出
+    （实测每个成功会话恰好一条 ok）。
+20. **汇总只数个数不够**：两条入线都解析到同一位评委的产物时 `length` 仍是 2。补一条：两份评语的
+    文件名必须恰是 `critic-a.md` 与 `critic-b.md` 各一份。
+    重跑：engine 0、parallel 2 → 0、graph 0。
+
+**合并 main 时的一处适配**（#52「删掉 run_nodes 的 inputs / outputs / snapshot 三列」先合了）：
+`printNodes` 与 `assertDeclaredArtifacts` 原来读 `run_nodes.outputs`，那三列已经不在——改读
+`readLatestSuccessfulOutputs(runId, nodeId)`（`src/server/run-rounds.ts`，#52 为同一目的引入的
+读法），产物路径仍是「那一轮真实生效的」。`AGENTS.md` 的冲突两边意图各取：main 那两句（REVIEW.md
+的定位、`rules.test.ts` 的清单）照收，`smoke.yml` 那句保留本 PR 加的「失败即非零退出，红步骤就是结论」。
+合并后 `npm run check`（46 文件 391 通过 1 跳过）、`npm run build` 全绿，并在工作树自己的 data/ 上
+重跑 `npx tsx scripts/smoke-engine.ts` **退出码 0**（新读法下产物、事件、断言都对）。
+
+**全部付费花销合计约 CNY 2.0**（十四轮复审期间的反复重跑、两次人为失败演练、清库后的整轮复跑都算在内）。
