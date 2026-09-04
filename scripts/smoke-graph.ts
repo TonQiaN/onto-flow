@@ -7,111 +7,40 @@
  *                    └────────── 回边 ─────────────┘
  *
  * 起草声明 maxReentries=1 / onExhausted=accept，裁决被要求第一轮一律「打回」，
- * 因此这张图必然走满一次循环——这就是验证目的。
+ * 因此这张图必然走满一次循环——这就是验证目的，也是收尾断言的对象：
+ * 免费的单测已经覆盖回边判定与轮次记账，这里唯一的增量价值是**真模型真的报出了
+ * 「打回」这个出口名、环体真的被推进了第二轮**（`docs/simplifications`）。
  *
  * 运行：DEEPSEEK_API_KEY=... npx tsx scripts/smoke-graph.ts
- * 会真实调用模型（约 8 次）并产生费用。
+ * 会真实调用模型（约 8 次）并产生费用。**任何一项检查不过即非零退出**。
  */
-import { and, eq } from "drizzle-orm";
-import {
-  actionPorts,
-  actions,
-  db,
-  models,
-  objectTypes,
-  runEvents,
-  runNodes,
-  runs,
-  workflowEdges,
-  workflowNodes,
-  workflows,
-} from "../src/db";
+import { eq } from "drizzle-orm";
+import { db, runNodeRounds } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
-import { totalUsageTokens } from "./token-total";
+import {
+  assertDeclaredArtifacts,
+  assertEvents,
+  assertSmoke,
+  awaitTerminal,
+  printNodes,
+  requireCredential,
+  requireModel,
+  upsertAction,
+  upsertObjectType,
+  upsertWorkflow,
+} from "./smoke-fixture";
 
 const PREFIX = "图冒烟";
-
-function upsertObjectType(name: string, kind: "text" | "file" | "json"): string {
-  const existing = db.select().from(objectTypes).where(eq(objectTypes.name, name)).get();
-  if (existing) return existing.id;
-  const id = crypto.randomUUID();
-  db.insert(objectTypes).values({ id, name, kind, description: "冒烟用" }).run();
-  return id;
-}
-
-interface PortSpec {
-  name: string;
-  objectTypeId: string;
-  artifactPath?: string;
-  exitName?: string;
-}
-
-function upsertAction(input: {
-  name: string;
-  prompt: string;
-  rule: string;
-  modelId: string;
-  inputs: PortSpec[];
-  outputs: PortSpec[];
-  maxReentries?: number;
-  onExhausted?: "fail" | "accept";
-}): string {
-  const existing = db.select().from(actions).where(eq(actions.name, input.name)).get();
-  const id = existing?.id ?? crypto.randomUUID();
-  const row = {
-    name: input.name,
-    description: "冒烟用",
-    prompt: input.prompt,
-    rule: input.rule,
-    modelId: input.modelId,
-    reasoningEffort: "low" as const,
-    maxReentries: input.maxReentries ?? 0,
-    onExhausted: input.onExhausted ?? ("fail" as const),
-  };
-  if (existing) db.update(actions).set(row).where(eq(actions.id, id)).run();
-  else
-    db.insert(actions)
-      .values({ id, ...row })
-      .run();
-
-  db.delete(actionPorts).where(eq(actionPorts.actionId, id)).run();
-  input.inputs.forEach((p, i) =>
-    db
-      .insert(actionPorts)
-      .values({
-        actionId: id,
-        direction: "input",
-        name: p.name,
-        objectTypeId: p.objectTypeId,
-        position: i,
-      })
-      .run(),
-  );
-  input.outputs.forEach((p, i) =>
-    db
-      .insert(actionPorts)
-      .values({
-        actionId: id,
-        direction: "output",
-        name: p.name,
-        objectTypeId: p.objectTypeId,
-        artifactPath: p.artifactPath ?? null,
-        exitName: p.exitName ?? null,
-        position: i,
-      })
-      .run(),
-  );
-  return id;
-}
+const N_IN = "graph-smoke-input";
+const N_DRAFT = "graph-smoke-draft";
+const N_CRITIC_A = "graph-smoke-critic-a";
+const N_CRITIC_B = "graph-smoke-critic-b";
+const N_JUDGE = "graph-smoke-judge";
+const N_OUT = "graph-smoke-output";
 
 async function main(): Promise<void> {
-  if (!process.env.DEEPSEEK_API_KEY) throw new Error("缺少 DEEPSEEK_API_KEY");
-  const model = db
-    .select()
-    .from(models)
-    .where(and(eq(models.providerId, "deepseek-official"), eq(models.modelId, "deepseek-v4-flash")))
-    .get();
-  if (!model) throw new Error("找不到模型行，先跑 npm run db:seed");
+  requireCredential();
+  const model = requireModel();
 
   const tNeed = upsertObjectType(`${PREFIX}需求`, "text");
   const tDraft = upsertObjectType(`${PREFIX}草稿`, "file");
@@ -163,147 +92,123 @@ async function main(): Promise<void> {
     ],
   });
 
-  const wfName = `${PREFIX}·扇出汇总与回边`;
-  let wf = db.select().from(workflows).where(eq(workflows.name, wfName)).get();
-  if (!wf) {
-    const id = crypto.randomUUID();
-    db.insert(workflows)
-      .values({ id, name: wfName, description: "M2 验收：扇出 → 汇总 → 具名出口 → 回边重入" })
-      .run();
-    wf = db.select().from(workflows).where(eq(workflows.id, id)).get()!;
-  }
-  db.delete(workflowEdges).where(eq(workflowEdges.workflowId, wf.id)).run();
-  db.delete(workflowNodes).where(eq(workflowNodes.workflowId, wf.id)).run();
-
-  const nIn = crypto.randomUUID();
-  const nDraft = crypto.randomUUID();
-  const nA = crypto.randomUUID();
-  const nB = crypto.randomUUID();
-  const nJudge = crypto.randomUUID();
-  const nOut = crypto.randomUUID();
-  db.insert(workflowNodes)
-    .values([
+  const wf = upsertWorkflow({
+    name: `${PREFIX}·扇出汇总与回边`,
+    description: "M2 验收：扇出 → 汇总 → 具名出口 → 回边重入",
+    nodes: [
       {
-        id: nIn,
-        workflowId: wf.id,
+        id: N_IN,
         kind: "input",
+        actionId: null,
         objectTypeId: tNeed,
         label: "需求",
         x: 0,
         y: 120,
       },
       {
-        id: nDraft,
-        workflowId: wf.id,
+        id: N_DRAFT,
         kind: "action",
         actionId: aDraft,
+        objectTypeId: null,
         label: "起草",
         x: 220,
         y: 120,
       },
       {
-        id: nA,
-        workflowId: wf.id,
+        id: N_CRITIC_A,
         kind: "action",
         actionId: aCriticA,
+        objectTypeId: null,
         label: "评委甲",
         x: 440,
         y: 20,
       },
       {
-        id: nB,
-        workflowId: wf.id,
+        id: N_CRITIC_B,
         kind: "action",
         actionId: aCriticB,
+        objectTypeId: null,
         label: "评委乙",
         x: 440,
         y: 220,
       },
       {
-        id: nJudge,
-        workflowId: wf.id,
+        id: N_JUDGE,
         kind: "action",
         actionId: aJudge,
+        objectTypeId: null,
         label: "裁决",
         x: 660,
         y: 120,
       },
       {
-        id: nOut,
-        workflowId: wf.id,
+        id: N_OUT,
         kind: "output",
+        actionId: null,
         objectTypeId: tNote,
         label: "产出",
         x: 880,
         y: 120,
       },
-    ])
-    .run();
-  // 边 id 显式给定：回边判定按 id 排序遍历，固定 id 让判定结果可复现。
-  db.insert(workflowEdges)
-    .values([
+    ],
+    // 边 id 显式给定：回边判定按 id 排序遍历，固定 id 让判定结果可复现。
+    // 带 graph-smoke- 前缀是因为 workflow_edges.id 是全表主键：裸 e1…e7 会与本机上
+    // 任何一张同样用短 id 的图撞主键，冒烟还没开始就先失败。
+    edges: [
       {
-        id: "e1",
-        workflowId: wf.id,
-        sourceNodeId: nIn,
+        id: "graph-smoke-e1",
+        sourceNodeId: N_IN,
         sourcePort: "value",
-        targetNodeId: nDraft,
+        targetNodeId: N_DRAFT,
         targetPort: "需求",
       },
       {
-        id: "e2",
-        workflowId: wf.id,
-        sourceNodeId: nDraft,
+        id: "graph-smoke-e2",
+        sourceNodeId: N_DRAFT,
         sourcePort: "草稿",
-        targetNodeId: nA,
+        targetNodeId: N_CRITIC_A,
         targetPort: "草稿",
       },
       {
-        id: "e3",
-        workflowId: wf.id,
-        sourceNodeId: nDraft,
+        id: "graph-smoke-e3",
+        sourceNodeId: N_DRAFT,
         sourcePort: "草稿",
-        targetNodeId: nB,
+        targetNodeId: N_CRITIC_B,
         targetPort: "草稿",
       },
       {
-        id: "e4",
-        workflowId: wf.id,
-        sourceNodeId: nA,
+        id: "graph-smoke-e4",
+        sourceNodeId: N_CRITIC_A,
         sourcePort: "评语",
-        targetNodeId: nJudge,
+        targetNodeId: N_JUDGE,
         targetPort: "评语",
       },
       {
-        id: "e5",
-        workflowId: wf.id,
-        sourceNodeId: nB,
+        id: "graph-smoke-e5",
+        sourceNodeId: N_CRITIC_B,
         sourcePort: "评语",
-        targetNodeId: nJudge,
+        targetNodeId: N_JUDGE,
         targetPort: "评语",
       },
       {
-        id: "e6",
-        workflowId: wf.id,
-        sourceNodeId: nJudge,
+        id: "graph-smoke-e6",
+        sourceNodeId: N_JUDGE,
         sourcePort: "意见",
-        targetNodeId: nDraft,
+        targetNodeId: N_DRAFT,
         targetPort: "意见",
       },
       {
-        id: "e7",
-        workflowId: wf.id,
-        sourceNodeId: nJudge,
+        id: "graph-smoke-e7",
+        sourceNodeId: N_JUDGE,
         sourcePort: "裁决书",
-        targetNodeId: nOut,
+        targetNodeId: N_OUT,
         targetPort: "value",
       },
-    ])
-    .run();
-  console.log(`工作流已就绪：${wfName}（${wf.id}）`);
+    ],
+  });
 
   const started = await startRun(wf.id, {
-    [nIn]: {
+    [N_IN]: {
       kind: "text",
       text: "写一段说明：为什么 Agent 工作流的中间产物应该落在文件里，而不是沿连线传值。",
     },
@@ -311,28 +216,51 @@ async function main(): Promise<void> {
   if (!started.ok) throw new Error(`启动失败：${JSON.stringify(started)}`);
   console.log(`运行已启动：${started.runId}`);
 
-  const t0 = Date.now();
-  for (;;) {
-    const row = db.select().from(runs).where(eq(runs.id, started.runId)).get();
-    if (row && row.status !== "running") {
-      console.log(`\n终态：${row.status}${row.error ? `（${row.error}）` : ""}`);
-      console.log(`运行目录：${row.runDir}`);
-      break;
-    }
-    if (Date.now() - t0 > 900_000) throw new Error("等待运行收束超时");
-    await new Promise((r) => setTimeout(r, 2000));
-  }
+  await awaitTerminal(started.runId, { timeoutMs: 900_000 });
+  printNodes(started.runId);
+  assertEvents(started.runId);
 
-  console.log("\n节点：");
-  for (const n of db.select().from(runNodes).where(eq(runNodes.runId, started.runId)).all()) {
-    const tokens = totalUsageTokens(n);
-    console.log(
-      `  ${n.label.padEnd(8)} ${n.status.padEnd(8)} tokens=${tokens}` +
-        `${n.error ? ` 错误=${n.error}` : ""}`,
+  // 回边真的走过：裁决报出过「打回」，起草因此被推进到第二轮。
+  const rounds = db
+    .select()
+    .from(runNodeRounds)
+    .where(eq(runNodeRounds.runId, started.runId))
+    .all();
+  const exits = rounds.filter((r) => r.nodeId === N_JUDGE).map((r) => r.exitName);
+  const draftRounds = rounds.filter((r) => r.nodeId === N_DRAFT).length;
+  console.log(`\n裁决走过的出口：${exits.join(" → ")}；起草共 ${draftRounds} 轮`);
+  assertSmoke(exits.includes("打回"), `裁决从未报出「打回」出口（实际：${exits.join(" → ")}）`);
+  assertSmoke(exits.includes("通过"), `裁决从未报出「通过」出口（实际：${exits.join(" → ")}）`);
+  assertSmoke(draftRounds >= 2, `起草只有 ${draftRounds} 轮，回边重入没有真的发生`);
+
+  // 汇总：裁决的每一轮都必须同时拿到两位评委的评语。「一条入线满足就开跑」的回归只看产物看不
+  // 出来——两份评语在运行结束后反正都在盘上；证据在那一轮自己的 inputs 里（Codex 十三轮复审）。
+  for (const round of rounds.filter((r) => r.nodeId === N_JUDGE && r.status === "success")) {
+    const notes = (round.inputs as { 评语?: unknown } | null)?.评语;
+    assertSmoke(
+      Array.isArray(notes) && notes.length === 2,
+      `裁决第 ${round.round} 轮只收到 ${Array.isArray(notes) ? notes.length : 0} 份评语：` +
+        `汇总没有等齐两位评委`,
+    );
+    // 两条入线不能解析到同一份产物：只数个数的话，两条边都取到评委甲那份也是 2。
+    const names = notes
+      .map((note) => (note as { file?: { name?: string } } | null)?.file?.name ?? "?")
+      .sort((left, right) => left.localeCompare(right));
+    assertSmoke(
+      names[0] === "critic-a.md" && names[1] === "critic-b.md",
+      `裁决第 ${round.round} 轮收到的两份评语不是两位评委各一份：${names.join("、")}`,
     );
   }
-  const events = db.select().from(runEvents).where(eq(runEvents.runId, started.runId)).all();
-  console.log(`\n事件 ${events.length} 条`);
+
+  // 扇出的两份评语、最后一轮的草稿，以及「通过」出口的裁决书都必须在；「打回」出口的
+  // 意见不点名——最后一轮走的是「通过」，那个出口的产物本来就不该存在。
+  assertDeclaredArtifacts(started.runId, [
+    `${N_DRAFT}·草稿`,
+    `${N_CRITIC_A}·评语`,
+    `${N_CRITIC_B}·评语`,
+    `${N_JUDGE}·裁决书`,
+  ]);
+  console.log("\n图能力冒烟通过。");
 }
 
 await main();
