@@ -65,6 +65,7 @@ import {
   type NodePayload,
   type WorkflowRow,
 } from "../src/server/writers/workflow";
+import { EMPTY_WORKFLOW_SETTINGS } from "../src/lib/workflow-settings";
 import { totalUsageTokens } from "./token-total";
 
 export type ModelRow = typeof models.$inferSelect;
@@ -251,12 +252,29 @@ export function upsertSkill(input: SkillFixture): SkillDto {
   if (!sameDefinition(current, { ...input, files: [] }) || !hasRevision("skill", existing.id)) {
     return unwrap(writeSkill(existing.id, desired));
   }
-  // 定义没变也要确认磁盘投影还在：受理时读的是 data/skills/<slug>，而冒烟脚本不经 Next 的
-  // 启动重建钩子（src/instrumentation.ts），投影被删过就再也补不回来。补的是目录，不是修订。
-  const projected = path.join(SKILL_LIBRARY_DIR, skillSlug(dto), "SKILL.md");
-  if (!fs.existsSync(projected)) {
+  // 定义没变也要确认磁盘投影对得上：受理时读的是 data/skills/<slug>，而冒烟脚本不经 Next 的
+  // 启动重建钩子（src/instrumentation.ts）。缺文件要补，**内容不对也要补**——写入器的事务提交
+  // 之后、换链接之前如果 materializeSkill 抛了，库里已是新定义而盘上还是旧 SKILL.md。
+  // 补的是目录，不是修订。
+  const slug = skillSlug(dto);
+  const projected = path.join(SKILL_LIBRARY_DIR, slug, "SKILL.md");
+  const stale = ((): string | null => {
+    let text: string;
+    try {
+      text = fs.readFileSync(projected, "utf8");
+    } catch {
+      return "投影缺失或读不出来";
+    }
+    // 不复刻 frontmatter 的排版（那是 skill-library 的事），只查三样必须出现的事实：
+    // 目录名（slug）、模型据以选技能的中文名、以及 SKILL.md 正文本身。
+    if (!text.includes(slug)) return "frontmatter 里的 name 与目录名对不上";
+    if (!text.includes(dto.name)) return "描述里的库名不是当前的名字";
+    if (!text.includes(dto.content)) return "正文与库里的定义不一致";
+    return null;
+  })();
+  if (stale !== null) {
     materializeSkill(dto, loadSkillFiles(dto.id));
-    console.log(`技能投影缺失，已按库里的定义重建：${projected}`);
+    console.log(`技能投影异常（${stale}），已按库里的定义重建：${projected}`);
   }
   return dto;
 }
@@ -292,6 +310,11 @@ export interface WorkflowFixture {
   edges: EdgePayload[];
 }
 
+// 冒烟的工作流一律不覆盖任何插件开关、不挂 MCP：这些工作流常年留在库里，谁在网页上把
+// webSearch 打开都会让下一次付费冒烟跑在另一份组合上、为与被测代码无关的原因红。settings
+// 因此进「整体替换」的声明面——writeWorkflow 对缺省的 settings 是「沿用现值」（ADR-0016）。
+const FIXTURE_SETTINGS = EMPTY_WORKFLOW_SETTINGS;
+
 function byId<T extends { id: string }>(items: readonly T[]): T[] {
   return [...items].sort((left, right) => left.id.localeCompare(right.id));
 }
@@ -302,6 +325,7 @@ export function upsertWorkflow(input: WorkflowFixture): WorkflowRow {
     name: input.name,
     description: input.description,
     instructions: input.instructions ?? "",
+    settings: FIXTURE_SETTINGS,
     skillIds: [...(input.skillIds ?? [])].sort(),
     toolIds: [...(input.toolIds ?? [])].sort(),
     nodes: byId(input.nodes),
@@ -314,6 +338,7 @@ export function upsertWorkflow(input: WorkflowFixture): WorkflowRow {
         name: input.name,
         description: input.description,
         instructions: desired.instructions,
+        settings: desired.settings,
         skillIds: desired.skillIds,
         toolIds: desired.toolIds,
       }),
@@ -324,6 +349,10 @@ export function upsertWorkflow(input: WorkflowFixture): WorkflowRow {
     name: wf.name,
     description: wf.description,
     instructions: wf.instructions,
+    settings: {
+      toggles: wf.settings.toggles ?? {},
+      mcpServers: wf.settings.mcpServers ?? [],
+    },
     skillIds: [...sets.skillIds].sort(),
     toolIds: [...sets.toolIds].sort(),
     nodes: byId(

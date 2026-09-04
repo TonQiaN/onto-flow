@@ -189,3 +189,17 @@ e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。
 
 **最终一轮付费复跑（全部按最终代码）**：`smoke-harness` 0、`smoke-engine` 0、`smoke-graph` 0、
 `smoke-capabilities` 0、`smoke-parallel 2` 0；两次人为失败仍是 1。全程真实模型花销合计 CNY 0.9545。
+
+**Codex 六轮复审的两条（都成立，已改并在一次付费跑里同时验证）**
+
+8. **工作流的 `settings` 也得由夹具整体声明**：`writeWorkflow` 对缺省的 `settings` 是「沿用现值」
+   （ADR-0016），而这些冒烟工作流常年留在库里——谁在网页上把 `webSearch` 打开，下一次付费冒烟
+   就跑在另一份组合上、为与被测代码无关的原因红。`upsertWorkflow` 的声明面、比对、建与改四处
+   都带上 `EMPTY_WORKFLOW_SETTINGS`。
+9. **投影只查「文件在」不够**：写入器事务提交之后、换链接之前 `materializeSkill` 抛了的话，
+   库里已是新定义而盘上还是旧 `SKILL.md`。现在读出投影的 `SKILL.md` 查三样事实——frontmatter 的
+   `name` 等于目录 slug、描述里带当前中文名、正文与库里一致——任何一样不符就重建（不复刻
+   frontmatter 排版，那是 `skill-library` 的事）。
+   实测（同一次付费跑同时验两条）：手工把 `SKILL.md` 改成陈旧内容、并把工作流 settings 改成
+   `{"toggles":{"webSearch":true}}`，跑能力冒烟 → 打印「技能投影异常（frontmatter 里的 name 与
+   目录名对不上），已按库里的定义重建」、settings 回到 `{"toggles":{},"mcpServers":[]}`、退出码 0。
