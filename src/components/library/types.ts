@@ -5,23 +5,6 @@
 
 export type EntityKind = "workflow" | "action" | "skill" | "tool" | "object_type";
 
-export const ENTITY_KIND_LABEL: Record<EntityKind, string> = {
-  workflow: "工作流",
-  action: "Action",
-  skill: "Skill",
-  tool: "Tool",
-  object_type: "对象类型",
-};
-
-/** 各库前端路径，用于引用面板兜底跳转 */
-export const ENTITY_KIND_PATH: Record<EntityKind, string> = {
-  workflow: "/workflows",
-  action: "/actions",
-  skill: "/skills",
-  tool: "/tools",
-  object_type: "/object-types",
-};
-
 /** 各库 REST 路径（取当前定义做 diff 用） */
 export const ENTITY_KIND_API: Record<EntityKind, string> = {
   workflow: "/api/workflows",

@@ -244,7 +244,7 @@ DeepSeek Harness（`dsh`）是唯一执行引擎（ADR-0006）。Next 进程负�
   工具调用与结果可见。
   正常会话与隔离会话都用会话前节点基线幂等结算；节点累计与 usage 事件任一写入失败，
   都保留结算状态并在子进程退出后持续重试，不能只留数字而永久缺失事件。
-  DeepSeek 的 `outputTokens` 已含 reasoning；运行详情、历史 API、画布运行条与轨迹
+  DeepSeek 的 `outputTokens` 已含 reasoning；运行详情、历史 API、运行页与轨迹
   均只把 input/output/cacheRead/cacheWrite 计入总 token，reasoning 只保留为拆分明细。
   运行详情展开某个 Action 时，从数据库记录的 `runDir` 枚举 `nodeId` 与 `nodeId#N` 会话，使用
   dsh 公共 codec 解包 chunk 行，再按回合与步骤折叠、按 `callId` 配对 Tool 调用与结果。界面只

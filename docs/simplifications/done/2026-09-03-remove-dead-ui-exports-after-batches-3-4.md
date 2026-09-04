@@ -1,6 +1,6 @@
 # 简化：清掉第 3、4 批之后留下的死导出、悬空注释与过时注释
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -103,3 +103,33 @@ E2 放弃一份现成的圆点配色表（但 `STYLES.dot` 就在同文件里）
 有未扫到的动态引用会编译失败——该桶只被 13 个文件 import，`npm run build` 会立刻抓到遗漏。
 
 预估净删约 50 行；风险等级：低。
+
+## 落地
+
+PR 待开。八项逐条按提议实施，无一保留、无一新增。
+
+与提议的差异：
+
+- **行号全部对不上了**（记录写于第 5 批开工前，其间已合并 #31 / #32 / #33 / #35 / #36 / #37 / #38 /
+  #40 / #42 / #45），落地按 `rg` 的现场位置改：`portSignature` 在 `types.ts:166` 而不是 `:222`，
+  `RunDetailResponse` 在 `lib.ts:162`（这一条恰好没动），`STATUS_DOT` 在 `status-badge.tsx:53`，
+  E6 的悬空注释在 `types.ts:74`。八项的**内容**与证据逐条现场复核过，全部仍然成立。
+- **E5 桶收窄的数字变了**：记录写的是「31 个导出里只有 17 个经桶被消费」。#38 与 #45 之后桶导出
+  43 个、经桶被消费 29 个，未被消费的仍是记录点名的**同样 14 个**（`DEFAULT_SORT` /
+  `DND_FOLDER_MIME` / `ENTITY_KIND_API` / `ENTITY_KIND_LABEL` / `ENTITY_KIND_PATH` / `EntityKind` /
+  `EntityLeaf` / `EntityReference` / `LibraryQuery` / `RevisionDetail` / `RevisionSummary` /
+  `SORT_OPTIONS` / `SortKey` / `isSortKey`），删的也正是这 14 条转发，剩 29 条。
+  这 14 个里只有 `ENTITY_KIND_LABEL` / `ENTITY_KIND_PATH` 连库内部都没人用（E4），定义一并删；
+  其余 12 个仍由 `FolderTree` / `LibraryToolbar` / `RevisionPanel` / `FolderPicker` /
+  `ReferencesPanel` / `use-library-query` 经相对路径使用，只撤桶的转发。
+- E7 的新注释按 `AGENTS.md`「The five library list GETs and `/api/runs`」那句的措辞写：
+  「token 与费用与每行同源，从 `run_nodes` 求和（权威汇总），只有 byModel 走 `node_usage`」。
+- E8 只改 `docs/DESIGN.md:247` 一处。`docs/adr/0018` 里的两处「画布运行条」是在**陈述被推翻的旧契约**，
+  是历史记录，按 AGENTS.md「被取代的 ADR 原地留着」不动。
+- `src/rules.test.ts` / `.github/REVIEW.md` / `AGENTS.md` 现场 `rg` 复核，八个符号一处都没有出现，
+  确认无需改（与记录一致）。
+
+验收实际跑了：`npm run check`（typecheck + oxlint + `oxfmt --check` + vitest 46 文件 388 通过 1 跳过）、
+`npm run build`（全路由通过）、`npx vitest run src/rules.test.ts`（19 通过）、
+`npx playwright test -c playwright.clean.config.ts e2e/runs.spec.ts e2e/library-v2.spec.ts`（13 通过）。
+记录点名的四条复核命令全部无命中（`docs/simplifications/` 自身的引用除外）。不涉及付费冒烟。

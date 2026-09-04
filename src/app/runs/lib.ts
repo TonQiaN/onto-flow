@@ -61,7 +61,8 @@ export interface RunSummaryByModel {
 
 /**
  * 当前筛选集（不分页）的用量汇总。runs 数的是筛选集里 distinct 的运行，
- * 零用量的运行也算，所以它等于信封的 total；token 与费用只来自 node_usage。
+ * 零用量的运行也算，所以它等于信封的 total；token 与费用与每行同源，从 `run_nodes`
+ * 求和（权威汇总），只有 byModel 走 `node_usage`。
  */
 export interface RunSummary {
   runs: number;
@@ -156,13 +157,6 @@ export interface RunNodeRoundPayload {
   inputs: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
-}
-
-/** GET /api/runs/[id] 的响应；SSE 的 snapshot 帧是同一份数据（rounds 只有骨架） */
-export interface RunDetailResponse {
-  run: RunRow;
-  nodes: RunNodeRow[];
-  rounds: RunNodeRoundRow[];
 }
 
 /** run_events 表行（SSE event: log 的 data） */
