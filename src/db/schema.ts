@@ -82,8 +82,6 @@ export const revisions = sqliteTable(
     versionNo: integer("version_no").notNull(),
     payload: text("payload", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
     note: text("note").notNull().default(""),
-    /** 手动标记保留的版本，清理时跳过 */
-    pinned: integer("pinned", { mode: "boolean" }).notNull().default(false),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .$defaultFn(() => new Date()),

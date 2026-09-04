@@ -85,7 +85,6 @@ export interface RevisionSummary {
   id: string;
   versionNo: number;
   note: string;
-  pinned: boolean;
   createdAt: string | number;
 }
 

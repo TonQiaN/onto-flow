@@ -11,8 +11,7 @@ v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 系统健康页
 - `folders` / `entity_folders`：跨四库（`entityKind ∈ action|skill|tool|object_type`）共享的
   单归属文件夹树（ADR-0005）。`folders.name` 是单段名（不含 `/`），层级由 `parentId` 表达；
   `entity_folders` 无行 = 未归类；workflow 明确不分类。
-- `revisions`：`(entityKind, entityId, versionNo)` 唯一，`payload` 存该实体完整定义，
-  `pinned` 标记不被清理。
+- `revisions`：`(entityKind, entityId, versionNo)` 唯一，`payload` 存该实体完整定义。
 - `run_nodes` 新增：`snapshot`（运行快照 JSON）、六个用量字段（inputTokens / outputTokens /
   reasoningTokens / cacheReadTokens / cacheWriteTokens / cost）、状态多一个 `cancelled`。
 - `runs` 新增：`workflowName`（冗余快照）、状态多一个 `cancelled`。
@@ -112,10 +111,10 @@ Action 对技能的预载（`action_preloads`）与对 Tool 的勾选（`action_
 
 | 路由 | 方法 | 说明 |
 |---|---|---|
-| `/api/revisions?kind=&id=` | GET | 该实体的修订列表（倒序，含 versionNo/note/pinned/createdAt，不含 payload） |
+| `/api/revisions?kind=&id=` | GET | 该实体的修订列表（倒序，含 versionNo/note/createdAt，不含 payload） |
 | `/api/revisions/[revId]` | GET | 单条含 payload |
 | `/api/revisions/[revId]/restore` | POST | 回滚：把 payload 写回实体（走与 PUT 相同的写入路径与校验），并**为回滚动作再留一版**修订 |
-| `/api/revisions/[revId]` | PATCH | `{pinned?, note?}` |
+| `/api/revisions/[revId]` | PATCH | `{note?}` |
 
 写入时机：五个库的 **POST 创建**与 **PUT 更新**成功后，在同一事务内追加一条修订
 （`versionNo` = 该实体当前最大值 + 1，从 1 开始）。payload 就是该实体的完整定义：
@@ -159,7 +158,7 @@ Object Type 同其 PUT 载荷。回滚把 payload 交回同一个 `write<Kind>()
 // 「被引用」面板：自己 fetch /api/references
 <ReferencesPanel kind={EntityKind} id={string} />
 
-// 修订历史面板：列表 + 与当前版 diff + 回滚 + pin/备注
+// 修订历史面板：列表 + 与当前版 diff + 回滚 + 备注
 <RevisionPanel kind={EntityKind} id={string} onRestored={()=>void} />
 
 // 统一列表骨架：左树 + 右内容 + 空态/加载态/错误态
