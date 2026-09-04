@@ -77,7 +77,6 @@ refCount: number   // 被引用次数，见第三节
 | 路由 | 方法 | 说明 |
 |---|---|---|
 | `/api/references?kind=&id=` | GET | 谁在引用这个实体 |
-| `/api/references/counts?kind=` | GET | `{ [entityId]: number }`，供列表页批量取引用数 |
 | `/api/references/orphans?kind=` | GET | 未被任何人引用的实体清单（系统健康页的孤儿检测复用） |
 | `/api/references/impact` | POST | 改动前的影响预览，见下 |
 
@@ -165,10 +164,20 @@ Object Type 同其 PUT 载荷。回滚把 payload 交回同一个 `write<Kind>()
 
 // 统一列表骨架：左树 + 右内容 + 空态/加载态/错误态
 <LibraryLayout title={string} subtitle={string} tree={ReactNode} children={ReactNode} />
+
+// 实体卡片上的三枚徽章（entity-card.tsx）。KindBadge 的配色是 KIND_STYLE，
+// Action 库的端口签名直接拿类串拼，不套徽章
+<FolderBadge folder={FolderRef | null} onEnter={(folderId: string) => void} />   // 未归类不渲染
+<RefCount count={number} />                                                      // 0 时弱化成「未被引用」
+<KindBadge kind={PortKind} />                                                    // text / file / json
 ```
 
 URL 参数命名：四个库页 `?q=&folder=&sort=&page=`（另有 `highlight` 定位并高亮卡片）；
 workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
+
+两个纯函数与 `formatTime` / `readError` 同放在 `types.ts`，经同一个桶导出：
+`folderRefFrom(folders, id)` 把扁平文件夹清单还原成带完整路径的 `FolderRef`（四个库页「新建时的
+默认归属」），`formatUsedBy(usedBy)` 把删除失败（409）返回的引用方名字拼成行内文案。
 
 ## 六、引擎改动（阶段一部分）
 

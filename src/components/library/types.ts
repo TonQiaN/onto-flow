@@ -132,3 +132,34 @@ export function formatTime(value: string | number | null | undefined): string {
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleString("zh-CN", { hour12: false });
 }
+
+/** 从扁平文件夹清单还原带完整路径的 FolderRef（新建默认归属用）；拿不到时返回 null */
+export function folderRefFrom(folders: FolderDto[], id: string | null): FolderRef | null {
+  if (!id) return null;
+  const byId = new Map(folders.map((f) => [f.id, f]));
+  const target = byId.get(id);
+  if (!target) return null;
+  const names: string[] = [];
+  for (
+    let cur: FolderDto | undefined = target;
+    cur;
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined
+  ) {
+    names.unshift(cur.name);
+  }
+  return { id: target.id, name: target.name, path: names.join("/") };
+}
+
+/** 删除失败（409）时把 usedByNames() 的名字列表拼成行内文案；形状意外时退回 JSON 原文 */
+export function formatUsedBy(usedBy: unknown): string {
+  if (Array.isArray(usedBy)) {
+    return usedBy
+      .map((u) => {
+        if (typeof u === "string") return u;
+        if (u && typeof u === "object" && "name" in u) return String((u as { name: unknown }).name);
+        return JSON.stringify(u);
+      })
+      .join("、");
+  }
+  return usedBy == null ? "" : JSON.stringify(usedBy);
+}

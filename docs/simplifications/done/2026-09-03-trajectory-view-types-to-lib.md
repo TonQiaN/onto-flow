@@ -1,6 +1,6 @@
 # 简化：轨迹接口的展示类型移进 src/lib/，客户端不再手抄一份
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -73,3 +73,24 @@ $ diff <(sed -n '183,248p' src/app/runs/lib.ts) <(sed -n '24,84p' src/server/har
 不在被搬的区间里。
 
 预估净删约 65 行；风险等级：低。
+
+## 落地
+
+PR: https://github.com/TonQiaN/onto-flow/pull/32
+
+**与提议的差异：** 无。五个声明（含服务端的 `TrajectorySessionStatus` 具名别名）搬进
+`src/lib/trajectory-view.ts`，`src/server/harness/trajectory.ts` 与 `src/app/runs/lib.ts` 各改成从它
+`export type { … } from`；`agent-trajectory.tsx` 的 import 未动（仍从 `../lib` 取）。记录里标「可选」的两处：
+`docs/DESIGN.md:44` 那行**做了**（加半句指向新模块），`scripts/run-resume.ts:91-105` 那份刻意收窄的子集
+**未动**（记录已判定它不是重复）。`src/rules.test.ts` 与 `.github/REVIEW.md` 现场 `rg` 复核后确认无需改：
+新路径是 `@/lib/`，不在 `SERVER_SPECIFIER` 的禁令里，REVIEW.md 也没有一行陈述这些类型的落脚点。
+
+**验收实际跑了什么：**
+
+- `npm run check`（typecheck + lint + fmt:check + vitest）：绿，46 个测试文件 / 387 通过 1 跳过。
+- `npm run build`：绿（触及 `src/app/`）。
+- `npx vitest run src/rules.test.ts`：绿（客户端 / 服务端边界断言与记录树骨架）。
+- `npx playwright test e2e/runs.spec.ts`（工作树自建 `data/ontoflow.db`，独立端口）：9 passed，含
+  「点节点开抽屉：每个 Action 按需展示独立、可检索的会话轨迹」与「抽屉读光标所在那一轮」。
+- 付费冒烟：未跑。按记录「harness 接缝的证据」段——搬走的只有五条纯类型声明，`readAgentTrajectory`
+  与全部读 JSONL 的实现一行未动，类型在运行时被完全擦除，子进程与 RPC 协议无变化。
