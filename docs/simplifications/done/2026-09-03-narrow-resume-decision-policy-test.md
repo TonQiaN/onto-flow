@@ -108,6 +108,13 @@ PR：[#43](https://github.com/TonQiaN/onto-flow/pull/43)
 - **多加了一条断言**：图定义模块里不出现 `@/db` / `node:fs` 的 import。记录说这条「不值一条 rules
   断言」，这里没有加进 `src/rules.test.ts`，而是放在这个测试文件自己里（两行正则）——它是这个
   模块存在的全部理由，破了就会在 import 的一瞬间去种真库。
+- **按 Codex 复审补的两条**：端口那条断言原来 `seedPorts.critics.forEach(...)`，只遍历种子**返回的**
+  那几位——`resumeMatchSeedPorts()` 少返回一位评委时它反而绿，要等 `seed-resume.ts` 索引第六位时
+  才在跑种子那一刻崩。改成先 `toHaveLength(expected.critics.length)` 再按**期望**逐位比。边那条
+  同理（期望集合按 `roles` 里的节点 id 展开，少一位两边会一起缩水），先钉 `roles.critics` 是六位。
+  第三次故意打破验证过：`critics: CRITICS.slice(1).map(...)` → `expected […(5)] to have a length of 6`。
+- 另在纯模块里补了注释，说明边与端口为什么**独立**写一份而不是从 `resumeMatchExpectedEdges()` /
+  `resumeMatchExpectedPorts()` 生成——生成的话「种子真的照契约接线了吗」就没人钉，测试退化成同义反复。
 - 三类 digest 的 pin 值一字未动，`AGENTS.md` / `.github/REVIEW.md` / `docs/DESIGN.md` / CI 经 `rg`
   现场复核都不需要改。
 
