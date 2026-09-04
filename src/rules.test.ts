@@ -86,24 +86,36 @@ describe("AGENTS.md · Conventions · handle()", () => {
 
   /**
    * 从声明处扫到函数体开头，返回体内第一段有效代码；箭头的表达式体补一个 return 以便同一条断言。
-   * 只按圆 / 方括号配平找体外的第一个 `{` 或 `=>`：今天没有 route 写返回类型注解，写了就定位不到，
-   * 断言会报「定位不到函数体」而不是悄悄放行。
+   * 扫描**不越过本条语句**：`export const GET = raw;` 这种别名要回去解析 raw，越过分号一路扫到
+   * 下一个方法的 `{`，就会把别人的体当成自己的（Codex 对 #50 的四轮复审）。
+   * 只按圆 / 方括号配平找体外的第一个 `{` 或 `=>`；定位不到就返回 null，断言报「定位不到函数体」
+   * 而不是悄悄放行。
    */
-  const bodyOf = (content: string, local: string): string | null => {
+  const bodyOf = (content: string, local: string, seen = new Set<string>()): string | null => {
+    if (seen.has(local)) return null; // 别名成环
+    seen.add(local);
     const decl = new RegExp(
       String.raw`^(?:export\s+)?(?:(?:async\s+)?function\s+${local}\b|(?:const|let|var)\s+${local}\s*=)`,
       "m",
     ).exec(content);
     if (!decl) return null;
+    const init = decl.index + decl[0].length;
     let depth = 0;
-    for (let i = decl.index + decl[0].length; i < content.length; i += 1) {
+    for (let i = init; i < content.length; i += 1) {
       const ch = content[i];
       if (ch === "(" || ch === "[") depth += 1;
       else if (ch === ")" || ch === "]") depth -= 1;
-      else if (depth === 0 && ch === "{") return content.slice(i + 1);
-      else if (depth === 0 && ch === "=" && content[i + 1] === ">") {
+      else if (depth !== 0) continue;
+      else if (ch === "{") return content.slice(i + 1);
+      else if (ch === "=" && content[i + 1] === ">") {
         const rest = content.slice(i + 2).replace(LEADING_TRIVIA_RE, "");
         return rest.startsWith("{") ? rest.slice(1) : `return ${rest}`;
+      } else if (ch === ";" || ch === "\n") {
+        // 到这里还没见到函数字面量：整段初始化只是一个名字就是别名，回去解析它
+        const alias = content.slice(init, i).trim();
+        if (/^[A-Za-z_$][\w$]*$/.test(alias)) return bodyOf(content, alias, seen);
+        // 分号结束了却既不是函数字面量也不是别名；换行则可能只是初始化还没写完，继续扫
+        if (ch === ";") return null;
       }
     }
     return null;
