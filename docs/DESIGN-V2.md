@@ -12,7 +12,7 @@ v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 系统健康页
   单归属文件夹树（ADR-0005）。`folders.name` 是单段名（不含 `/`），层级由 `parentId` 表达；
   `entity_folders` 无行 = 未归类；workflow 明确不分类。
 - `revisions`：`(entityKind, entityId, versionNo)` 唯一，`payload` 存该实体完整定义。
-- `run_nodes` 新增：`snapshot`（运行快照 JSON）、六个用量字段（inputTokens / outputTokens /
+- `run_nodes` 新增：六个用量字段（inputTokens / outputTokens /
   reasoningTokens / cacheReadTokens / cacheWriteTokens / cost）、状态多一个 `cancelled`。
 - `runs` 新增：`workflowName`（冗余快照）、状态多一个 `cancelled`。
 - `run_results`：专用调用入口经完成门禁核验后的精确业务结果；以 runId 为主键并随 runs 级联删除，工作区/事件清理不动。
@@ -190,7 +190,7 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 
 1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口、工作流设置、技能集、Tool 集
    与每个 Action 的预载 / 可见 Tool；`runActionNode` 不再回读这些共享库行，只把这份定义和本轮实际
-   渲染提示写进 `run_nodes.snapshot`。Skill 只冻结身份（id、名字、slug），正文在会话启动前从工作区
+   渲染提示写进该轮的 `run_node_rounds.snapshot`。Skill 只冻结身份（id、名字、slug），正文在会话启动前从工作区
    活链接读取，并把当时的完整 `SKILL.md` 一并写入；链接目录只由 Skill 实体 id 派生，网页改名不会让
    已经受理的运行断链。运行受理时验证并持有所需投影，Skill 从库中删除后，目录也要等最后一个已受理
    运行完全收束才移除：

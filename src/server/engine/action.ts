@@ -200,9 +200,11 @@ export async function runActionNode(ctx: ActionNodeContext): Promise<ActionNodeR
     },
     renderedPrompt,
   };
-  // run_nodes 只留最新一轮，回边重入会覆盖它的起止、出口、产物与快照；这一轮自己的
-  // 快照同时补进 run_node_rounds，抽屉才能读到光标所在那一轮（ADR-0018）。
-  writeSnapshot(ctx, snapshot);
+  // 快照只存在轮次行上：抽屉按光标所在那一轮读它，回边重入的每一轮各留各的（ADR-0018）。
+  attachRoundSnapshot(
+    { runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round },
+    snapshot as unknown as Record<string, unknown>,
+  );
 
   // 登记要先于 runTurn：事件从第一个 chunk 起就会回调过来。
   ctx.sinks.set(sessionId, {
@@ -376,21 +378,6 @@ function toSnapshotPort(port: {
     ...(port.artifactPath ? { artifactPath: port.artifactPath } : {}),
     ...(port.exitName ? { exitName: port.exitName } : {}),
   };
-}
-
-/**
- * 快照落到两处：run_nodes 的那一列（节点的最新状态）与本轮的 run_node_rounds 行
- *（抽屉按光标所在轮读的那一行）。同一事务，回放不会看到只有半边的一轮。
- */
-function writeSnapshot(ctx: ActionNodeContext, snapshot: RunSnapshot): void {
-  const json = snapshot as unknown as Record<string, unknown>;
-  db.transaction((tx) => {
-    tx.update(runNodes)
-      .set({ snapshot: json })
-      .where(and(eq(runNodes.runId, ctx.runId), eq(runNodes.nodeId, ctx.node.id)))
-      .run();
-    attachRoundSnapshot({ runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round }, json, tx);
-  });
 }
 
 /**

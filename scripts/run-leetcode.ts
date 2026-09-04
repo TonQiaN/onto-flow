@@ -14,6 +14,7 @@ import { DATA_DIR } from "../src/server/fs-safety";
 import { cancelRun, isRunExecutionActive, startRun } from "../src/server/engine/runner";
 import { abortRunBatch, admitWholeBatch } from "./batch-runs";
 import { seedLeetcodeWorkflow, LEETCODE_INPUT_NODE_ID } from "./seed-leetcode";
+import { readLatestSuccessfulOutputs } from "../src/server/run-rounds";
 import { runSandboxedPythonVerification } from "./leetcode-verifier";
 import { totalUsageTokens } from "./token-total";
 import type { PortValue } from "../src/lib/values";
@@ -104,8 +105,8 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const output = nodes.find((n) => n.nodeId === "lc-out");
-    const value = (output?.outputs as Record<string, PortValue> | null)?.value;
+    // 产物只在轮次行上：回边循环里输出节点会被打回轮跳过，取最后一轮成功的那份。
+    const value = readLatestSuccessfulOutputs(id, "lc-out")?.value as PortValue | undefined;
     if (!value || value.kind !== "file") {
       console.log("  异常：输出节点没有文件产物");
       failed += 1;

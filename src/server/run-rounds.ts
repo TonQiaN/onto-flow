@@ -6,7 +6,7 @@
  * 端口值与整份运行快照（含 prompt、rule、渲染后的提示与技能正文），循环运行会成倍复制，
  * 跟着每 500ms 一帧的 snapshot 走就是把同一份大对象反复推给页面，所以按轮单独取。
  */
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
 import { db, runNodeRounds, runNodes } from "@/db";
 
 /** 骨架列：`select` 时就不取重载荷，不是取回来再删 */
@@ -31,32 +31,12 @@ export interface RoundPayload {
 }
 
 /**
- * `run_nodes` 的骨架列。那三个重载荷列是**最新一轮**的副本，与轮次行上的同名列同一份内容：
- * 跟着每一帧 snapshot 下发等于把同一份大对象推两遍，抽屉又只认光标所在那一轮的值。
- * 服务端仍读得到（轨迹路由从 `node.snapshot` 取技能名），只是不出现在对外的运行详情里。
+ * 一次运行的全部节点行（各节点的最新状态与用量累计），按开始时刻排序。
+ * `run_nodes` 本身已经没有重载荷列，整行就是骨架，不需要再挑列。
  */
-const NODE_SKELETON_COLUMNS = {
-  id: runNodes.id,
-  runId: runNodes.runId,
-  nodeId: runNodes.nodeId,
-  label: runNodes.label,
-  status: runNodes.status,
-  sessionId: runNodes.sessionId,
-  error: runNodes.error,
-  startedAt: runNodes.startedAt,
-  finishedAt: runNodes.finishedAt,
-  inputTokens: runNodes.inputTokens,
-  outputTokens: runNodes.outputTokens,
-  reasoningTokens: runNodes.reasoningTokens,
-  cacheReadTokens: runNodes.cacheReadTokens,
-  cacheWriteTokens: runNodes.cacheWriteTokens,
-  cost: runNodes.cost,
-};
-
-/** 一次运行的全部节点骨架（各节点的最新状态），按开始时刻排序 */
 export function listNodeSkeletons(runId: string) {
   return db
-    .select(NODE_SKELETON_COLUMNS)
+    .select()
     .from(runNodes)
     .where(eq(runNodes.runId, runId))
     .orderBy(asc(runNodes.startedAt))
@@ -100,4 +80,54 @@ export function readRoundPayload(
     outputs: row.outputs ?? null,
     snapshot: row.snapshot ?? null,
   };
+}
+
+/**
+ * 某个节点**最后一轮成功**的产物。评审循环里输出节点会在被打回那轮记 skipped、在通过那轮
+ * 记 success，取最大轮次而不看终态会把空产物顶替成最终结果（专用入口的完成门禁读它）。
+ */
+export function readLatestSuccessfulOutputs(
+  runId: string,
+  nodeId: string,
+): Record<string, unknown> | null {
+  return (
+    db
+      .select({ outputs: runNodeRounds.outputs })
+      .from(runNodeRounds)
+      .where(
+        and(
+          eq(runNodeRounds.runId, runId),
+          eq(runNodeRounds.nodeId, nodeId),
+          eq(runNodeRounds.status, "success"),
+        ),
+      )
+      .orderBy(desc(runNodeRounds.round))
+      .limit(1)
+      .get()?.outputs ?? null
+  );
+}
+
+/**
+ * 某个节点仍留着快照的最大一轮。技能集在受理时冻结、各轮同源，取哪一轮的映射都一样；
+ * 被事件清理置空的轮跳过，全被置空时返回 null，轨迹面板退回显示 slug（AGENTS.md 已承认的代价）。
+ */
+export function readLatestRoundSnapshot(
+  runId: string,
+  nodeId: string,
+): Record<string, unknown> | null {
+  return (
+    db
+      .select({ snapshot: runNodeRounds.snapshot })
+      .from(runNodeRounds)
+      .where(
+        and(
+          eq(runNodeRounds.runId, runId),
+          eq(runNodeRounds.nodeId, nodeId),
+          isNotNull(runNodeRounds.snapshot),
+        ),
+      )
+      .orderBy(desc(runNodeRounds.round))
+      .limit(1)
+      .get()?.snapshot ?? null
+  );
 }

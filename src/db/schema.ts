@@ -416,11 +416,6 @@ export const runNodes = sqliteTable(
     status: text("status", {
       enum: ["pending", "running", "success", "failed", "skipped", "cancelled"],
     }).notNull(),
-    /**
-     * 运行快照：该节点本次执行实际使用的完整配置（prompt、rule、各 Skill 与 Tool
-     * 全文、模型、思考强度、端口定义）。不随实体后续修改而改变。
-     */
-    snapshot: text("snapshot", { mode: "json" }).$type<Record<string, unknown> | null>(),
     /** 节点各轮会话的累计用量；逐 step 明细来源见 node_usage。 */
     inputTokens: integer("input_tokens").notNull().default(0),
     outputTokens: integer("output_tokens").notNull().default(0),
@@ -429,9 +424,6 @@ export const runNodes = sqliteTable(
     cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
     /** 人民币；节点各轮会话费用的累计，口径同 node_usage.cost。 */
     cost: real("cost").notNull().default(0),
-    /** PortValue 映射的 JSON：{ [portName]: PortValue } */
-    inputs: text("inputs", { mode: "json" }).$type<Record<string, unknown>>(),
-    outputs: text("outputs", { mode: "json" }).$type<Record<string, unknown>>(),
     sessionId: text("session_id"),
     error: text("error"),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
@@ -441,9 +433,9 @@ export const runNodes = sqliteTable(
 );
 
 /**
- * 一个节点的一次执行一行（ADR-0018）。`run_nodes` 一个节点只有一行，回边重入会覆盖它的
- * 起止、出口、产物与快照，只看它回放不出「第 1 轮打回、第 2 轮通过」；轮次历史归这里，
- * `run_nodes` 只继续作为节点的最新状态行。
+ * 一个节点的一次执行一行（ADR-0018）。输入、产物与运行快照只存在这里：`run_nodes`
+ * 一个节点只有一行，回边重入会覆盖它的起止与终态，只看它回放不出「第 1 轮打回、
+ * 第 2 轮通过」；`run_nodes` 只继续作为节点的最新状态行与用量累计行。
  *
  * 每一次执行都算一轮，不只 Action：输入 / 输出节点与被跳过的节点由 runner.ts 直接落成
  * 零时长的 success / skipped 行——回边重置的是下游全部节点，评审循环里输出节点会在打回
@@ -470,7 +462,11 @@ export const runNodeRounds = sqliteTable(
     /** 本轮走出的具名出口；无具名出口为 null */
     exitName: text("exit_name"),
     error: text("error"),
-    /** 这一轮自己的 PortValue 映射与运行快照，抽屉按光标所在轮读它们而不是 run_nodes */
+    /**
+     * 这一轮自己的 PortValue 映射（`{ [portName]: PortValue }`）与运行快照——快照是该节点
+     * 本轮实际使用的完整配置（prompt、rule、各 Skill 与 Tool 全文、模型、思考强度、端口
+     * 定义），不随实体后续修改而改变。抽屉按光标所在轮读这一行；事件清理只置空这三列。
+     */
     inputs: text("inputs", { mode: "json" }).$type<Record<string, unknown> | null>(),
     outputs: text("outputs", { mode: "json" }).$type<Record<string, unknown> | null>(),
     snapshot: text("snapshot", { mode: "json" }).$type<Record<string, unknown> | null>(),
