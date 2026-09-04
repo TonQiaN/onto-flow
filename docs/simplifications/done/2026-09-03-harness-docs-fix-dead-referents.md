@@ -95,9 +95,9 @@ PR: https://github.com/TonQiaN/onto-flow/pull/40
 
 **与提议的差异：** 无，四处照提议改。具体措辞：
 
-- `10-本项目自有.md` 的举例换成种子里真有的分工——「Tool 是能力，Action 只看见自己该看见的那些」，并点名
-  LeetCode 工作流的形状（Tool 集只有 `run_python`，只有「LC·测试」勾了它，「LC·解题」的清单里没有它，
-  `scripts/seed-leetcode.ts`）；`ctx.dbPath` / `ctx.dataDir` 那句改成中性陈述（契约给的绝对路径，
+- `10-本项目自有.md` 的举例换成记录建议的那句——「Tool 是能力，解题 Action 不该看见验收用的 `run_python`」，
+  并在同段点名 LeetCode 工作流的形状（工作流 Tool 集只有 `run_python`，只有「LC·测试」勾了它，「LC·解题」的
+  清单里没有它，`scripts/seed-leetcode.ts`）；`ctx.dbPath` / `ctx.dataDir` 那句改成中性陈述（契约给的绝对路径，
   今天两个种子 Tool 都不用这两个字段，它们是 ADR-0017 定下的契约面而非某个 Tool 的遗留），按记录**不提议删**这两个字段。
 - `docs/harness/AGENTS.md` 的「子串原样匹配」→「整词匹配」，补上「后面不能紧跟 `[\w.-]`」与「不能靠更长的
   包名蒙混过关」（写了 `@deepseek-ai/dsh-web-search-deepseek` 不算写了 `@deepseek-ai/dsh-web`），与
