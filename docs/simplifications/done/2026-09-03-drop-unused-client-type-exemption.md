@@ -91,7 +91,7 @@ are still exemptions, **so fixing one means shrinking the list**」。`handle()`
 
 ## 落地
 
-PR 待开。
+[PR #34](https://github.com/TonQiaN/onto-flow/pull/34)。
 
 **与提议的差异：** 无。用户拍板选路 (a)（收紧）。`src/app/monitor/lib.ts` 与
 `src/app/monitor/cleanup-panel.tsx` 一个字节都没改。
