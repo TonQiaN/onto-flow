@@ -951,7 +951,16 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       const next = (lines[index + 1] ?? "").replace(CONTAINER_PREFIX_RE, "");
       targets.push(linkDestination(tail.trim() === "" ? next : tail, 0));
     }
-    return targets.map((target) => target.split(/[?#]/)[0] ?? "");
+    // 百分号编码要解回来再落盘核对：非 ASCII 文件名（`01-%E9%AA%A8%E6%9E%B6.md`）Markdown
+    // 解析得开，`existsSync` 拿字面量却找不到。编码坏了就按原样，交给存在性检查报出来。
+    return targets.map((target) => {
+      const path = target.split(/[?#]/)[0] ?? "";
+      try {
+        return decodeURIComponent(path);
+      } catch {
+        return path;
+      }
+    });
   }
 
   /**
