@@ -72,7 +72,7 @@ MCP 的 `reconnect` / `toolCallTimeoutMs` 与 DeepSeek 的 `models` 目录：将
 
 ## 落地
 
-PR 待开。
+PR：https://github.com/TonQiaN/onto-flow/pull/37
 
 **与提议的差异（三处）**
 
