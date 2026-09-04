@@ -102,7 +102,7 @@
 ## 9. 文字、注释与文档（Conventions / Comments and documentation）
 
 - [ ] 用户可见文字、错误信息、代码注释、测试名是中文；标识符是英文
-- [ ] 没有删掉记录「为什么要这么绕」的注释（`longHaulFetch`、每工作区事件泵、`SUM` 汇总、`LIKE` 转义、静默 tick 收流）；新注释说的是行为、失败、时序、归属，不是复述控制流
+- [ ] 没有删掉记录「为什么要这么绕」的注释（`SUM` 汇总、`LIKE` 转义、静默 tick 收流）；新注释说的是行为、失败、时序、归属，不是复述控制流
 - [ ] 新增的 `any` 带注释说明为何无法窄化
 - [ ] 改了 `docs/DESIGN.md` / `docs/DESIGN-V2.md` 所陈述的契约 → 同一 PR 更新那份文档；定了新术语 → `CONTEXT.md` 只放词汇与语义，不放实现
 - [ ] README 与 AGENTS.md 的 Commands 块、引擎 spec 三者要一起改或都不改（README 复述了它们）

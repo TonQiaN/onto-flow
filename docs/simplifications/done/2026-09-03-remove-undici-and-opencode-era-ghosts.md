@@ -1,6 +1,6 @@
 # 简化：删掉无人引用的 undici 依赖与文档里点名的 opencode 时代幽灵
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -89,3 +89,31 @@ stops obeying it。`AGENTS.md`「Stance: no compatibility layers」覆盖 `undic
 低。改 `health.ts` 的 `reason` 字符串前确认没有 e2e 断言它（`rg -n "事件泵|无路由" e2e` 今天无结果）。
 
 预估净删约 7 行 + 一条依赖（lockfile 另计）；风险等级：低。
+
+## 落地
+
+PR 待开。
+
+**与提议的差异（两处）**
+
+1. 提议只点了 `health.ts` / `types.ts` / `app/monitor/lib.ts` 三个文件里的「事件泵」，但验收那条
+   `rg` 是全 `src` 的。现场还有两处：`src/app/api/runs/[id]/events/route.ts:11` 与 `:93`——它们说的是
+   终态后引擎仍在写事件的收尾期，机制今天仍然成立（`engine/events.ts` 逐条写 `run_events`），
+   只是名字还是 opencode 时代的。**注释本身一句没删**（它正是 `AGENTS.md` 那三例里的「静默 tick 收流」），
+   只把「事件泵」换成「引擎的事件写入」/「事件写入」。`app/monitor/lib.ts:15` 那句举例里的
+   「事件泵路由表恒为 0」同理改成「子进程句柄数恒为 0」——那正是监控页那张卡今天的名字。
+2. 提议里的备选（「让判据同时排除 `ontoflowActiveRuns`，窗口就真的消失」）**没有采纳**。本记录改的是
+   注释与文案，不是健康页的判据；`activeRuns` 覆盖的是「executeRun 启动前到异常兜底后」，把它并进
+   判据会让「受理后子进程起不来」这类真卡死也从孤儿列表里消失，那是另一条要单独立记录的取舍。
+
+**验收实际跑了什么**
+
+- `rg -n "longHaulFetch|每工作区|per-workspace|事件泵|串行引擎" src docs .github AGENTS.md README.md`：
+  除本记录自身外无结果。
+- `npm ci && npm run check && npm run build`：全绿（vitest 46 文件 387 通过 1 跳过）。
+- `npm run knip`：「Unused dependencies」整段消失（改前唯一一条就是 `undici`）。
+- `npx vitest run src/server/harness/composition-boot.test.ts`：5 通过。`npm ci` 之后真起子进程仍能 boot，
+  即「没有 `@deepseek-ai` 传递依赖靠根 `undici` 提升解析」的证据；lockfile diff 也只删了 `undici` 自己
+  那一个 `node_modules` 条目。
+- e2e：`npx playwright test e2e/monitor.spec.ts`（工作树自建 data/ + 3593 端口的干净配置）4 通过。
+  孤儿 `reason` 字符串没有任何 e2e 断言，改文案不影响它们。

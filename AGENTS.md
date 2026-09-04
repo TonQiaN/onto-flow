@@ -206,7 +206,7 @@ Every rule here was learned the hard way while replacing opencode with dsh. Read
 
 ## Comments and documentation
 
-A comment that records why a workaround exists is the rule itself — `longHaulFetch`, the per-workspace event pump, the `SUM` rollup, `LIKE` escaping, the quiet-tick stream ending — so deleting the comment deletes the rule. Comments state behavior, failure, timing, and ownership in Chinese; they do not narrate control flow or restate code. Every remaining `any` carries a comment naming why narrowing is infeasible. When a change alters a contract that [docs/DESIGN.md](docs/DESIGN.md) or [docs/DESIGN-V2.md](docs/DESIGN-V2.md) states, or settles a term, update that document in the same change.
+A comment that records why a workaround exists is the rule itself — the `SUM` rollup, `LIKE` escaping, the quiet-tick stream ending — so deleting the comment deletes the rule. Comments state behavior, failure, timing, and ownership in Chinese; they do not narrate control flow or restate code. Every remaining `any` carries a comment naming why narrowing is infeasible. When a change alters a contract that [docs/DESIGN.md](docs/DESIGN.md) or [docs/DESIGN-V2.md](docs/DESIGN-V2.md) states, or settles a term, update that document in the same change.
 
 ## Decisions and the glossary
 
