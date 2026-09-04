@@ -838,6 +838,37 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   }
 
   /**
+   * ``` / ~~~ 围栏之间是逐字引用（rg 输出、示例 Markdown），里面的 `](…)` 渲染不成链接，
+   * 要在记录里写一条字面的坏链接就放进围栏。行内的 `` `…` `` **不剥**：这些记录里的行内代码
+   * 常常跟着正文折行，跨行配对一旦错位就会吞掉后面的真链接——漏报比误报坏，而误报会指名
+   * 文件与链接、一眼可查。四空格缩进也不当代码块：记录的列表续行普遍缩进四格，那里面全是真链接。
+   */
+  function outsideFences(text: string): string {
+    let fenced = false;
+    return text
+      .split("\n")
+      .map((line) => {
+        if (/^ {0,3}(?:```|~~~)/.test(line)) {
+          fenced = !fenced;
+          return "";
+        }
+        return fenced ? "" : line;
+      })
+      .join("\n");
+  }
+
+  /** 一份记录里全部链接目标：行内 `[文字](目标)` 与引用式的定义行 `[标签]: 目标`，锚点已切掉。 */
+  function recordLinkTargets(raw: string): string[] {
+    const text = outsideFences(raw);
+    const targets: string[] = [];
+    for (let open = text.indexOf("]("); open >= 0; open = text.indexOf("](", open + 2))
+      targets.push(linkDestination(text, open + 2));
+    for (const line of text.match(/^ {0,3}\[[^\]]+]:.*$/gm) ?? [])
+      targets.push(linkDestination(line, line.indexOf("]:") + 2));
+    return targets.map((target) => target.split("#")[0] ?? "");
+  }
+
+  /**
    * 记录之间互相引用；一份记录从 proposed/ 搬到 done/ 时，指向它的相对链接必须跟着改，
    * 否则链接静默指向不存在的路径。归档只移动文件、不改链接是这里咬住的那个疏漏。
    */
@@ -846,9 +877,7 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     for (const state of STATES) {
       const dir = path.join(ROOT_DIR, state);
       for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
-        const text = read(path.join(dir, name));
-        for (let open = text.indexOf("]("); open >= 0; open = text.indexOf("](", open + 2)) {
-          const target = linkDestination(text, open + 2).split("#")[0] ?? "";
+        for (const target of recordLinkTargets(read(path.join(dir, name)))) {
           if (!target.endsWith(".md")) continue;
           if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue;
           if (!fs.existsSync(path.resolve(dir, target)))
