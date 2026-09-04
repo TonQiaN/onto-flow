@@ -32,7 +32,9 @@ src/db/           Drizzle schema + better-sqlite3 singleton (WAL, foreign_keys=O
 src/lib/          pure, DB-free: graph.ts (validate/back-edge/exits), run-graph.ts (the shape
                   frozen into runs.graph + buildRunGraph/parseRunGraph), values.ts, http.ts, resume-match.ts,
                   workflow-settings.ts (toggle keys, effective-toggle merge, RunSettingsSnapshot),
-                  tool-digest.ts (canonical JSON + Tool contract sha256)
+                  tool-digest.ts (canonical JSON + Tool contract sha256),
+                  trajectory-view.ts (the trajectory endpoint's display DTO, shared by the
+                  server-side projection and the run page's drawer)
 src/server/       server-only services; client code imports no value from here
   engine/           runner.ts (orchestration/cancel), action.ts (one node), events.ts (session
                     events → run_events/node_usage as they arrive), rounds.ts (the only writer of
