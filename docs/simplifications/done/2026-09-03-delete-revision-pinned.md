@@ -1,6 +1,6 @@
 # 简化：删掉 revisions.pinned——它承诺的「清理时跳过」没有实现路径
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -62,3 +62,29 @@ schema 改动走 `npm run db:push`。不碰四处高代价接缝（`cleanup.ts` 
 低。`db:push` 掉列会丢掉本地库里已有的固定标记——它们不影响任何行为。
 
 预估净删 26 行 + 1 列；风险等级：低。
+
+## 落地
+
+PR：https://github.com/TonQiaN/onto-flow/pull/53
+
+**与提议的差异**：用户拍板选路 1（净删）。此外记录里的 `rg -n 'pinned'` 漏了两处不带 `-ed` 的同一事实，
+一并改掉：`README.md:27` 的「可 pin」（README 是唯一的产品说辞，行为变了必须同改）改成「可加备注」，
+`docs/DESIGN-V2.md:161` 的 `RevisionPanel` 注释「回滚 + pin/备注」去掉 `pin`。`patchRevision` 塌成只改
+`note` 后，`RevisionPanel` 里唯一的调用点只剩备注一处，函数一并塌成 `patchNote(revId, note)`。
+
+**验收实际跑了什么**：
+
+- `npm run check`：typecheck / oxlint / oxfmt 全绿，vitest 46 文件 390 通过 1 跳过。
+- `npm run build`：通过（35 条路由）。
+- `npm run db:push`：先在工作树自己的 `data/ontoflow.db` 上手动 `alter table revisions add column pinned`
+  造出旧库，再 push，`pragma_table_info('revisions')` 从八列回到七列——掉列这条路走得通，不需要迁移文件。
+- `npx playwright test -c playwright.clean.config.ts e2e/library-v2.spec.ts`（工作树自建库 + 3597 独立端口）：
+  4 passed，含「编辑面板「修订历史」显示自建实体的 v1」。
+- 手工 API 核对：`GET /api/revisions?kind=skill&id=…` 的 items 只剩
+  `{id, entityKind, entityId, versionNo, note, createdAt}`；`PATCH {note}` 去空白后落库；`PATCH {}` 答 200
+  原样返回；`PATCH {note: 1}` 答 400「note 必须是字符串」；`PATCH {pinned: true}` 被忽略（200，响应无该字段）。
+- 浏览器肉眼验收 `/skills` → 编辑 → 修订历史：行上只剩「备注 / 回滚」，无「固定」按钮与「已固定」徽标，
+  备注仍能写入并回显。
+- `rg -n 'pinned' src docs --glob '!docs/simplifications/**'`：只剩 `agent-trajectory.tsx` 的
+  `pinnedSessionRef`、`AGENTS.md` 的 `TMPDIR is pinned` / 版本 pin / 骨架 pinned 与 `rules.test.ts` 的同句引用。
+- 未跑付费冒烟（记录未要求，改动不在 harness 接缝上）；`src/server/monitor/cleanup.ts` 一行未动。

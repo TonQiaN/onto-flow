@@ -548,6 +548,99 @@ describe("AGENTS.md · Conventions · library list GETs", () => {
   });
 });
 
+describe("AGENTS.md · Repository layout · src/lib 的四个规则模块", () => {
+  /**
+   * 「the four rule modules the write boundary and its editor both call so neither copies the
+   * other」——这四组规则（技能资源文件、Tool 公名、对象根 schema 形状、列表排序键与页长）
+   * 以前在客户端与写入口各写一份，靠注释和一条只为钉两份一致而存在的用例维持。收敛之后
+   * 「只有一处定义」本身就是可机械核对的约定，所以它是断言而不是散文：
+   * docs/simplifications/done/2026-09-03-share-pure-validators-in-lib.md。
+   */
+  const SINGLE_SOURCE: ReadonlyArray<{ home: string; names: readonly string[] }> = [
+    {
+      home: "src/lib/skill-files.ts",
+      names: [
+        "SKILL_FILE_MAX_COUNT",
+        "SKILL_FILE_MAX_BYTES",
+        "SKILL_FILE_PATH_MAX_LENGTH",
+        "skillFilePathProblem",
+        "foldSkillPath",
+      ],
+    },
+    {
+      home: "src/lib/tool-names.ts",
+      names: [
+        "TOOL_PUBLIC_NAME_PATTERN",
+        "TOOL_RESERVED_PUBLIC_NAMES",
+        "TOOL_RESERVED_PUBLIC_NAME_PREFIX",
+        "publicNameProblem",
+        "toolCodeProblem",
+      ],
+    },
+    { home: "src/lib/json-schema-shape.ts", names: ["objectSchemaShapeProblem"] },
+    {
+      home: "src/lib/list-query.ts",
+      names: [
+        "SORT_KEYS",
+        "SortKey",
+        "DEFAULT_SORT",
+        "DEFAULT_PAGE_SIZE",
+        "MAX_PAGE_SIZE",
+        "isSortKey",
+      ],
+    },
+  ];
+
+  it("四组规则各自只在它那个 src/lib 模块里声明一次，别处只能 import 或转出", () => {
+    const problems = SINGLE_SOURCE.flatMap(({ home, names }) =>
+      names.flatMap((name) => {
+        // 只认声明（const / type / function …），不认 `export { X };` 这种转出
+        const declares = new RegExp(
+          `^(?:export )?(?:const|let|type|interface|function|class) ${name}\\b`,
+          "m",
+        );
+        const where = sourceFiles.filter((file) => declares.test(read(file))).map(rel);
+        return where.length === 1 && where[0] === home
+          ? []
+          : [`${name} 应只在 ${home} 声明，实际：${where.join(" / ") || "（一处也没有）"}`];
+      }),
+    );
+    expect(problems).toEqual([]);
+  });
+
+  it("每个模块的两侧消费者都从 @/lib/<模块> 取，没有第二份手抄", () => {
+    const CONSUMERS: ReadonlyArray<[specifier: string, files: readonly string[]]> = [
+      [
+        "@/lib/skill-files",
+        [
+          "src/server/writers/skill.ts",
+          "src/app/skills/skill-files.ts",
+          "src/app/skills/skill-editor.tsx",
+        ],
+      ],
+      [
+        "@/lib/tool-names",
+        [
+          "src/server/writers/tool.ts",
+          "src/server/harness/tool-plugin.ts",
+          "src/app/tools/tool-editor.tsx",
+        ],
+      ],
+      [
+        "@/lib/json-schema-shape",
+        ["src/server/harness/tool-schema.ts", "src/app/tools/tool-form.ts"],
+      ],
+      ["@/lib/list-query", ["src/server/writers/list.ts", "src/components/library/types.ts"]],
+    ];
+    const problems = CONSUMERS.flatMap(([specifier, files]) =>
+      files
+        .filter((file) => !read(path.join(ROOT, file)).includes(`from "${specifier}"`))
+        .map((file) => `${file} 未从 ${specifier} 取共享规则`),
+    );
+    expect(problems).toEqual([]);
+  });
+});
+
 describe("AGENTS.md · Conventions · raw SQL", () => {
   /**
    * 「Raw SQL goes through drizzle's sql tag … and only where the query builder cannot express

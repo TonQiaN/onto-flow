@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 const POLL_MS = 500;
 /**
- * 终态后的静默期（tick 数）：取消/失败会先把 run 写成终态，事件泵此刻还在收尾
+ * 终态后的静默期（tick 数）：取消/失败会先把 run 写成终态，引擎的事件写入此刻还在收尾
  * （flush 残余 text、补 session.idle、重算最终 token/费用）。若「终态 + 本轮无新事件」
  * 就立刻 end，前端会丢掉最后一段日志与最终用量。要求连续 3 个 tick（约 1.5s）既无
  * 新事件、snapshot 指纹也不再变化，才认为收尾真的结束。
@@ -90,7 +90,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
             send("snapshot", snapshot);
           }
           // 终态后进入静默期：只有连续 QUIET_TICKS 轮既无新事件、snapshot 指纹也不变，
-          // 才说明事件泵的收尾（残余 text / session.idle / 最终用量）已经写完，可以结束
+          // 才说明事件写入的收尾（残余 text / session.idle / 最终用量）已经写完，可以结束
           if (snapshot.run && snapshot.run.status !== "running") {
             quietTicks = changed ? 0 : quietTicks + 1;
             if (quietTicks >= QUIET_TICKS) {

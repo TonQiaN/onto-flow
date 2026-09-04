@@ -1,12 +1,13 @@
 /** Skill 写入测试：技能是目录——资源文件的路径与大小在写入口挡住，写库与投影同步。 */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SKILL_FILE_MAX_COUNT } from "@/lib/skill-files";
 import { createTestDb, resetTestDb } from "./test-db";
 
 const materializeSkill = vi.hoisted(() => vi.fn());
 vi.mock("@/server/skill-library", () => ({ materializeSkill }));
 
 const { sqlite } = await createTestDb();
-const { createSkill, loadSkillDto, writeSkill, SKILL_FILE_MAX_COUNT } = await import("./skill");
+const { createSkill, loadSkillDto, writeSkill } = await import("./skill");
 
 beforeEach(() => {
   resetTestDb(sqlite);

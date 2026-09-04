@@ -37,14 +37,14 @@
 - [ ] 没有新增第五种删除保护。四种是：四个可被引用库经 `usedByNames()` 答 409；workflow DELETE 的运行中守卫；folder DELETE 的重名守卫；run DELETE 经 `monitor/cleanup.ts` 的 `deleteRun` 拒绝运行中
 - [ ] 没有手写引用 join：`src/server/references.ts` 是唯一 join 引用关系的模块；Skill / Tool 的引用方是**工作流**（`workflow_skills` / `workflow_tools`，detail「技能集」/「Tool 集」，href 指向工作流设置页），Action 的预载与可见 Tool 不是引用、不进删除保护
 - [ ] 破坏性路径仍只在 `src/server/monitor/cleanup.ts`；没有第二处删 `run_events` / `runs` / `data/runs/<id>`
-- [ ] 轮次行与节点行的线上形态没变（A round row has a skeleton and a payload）：`/api/runs/[id]` 与 SSE `snapshot` 帧的 `nodes` 与 `rounds` 都只有骨架，且是 `listNodeSkeletons` / `listRoundSkeletons`（`src/server/run-rounds.ts`）在 `select` 时就不取重载荷，不是取回来再删（`run_nodes` 上那三列是最新一轮的副本，带上就是把同一份大对象推两遍）；`src/app/runs/lib.ts` 的 `RunNodeRow` 是对应的骨架类型；`inputs` / `outputs` / `snapshot` 只经 `/api/runs/[id]/nodes/[nodeId]/rounds/[round]` 按轮出去，抽屉在页签打开或换轮时取一轮并缓存，停在轨迹页签一条都不发；骨架列（`exitName` / `error` 也在其中）只在传了才改写——`settleRound` / `settleRoundIfRunning` 的可选列一律不传即保持，只有终态与 `finishedAt` 无条件改写，随后落下的取消不会把这一轮真走过的出口清成 null（`runner.test.ts` 的反向次序用例咬住这一点）
-- [ ] 清理的保留分层没变（A round row has a skeleton and a payload）：events 目标删 `run_events` 并把 `run_node_rounds` **与 `run_nodes`** 的 `inputs` / `outputs` / `snapshot` 一起置空（后者是最新一轮的副本，漏了就仍整行经 `/api/runs/[id]` 返回），**不删行**；置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不是「该运行有够龄事件行」——免费的输入→输出运行与首个事件前就失败的 Action 没有事件行，同样要被置空并计进预览；runs 目标与 `deleteRun` 才随 `runs` 级联删掉整行；预览与真做用同一份统计（被置空的轮次行数 / 节点行数，以及级联的轮次行数）
+- [ ] 轮次行与节点行的线上形态没变（A round row has a skeleton and a payload）：`/api/runs/[id]` 与 SSE `snapshot` 帧的 `nodes` 与 `rounds` 都只有骨架，且是 `listNodeSkeletons` / `listRoundSkeletons`（`src/server/run-rounds.ts`）在 `select` 时就不取重载荷，不是取回来再删（`run_nodes` 表上根本没有这三列，重载荷只有轮次行这一份）；`src/app/runs/lib.ts` 的 `RunNodeRow` 是对应的骨架类型；`inputs` / `outputs` / `snapshot` 只经 `/api/runs/[id]/nodes/[nodeId]/rounds/[round]` 按轮出去，抽屉在页签打开或换轮时取一轮并缓存，停在轨迹页签一条都不发；骨架列（`exitName` / `error` 也在其中）只在传了才改写——`settleRound` / `settleRoundIfRunning` 的可选列一律不传即保持，只有终态与 `finishedAt` 无条件改写，随后落下的取消不会把这一轮真走过的出口清成 null（`runner.test.ts` 的反向次序用例咬住这一点）
+- [ ] 清理的保留分层没变（A round row has a skeleton and a payload）：events 目标删 `run_events` 并把 `run_node_rounds` 的 `inputs` / `outputs` / `snapshot` 置空，**不删行**；置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不是「该运行有够龄事件行」——免费的输入→输出运行与首个事件前就失败的 Action 没有事件行，同样要被置空并计进预览；runs 目标与 `deleteRun` 才随 `runs` 级联删掉整行；预览与真做用同一份统计（被置空的轮次行数，以及级联的轮次行数）
 - [ ] 文件夹路径一律用 `isFolderEntityKind` 守门；工作流没有进文件夹（ADR-0005）
 
 ## 4. 路由载荷与页面（Conventions）
 
 - [ ] 新增的 route 若能到达修订还原——**含经 helper 间接调用** `restoreRevision`——带 `import "@/server/writers";`，否则 restore 静默答 501。`src/rules.test.ts` 只认字面出现 `restoreRevision` 的 route，间接到达的它看不见（Conventions）
-- [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`（没有第二处写死 30 / 100）；其它 GET 各自定形
+- [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`；排序键与 30 / 100 只在 `src/lib/list-query.ts` 写一遍，服务端与共享列表 UI 都从它取，没有第二处（`src/rules.test.ts` 钉住四个 `src/lib/` 规则模块的「只声明一次 + 消费者必须 import」）；其它 GET 各自定形
 - [ ] 改了 `/api/runs` 的筛选或汇总 → `summary` 仍按同一组筛选**不分页**算：`runs` 是 distinct 的运行数（零用量的运行也算），token / 费用与每行同源、从按 `run_id` 预聚合的 `run_nodes` 子查询 **left join** 求和（权威汇总，`node_usage` 缺一条明细时不掉账），只有 `byModel` 走 `node_usage`；没有退化成内连接把无用量的运行挤掉；数组消费者一个不剩地改读 `items`（`rg -n '"/api/runs' src e2e scripts`）
 - [ ] 受理来源仍是 `imports.invocation.source` 的**读时投影**：`/api/runs` 用 `json_extract` 推导 `items[].source` 与 `source=` 筛选（无 invocation 的行 coalesce 成 `workflow`），没有为它新增列、没有回填历史行、没有第二份表示（The five library list GETs and `/api/runs`…）
 - [ ] 五个库页复用 `src/components/library/`，没有长出自己的列表 / 文件夹 / 引用 / 修订 UI——按面而不是按四个组件名核对（曾有四份逐字相同的文件夹徽章与 409 文案从枚举的缝里过了评审）；筛选状态在 URL（`use-library-query`）不在组件 state
@@ -63,7 +63,7 @@
 - [ ] 重入仍等环体收束（The workflow graph is not a DAG）：回边满足时只排队（`pendingReentries`），受影响节点里还有在 `running` 表里的就不重置，挂起期间 `pickReady` 也不放它们开跑；重入次数在真正重置时才计；取消与整运行失败让排队中的重入作废。直接在回边满足处重置正在跑的节点 = 串轮 + 运行可能在会话仍在飞时被判结束
 - [ ] 子进程收束失败时运行被隔离（留在 `activeRuns`、保留进程句柄），预览 / 清理 / 删除 / 新运行容量 fail-closed
 - [ ] 看一次运行只有 `/runs/<id>`（ADR-0018）：它只读受理时冻结的 `runs.graph`，不回查 `workflow_nodes` / `workflow_edges`；编辑器没有运行条、并行切换器与 `?runId=` 深链，发起后跳运行页；导航「运行中」面板每一路深链 `/runs/<id>`
-- [ ] 会话事件到达即写 `run_events`（运行页那条 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写；每条新写入的行都带 `session_id`（`events.ts` 的通用落库与 `action.ts` 自插的 `usage` 事件两处都要写）
+- [ ] 会话事件到达即写 `run_events`（运行页那条 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写；每条新写入的行都带 `session_id`（`events.ts` 的通用落库写入，它是 `run_events` 唯一的写入者）
 - [ ] 用量按 chunk 求和、`outputTokens` 已含推理，没有把推理另算一桶；费用在写入时按到达时刻定价，未知模型为 0 而不是猜价
 - [ ] 每运行组合没有 stdout logger（stdout 属于协议）；`dshHome` / `agentsHome` 钉在运行目录内；节点步数上限仍在
 - [ ] 声明的产物必须真在盘上；模型说写了不算证据（ADR-0008）
@@ -78,8 +78,8 @@
 - [ ] 新插件的 `decision` / `mountedByDefault` / `workflowToggle` / `reason` 与它在组合里的实际挂载一致
 - [ ] 新增 `models` 行走 `scripts/seed.ts` 的 `upsertModel`；新 provider 路由有 `runCompositionEntries` 里的 adapter；没有 route 写 `models`
 - [ ] Tool 仍是契约、包装仍归平台（A Tool is an OntoFlow contract）：库里的 `code` 只是 `export default async function execute(args, ctx)`，没有 `name` / `inject` / `apply`，不 import `@deepseek-ai/*`（写入口拒绝）；上游注册形状只出现在 `src/server/harness/tool-plugin.ts`，改了它就跑 `tool-plugin.test.ts` 与 `composition-boot.test.ts`（真 boot 带样例契约 Tool 的组合）；Tool 要围栏只经 `ctx.run()`，谨慎的 Tool 以 `sandbox.enforced && !sandbox.runnerFailed` 为门禁
-- [ ] JSON Schema 子集在**写入口**拦（`objectSchemaProblem`，`parameters` 与 `output` 都查，客户端 `tool-form.ts` 镜像形状规则）；没有把 type 数组的拒绝寄托在插件加载上——上游 `register` 不校验 `parameters`
-- [ ] Tool 公名不在 `TOOL_RESERVED_PUBLIC_NAMES`（上游内建工具名 + `structured_output` / `run_code` / `web_fetch`）里、也不以 `mcp__` 开头，写入口拒绝；同名包装会让 boot 撞名倒下、遮蔽会话的 `structured_output`、或让整台 MCP 服务器的工具在同步时被丢弃（A Tool is an OntoFlow contract）
+- [ ] JSON Schema 子集在**写入口**拦（`harness/tool-schema.ts` 的 `objectSchemaProblem`，`parameters` 与 `output` 都查）；形状那半边是 `src/lib/json-schema-shape.ts` 的 `objectSchemaShapeProblem`，编辑器调同一个而不是抄一份（`src/rules.test.ts` 钉住），上游 `assertObjectJsonSchema` 那半边仍只在 `harness/`；没有把 type 数组的拒绝寄托在插件加载上——上游 `register` 不校验 `parameters`
+- [ ] Tool 公名不在 `TOOL_RESERVED_PUBLIC_NAMES`（上游内建工具名 + `structured_output` / `run_code` / `web_fetch`）里、也不以 `mcp__` 开头，写入口拒绝；清单与 `publicNameProblem` / `toolCodeProblem` 都只在 `src/lib/tool-names.ts` 写一遍，写入口、平台包装与编辑器共用，没有第二份可抄（`src/rules.test.ts` 钉住）；同名包装会让 boot 撞名倒下、遮蔽会话的 `structured_output`、或让整台 MCP 服务器的工具在同步时被丢弃（A Tool is an OntoFlow contract）
 
 ## 7. 专用付费入口的行为钉死（A specialized paid invocation pins behavior, not names）
 
@@ -99,7 +99,7 @@
 ## 9. 文字、注释与文档（Conventions / Comments and documentation）
 
 - [ ] 用户可见文字、错误信息、代码注释、测试名是中文；标识符是英文
-- [ ] 没有删掉记录「为什么要这么绕」的注释（`longHaulFetch`、每工作区事件泵、`SUM` 汇总、`LIKE` 转义、静默 tick 收流）；新注释说的是行为、失败、时序、归属，不是复述控制流
+- [ ] 没有删掉记录「为什么要这么绕」的注释（`SUM` 汇总、`LIKE` 转义、静默 tick 收流）；新注释说的是行为、失败、时序、归属，不是复述控制流
 - [ ] 新增的 `any` 带注释说明为何无法窄化
 - [ ] 改了 `docs/DESIGN.md` / `docs/DESIGN-V2.md` 所陈述的契约 → 同一 PR 更新那份文档；定了新术语 → `CONTEXT.md` 只放词汇与语义，不放实现
 - [ ] README 与 AGENTS.md 的 Commands 块、引擎 spec 三者要一起改或都不改（README 复述了它们）

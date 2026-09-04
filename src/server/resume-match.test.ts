@@ -65,6 +65,39 @@ vi.mock("@/server/fs-safety", async (importOriginal) => ({
 // 冻结的 ResolvedWorkflow，测试直接在 resolved() 里构造。
 const { sqlite } = await createTestDb();
 
+/**
+ * 夹具：一个节点的最新状态行加它某一轮的轮次行。产物只在轮次行上（ADR-0018 之后
+ * `run_nodes` 不再留副本），完成门禁读的是该输出节点**最后一轮成功**的那一行。
+ */
+function seedNodeRound(input: {
+  runId: string;
+  nodeId: string;
+  label: string;
+  round?: number;
+  status?: "success" | "skipped";
+  outputs?: unknown;
+}): void {
+  const round = input.round ?? 0;
+  const status = input.status ?? "success";
+  sqlite
+    .prepare(
+      "insert or replace into run_nodes (id, run_id, node_id, label, status) values (?, ?, ?, ?, ?)",
+    )
+    .run(`${input.runId}:${input.nodeId}`, input.runId, input.nodeId, input.label, status);
+  sqlite
+    .prepare(
+      "insert into run_node_rounds (id, run_id, node_id, round, status, started_at, outputs) values (?, ?, ?, ?, ?, 100, ?)",
+    )
+    .run(
+      `${input.runId}:${input.nodeId}:${round}`,
+      input.runId,
+      input.nodeId,
+      round,
+      status,
+      input.outputs === undefined ? null : JSON.stringify(input.outputs),
+    );
+}
+
 const { captureResumeMatchCompletion, readResumeMatchRun, startResumeMatch } =
   await import("./resume-match");
 
@@ -1038,27 +1071,36 @@ describe("简历匹配运行结果", () => {
         "insert into runs (id, workflow_id, status, workflow_name, run_dir, imports, started_at, finished_at) values ('run-1', ?, 'success', ?, ?, ?, 100, 101)",
       )
       .run(workflowId, "简历匹配评分", tempRoot, resumeMatchImports);
-    sqlite
-      .prepare(
-        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('report-row', 'run-1', 'report-action', '简历评分·汇总', 'success', '{}')",
-      )
-      .run();
-    sqlite
-      .prepare(
-        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('output-row', 'run-1', 'result-output', '评分结果', 'success', ?)",
-      )
-      .run(
-        JSON.stringify({
-          value: {
-            kind: "file",
-            file: {
-              path: resultPath,
-              name: RESUME_MATCH_RESULT_ARTIFACT,
-              mime: "application/json",
-            },
+    seedNodeRound({
+      runId: "run-1",
+      nodeId: "report-action",
+      label: "简历评分·汇总",
+      outputs: {},
+    });
+    // 输出节点第 0 轮被打回（skipped、无产物），第 1 轮才通过——门禁必须读第 1 轮。
+    seedNodeRound({
+      runId: "run-1",
+      nodeId: "result-output",
+      label: "评分结果",
+      round: 0,
+      status: "skipped",
+    });
+    seedNodeRound({
+      runId: "run-1",
+      nodeId: "result-output",
+      label: "评分结果",
+      round: 1,
+      outputs: {
+        value: {
+          kind: "file",
+          file: {
+            path: resultPath,
+            name: RESUME_MATCH_RESULT_ARTIFACT,
+            mime: "application/json",
           },
-        }),
-      );
+        },
+      },
+    });
     sqlite
       .prepare(
         "insert into run_events (run_id, node_id, ts, type, payload) values ('run-1', 'report-action', 100, 'tool', ?)",
@@ -1209,52 +1251,40 @@ describe("简历匹配运行结果", () => {
           },
         }),
       );
-    sqlite
-      .prepare(
-        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values (?, ?, ?, ?, 'success', ?)",
-      )
-      .run("action-row", "run-1", "same-label-action", "评分结果", JSON.stringify({}));
-    sqlite
-      .prepare(
-        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values (?, ?, ?, ?, 'success', ?)",
-      )
-      .run(
-        "output-row",
-        "run-1",
-        "result-output",
-        "评分结果",
-        JSON.stringify({
-          value: {
-            kind: "file",
-            file: {
-              path: admittedPath,
-              name: "match-result.json",
-              mime: "application/json",
-            },
-          },
-        }),
-      );
-    sqlite
-      .prepare(
-        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('replacement-row', 'run-1', 'replacement-output', '评分结果', 'success', ?)",
-      )
-      .run(
-        JSON.stringify({
-          value: {
-            kind: "file",
-            file: {
-              path: replacementPath,
-              name: "match-result.json",
-              mime: "application/json",
-            },
-          },
-        }),
-      );
-    sqlite
-      .prepare(
-        "insert into run_nodes (id, run_id, node_id, label, status, outputs) values ('replacement-validator-row', 'run-1', 'replacement-validator', '新汇总', 'success', '{}')",
-      )
-      .run();
+    seedNodeRound({
+      runId: "run-1",
+      nodeId: "same-label-action",
+      label: "评分结果",
+      outputs: {},
+    });
+    seedNodeRound({
+      runId: "run-1",
+      nodeId: "result-output",
+      label: "评分结果",
+      outputs: {
+        value: {
+          kind: "file",
+          file: { path: admittedPath, name: "match-result.json", mime: "application/json" },
+        },
+      },
+    });
+    seedNodeRound({
+      runId: "run-1",
+      nodeId: "replacement-output",
+      label: "评分结果",
+      outputs: {
+        value: {
+          kind: "file",
+          file: { path: replacementPath, name: "match-result.json", mime: "application/json" },
+        },
+      },
+    });
+    seedNodeRound({
+      runId: "run-1",
+      nodeId: "replacement-validator",
+      label: "新汇总",
+      outputs: {},
+    });
     sqlite
       .prepare(
         "insert into run_events (run_id, node_id, ts, type, payload) values ('run-1', 'same-label-action', 100, 'tool', ?)",

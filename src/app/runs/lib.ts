@@ -61,7 +61,8 @@ export interface RunSummaryByModel {
 
 /**
  * 当前筛选集（不分页）的用量汇总。runs 数的是筛选集里 distinct 的运行，
- * 零用量的运行也算，所以它等于信封的 total；token 与费用只来自 node_usage。
+ * 零用量的运行也算，所以它等于信封的 total；token 与费用与每行同源，从 `run_nodes`
+ * 求和（权威汇总），只有 byModel 走 `node_usage`。
  */
 export interface RunSummary {
   runs: number;
@@ -107,11 +108,10 @@ export interface NodeUsage {
 }
 
 /**
- * run_nodes 行的**骨架**：节点的最新状态与累计用量。
+ * run_nodes 一行：节点的最新状态与累计用量，整行就是骨架。
  *
- * 没有 `inputs` / `outputs` / `snapshot`——那三列是最新一轮的副本，与轮次行上的同名列
- * 同一份内容，跟着每一帧 snapshot 下发等于把同一份大对象推两遍；抽屉又只认光标所在
- * 那一轮的值，按轮单取（`/api/runs/[id]/nodes/[nodeId]/rounds/[round]`）。
+ * 输入输出与快照不在这里，也不在 `run_nodes` 表上——它们只存在轮次行，抽屉按光标所在
+ * 那一轮单取（`/api/runs/[id]/nodes/[nodeId]/rounds/[round]`）。
  */
 export interface RunNodeRow extends NodeUsage {
   id: string;
@@ -128,8 +128,8 @@ export interface RunNodeRow extends NodeUsage {
 /**
  * run_node_rounds 一行的**骨架**：一个节点的一次执行（ADR-0018）。
  *
- * 回放只看它——`run_nodes` 一个节点只有一行，回边重入会覆盖那一行的起止、出口、产物与
- * 快照。输入 / 输出 / 被跳过的节点没有会话，起止同一时刻。
+ * 回放只看它——`run_nodes` 一个节点只有一行，回边重入会覆盖那一行的起止与终态。
+ * 输入 / 输出 / 被跳过的节点没有会话，起止同一时刻。
  * 这一轮的输入输出与快照不在这里：它们是重载荷，抽屉按轮单取（RunNodeRoundPayload）。
  */
 export interface RunNodeRoundRow {
@@ -156,13 +156,6 @@ export interface RunNodeRoundPayload {
   inputs: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
-}
-
-/** GET /api/runs/[id] 的响应；SSE 的 snapshot 帧是同一份数据（rounds 只有骨架） */
-export interface RunDetailResponse {
-  run: RunRow;
-  nodes: RunNodeRow[];
-  rounds: RunNodeRoundRow[];
 }
 
 /** run_events 表行（SSE event: log 的 data） */

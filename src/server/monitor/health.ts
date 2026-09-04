@@ -119,9 +119,11 @@ function readDisk(): HealthDisk {
 }
 
 /**
- * 孤儿运行：状态仍是 running、但进程内已无事件泵路由——多为进程重启遗留。
+ * 孤儿运行：判据是 `runs.status='running'` 减去 `ontoflowRunProcesses` 里有句柄的那些。
  * 返回明细而非计数：控制台要能直接看出「是哪几次运行卡住了、卡在几个节点上」。
- * 注意串行引擎在两个节点之间有短暂无路由窗口，瞬时出现 1 条属正常，持续存在才是真孤儿。
+ * 受理与启动之间有一段真实窗口——`startResolvedRun` 在受理事务里就提交了 running 行，
+ * 句柄要到 `launchRun` 建完工作区、起完子进程才登记，这中间的几秒会被判成孤儿。
+ * 所以瞬时出现属正常，持续存在才是真孤儿。
  */
 function listOrphanRuns(live_runs: LiveRunProcess[]): OrphanRun[] {
   const live = new Set(live_runs.map((r) => r.runId));
@@ -148,7 +150,7 @@ function listOrphanRuns(live_runs: LiveRunProcess[]): OrphanRun[] {
       status: "running",
       startedAt: r.startedAt,
       pendingNodes: r.pendingNodes,
-      reason: "进程内已无事件泵路由，疑似进程重启遗留",
+      reason: "进程内没有它的子进程句柄：可能刚受理尚未启动，或进程重启遗留",
     }));
 }
 

@@ -307,9 +307,7 @@
    在最后一轮成功之后的那个时刻把节点翻成失败（见下面的推导规则）。
 3. `run_events.session_id: text`：`events.ts` 的通用落库从 `ctx.sessionId` 写入；`action.ts` 里
    （`events.test.ts` 与 `action.test.ts` 手写的内存库 DDL 同步加这一列，否则它们调用被测模块时会撞
-   `no column named session_id`；`runner.test.ts` 的 DDL 若也建了 `run_events`，同样加）；`action.ts` 里
-   `refreshUnsettledUsageRollup()` 自己插的 `usage` 事件（`usageEventPayload()` 已带该会话 id）也
-   必须写这一列——两处插入点都改，别只改一处。事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
+   `no column named session_id`；`runner.test.ts` 的 DDL 若也建了 `run_events`，同样加）。事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
    `<节点id>#<轮次+1>`，见 `engine/action.ts`）。列保持可空只是为了早于本批的历史行；新写入的事件
    没有一条允许为 null，`runner.test.ts` 断言之。
 
@@ -317,9 +315,9 @@
 `snapshot` 帧同样带 `rounds`（轮次行有变化就重发 snapshot，与 `nodes` 同一指纹），`log` 帧就是带
 `sessionId` 的 `run_events` 行——但两处的 `rounds` 都**只带骨架列**（轮次、会话、起止、终态、出口、
 错误），不带 `inputs` / `outputs` / `snapshot`：快照含技能集全文，循环运行每轮一份，SSE 每 500 ms
-的轮询一有变化就整份重发，会把页面与服务端一起拖慢。`nodes` 同理只带骨架列（`run_nodes` 去掉
-`inputs` / `outputs` / `snapshot`，`select` 时不取）——最新一轮那份重载荷同样不该随每帧 snapshot
-走；trajectory 路由在服务端读 `node.snapshot` 取技能名映射，不受影响。抽屉打开某一轮时另行
+的轮询一有变化就整份重发，会把页面与服务端一起拖慢。`nodes` 同理不带重载荷（第 5 批之后 `run_nodes` 表上已经没有
+`inputs` / `outputs` / `snapshot` 这三列，重载荷只有轮次行这一份）；trajectory 路由在服务端读该
+节点仍留着快照的最大一轮取技能名映射，不受影响。抽屉打开某一轮时另行
 `GET /api/runs/[id]/nodes/[nodeId]/rounds/[round]` 取这一轮的重载荷（`handle()` 里，404 为无此轮，
 置空过的列返回 null）。运行状态只从这两处取；抽屉的轨迹页签仍按需调用现有的
 `GET /api/runs/[id]/nodes/[nodeId]/trajectory`（会话 JSONL 是轨迹的权威源，事件表里没有它），
@@ -341,14 +339,12 @@ DESIGN.md 的 Action 载荷行与引擎 spec 同步。
 
 **保留策略**：轮次行分两部分——骨架（轮次、会话、起止、终态、出口、错误，每行几十字节）与
 重载荷（`inputs` / `outputs` / `snapshot`；快照含 prompt、rule、渲染后的提示与技能集全文，循环运行
-会成倍复制）。事件清理（`cleanup.ts` 的 events 目标）与 `run_events` 同一刀：把该运行轮次行**与
-`run_nodes`**的 `inputs` / `outputs` / `snapshot` 一并置空（`run_nodes` 上那份是最新轮的副本，不清
-就仍经 `/api/runs/[id]` 整行返回），骨架保留，回放退化为轮次级、抽屉的输入输出与快照页签显示
+会成倍复制）。事件清理（`cleanup.ts` 的 events 目标）与 `run_events` 同一刀：把该运行轮次行的
+`inputs` / `outputs` / `snapshot` 置空，骨架保留，回放退化为轮次级、抽屉的输入输出与快照页签显示
 「已清理」；运行清理才删整行。清理的**资格按运行算**（`runs.finishedAt` 早于截止且已终态），
-不按「有事件行」算——免费的输入→输出运行、首个事件前就失败的 Action 没有事件行，它们的轮次行与
-`run_nodes` 重载荷同样要置空并计入预览。`detailStat` 与预览文案把「置空的轮次行数 / 节点行数」
-一并报出，`cleanup.test.ts` 断言 dryRun 与真做一致，并含一条「没有事件行的运行也被置空」。`run_nodes` 上的这三列与轮次行是同一事实的两份表示，
-留给第 5 批作为简化候选（trajectory 接口的技能名映射改读轮次行后即可删）。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
+不按「有事件行」算——免费的输入→输出运行、首个事件前就失败的 Action 没有事件行，它们的轮次行
+重载荷同样要置空并计入预览。`detailStat` 与预览文案把「置空的轮次行数」报出，
+`cleanup.test.ts` 断言 dryRun 与真做一致，并含一条「没有事件行的运行也被置空」。运行清理（`cleanRuns()`）与单条删除随 `runs` 级联删掉轮次行，所以 `cleanup.ts` 的
 `detailStat` 影响面统计与预览文案要加上 `run_node_rounds` 的行数（今天只报 `run_nodes` /
 `run_events` / `node_usage` / `run_results`），`cleanup.test.ts` 补断言：dryRun 报出的行数与真删一致。
 

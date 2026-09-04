@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * GET /api/revisions?kind=&id=  该实体的修订列表（版本号倒序，不含 payload）
- * 响应：{ items: Array<{ id, entityKind, entityId, versionNo, note, pinned, createdAt }> }
+ * 响应：{ items: Array<{ id, entityKind, entityId, versionNo, note, createdAt }> }
  */
 export async function GET(request: Request) {
   return handle(() => {

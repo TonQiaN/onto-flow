@@ -3,13 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
-import { db, runEvents, runNodes, runResults, runs, workflows } from "@/db";
+import { db, runEvents, runResults, runs, workflows } from "@/db";
 import { classifyEdges, downstreamOf, type ResolvedPort, type ValidationIssue } from "@/lib/graph";
 import {
   parseResumeMatchResult,
   RESUME_MATCH_CRITIC_ACTION_NAMES,
-  RESUME_MATCH_CRITIC_ARTIFACTS,
-  RESUME_MATCH_CRITIC_RESULT_PORT,
   RESUME_MATCH_JOB_INPUT_LABEL,
   RESUME_MATCH_JOB_OBJECT_TYPE_NAME,
   RESUME_MATCH_JOB_PARSE_PORT,
@@ -17,13 +15,10 @@ import {
   RESUME_MATCH_PARSE_ACTION_NAME,
   RESUME_MATCH_PARSE_MODEL_ID,
   RESUME_MATCH_PARSE_PROVIDER_ID,
-  RESUME_MATCH_PARSED_JOB_ARTIFACT,
   RESUME_MATCH_PARSED_JOB_PORT,
-  RESUME_MATCH_PARSED_RESUME_ARTIFACT,
   RESUME_MATCH_PARSED_RESUME_PORT,
   RESUME_MATCH_REPORT_ACTION_NAME,
   RESUME_MATCH_REPORT_CRITICS_PORT,
-  RESUME_MATCH_REPORT_RESULT_PORT,
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
   RESUME_MATCH_RESUME_INPUT_LABEL,
@@ -32,7 +27,11 @@ import {
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
   RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256,
   RESUME_MATCH_WORKFLOW_NAME,
+  resumeMatchEdgeKeys,
+  resumeMatchExpectedEdges,
+  resumeMatchExpectedPorts,
   resumeMatchWorkflowBehaviorSha256,
+  type ResumeMatchPortContract,
   type ResumeMatchResult,
 } from "@/lib/resume-match";
 import { isWithinData, resolveWithinData } from "@/server/fs-safety";
@@ -40,6 +39,7 @@ import { startResolvedRun } from "@/server/engine/runner";
 import { resolveWorkflow, WorkflowResolveError, type ResolvedWorkflow } from "@/server/resolve";
 import { isAuthoritativeResumeMatchActionBehavior } from "@/server/resume-match-action-integrity";
 import { isAuthoritativeResumeMatchValidatorTool } from "@/server/resume-match-validator-integrity";
+import { readLatestSuccessfulOutputs } from "@/server/run-rounds";
 import { readSettings, type SettingsDocument } from "@/server/settings";
 import { type WriteResult, writeFail, writeOk } from "@/server/writers/types";
 
@@ -153,22 +153,11 @@ function sameResultSchema(schema: string | null): boolean {
   }
 }
 
-type PortContract = Pick<ResolvedPort, "name" | "kind" | "objectTypeId"> & {
-  artifactPath: string | null;
-  exitName: string | null;
-};
-
-function portContract(
-  name: string,
-  kind: ResolvedPort["kind"],
-  objectTypeId: string,
-  artifactPath: string | null = null,
-): PortContract {
-  return { name, kind, objectTypeId, artifactPath, exitName: null };
-}
-
-function exactPorts(actual: readonly ResolvedPort[], expected: readonly PortContract[]): boolean {
-  const key = (port: ResolvedPort | PortContract) =>
+function exactPorts(
+  actual: readonly ResolvedPort[],
+  expected: readonly ResumeMatchPortContract[],
+): boolean {
+  const key = (port: ResolvedPort | ResumeMatchPortContract) =>
     JSON.stringify([
       port.name,
       port.kind,
@@ -330,117 +319,52 @@ function validateWorkflowContract(resolved: ResolvedWorkflow): string | null {
   const criticReportPort = reportActionNode.inputs.find(
     (port) => port.name === RESUME_MATCH_REPORT_CRITICS_PORT,
   );
+  // 三个端口的对象类型是期望集合的参数，缺任何一个都无从构造期望，直接判违约。
+  if (
+    parsedJobPort === undefined ||
+    parsedResumePort === undefined ||
+    criticReportPort === undefined
+  ) {
+    return "简历匹配工作流八个固定 Action 的输入输出端口必须保持完整契约";
+  }
+  const expectedPorts = resumeMatchExpectedPorts({
+    jobFile: jobPort.objectTypeId,
+    resumeFile: resumePort.objectTypeId,
+    parsedJob: parsedJobPort.objectTypeId,
+    parsedResume: parsedResumePort.objectTypeId,
+    criticResult: criticReportPort.objectTypeId,
+    result: outputPort.objectTypeId,
+  });
   const exactActionPorts =
-    parsedJobPort !== undefined &&
-    parsedResumePort !== undefined &&
-    criticReportPort !== undefined &&
-    exactPorts(parseActionNode.inputs, [
-      portContract(RESUME_MATCH_JOB_PARSE_PORT, "file", jobPort.objectTypeId),
-      portContract(RESUME_MATCH_RESUME_PARSE_PORT, "file", resumePort.objectTypeId),
-    ]) &&
-    exactPorts(parseActionNode.outputs, [
-      portContract(
-        RESUME_MATCH_PARSED_JOB_PORT,
-        "file",
-        parsedJobPort.objectTypeId,
-        RESUME_MATCH_PARSED_JOB_ARTIFACT,
-      ),
-      portContract(
-        RESUME_MATCH_PARSED_RESUME_PORT,
-        "file",
-        parsedResumePort.objectTypeId,
-        RESUME_MATCH_PARSED_RESUME_ARTIFACT,
-      ),
-    ]) &&
+    exactPorts(parseActionNode.inputs, expectedPorts.parse.inputs) &&
+    exactPorts(parseActionNode.outputs, expectedPorts.parse.outputs) &&
     criticNodes.every(
       (critic, index) =>
-        exactPorts(critic.inputs, [
-          portContract(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobPort.objectTypeId),
-          portContract(RESUME_MATCH_PARSED_RESUME_PORT, "file", parsedResumePort.objectTypeId),
-        ]) &&
-        exactPorts(critic.outputs, [
-          portContract(
-            RESUME_MATCH_CRITIC_RESULT_PORT,
-            "file",
-            criticReportPort.objectTypeId,
-            RESUME_MATCH_CRITIC_ARTIFACTS[index],
-          ),
-        ]),
+        exactPorts(critic.inputs, expectedPorts.critics[index].inputs) &&
+        exactPorts(critic.outputs, expectedPorts.critics[index].outputs),
     ) &&
-    exactPorts(reportActionNode.inputs, [
-      portContract(RESUME_MATCH_PARSED_JOB_PORT, "file", parsedJobPort.objectTypeId),
-      portContract(RESUME_MATCH_PARSED_RESUME_PORT, "file", parsedResumePort.objectTypeId),
-      portContract(RESUME_MATCH_REPORT_CRITICS_PORT, "file", criticReportPort.objectTypeId),
-    ]) &&
-    exactPorts(reportActionNode.outputs, [
-      portContract(
-        RESUME_MATCH_REPORT_RESULT_PORT,
-        "json",
-        outputPort.objectTypeId,
-        RESUME_MATCH_RESULT_ARTIFACT,
-      ),
-    ]);
+    exactPorts(reportActionNode.inputs, expectedPorts.report.inputs) &&
+    exactPorts(reportActionNode.outputs, expectedPorts.report.outputs);
   if (!exactActionPorts) {
     return "简历匹配工作流八个固定 Action 的输入输出端口必须保持完整契约";
   }
 
   // 专用入口不是任意图的通用执行器：六位评审缺一、重复一位，或只断开其中
   // 一条岗位/简历/结论边，通用图仍可能合法，却会在付费后得到不完整评分。
-  const edgeTuple = (
-    sourceNodeId: string,
-    sourcePort: string,
-    targetNodeId: string,
-    targetPort: string,
-  ): readonly [string, string, string, string] => [
-    sourceNodeId,
-    sourcePort,
-    targetNodeId,
-    targetPort,
-  ];
-  const expectedEdges = [
-    edgeTuple(jobNode.id, "value", parseActionNode.id, RESUME_MATCH_JOB_PARSE_PORT),
-    edgeTuple(resumeNode.id, "value", parseActionNode.id, RESUME_MATCH_RESUME_PARSE_PORT),
-    ...criticNodes.flatMap((critic) => [
-      edgeTuple(
-        parseActionNode.id,
-        RESUME_MATCH_PARSED_JOB_PORT,
-        critic.id,
-        RESUME_MATCH_PARSED_JOB_PORT,
-      ),
-      edgeTuple(
-        parseActionNode.id,
-        RESUME_MATCH_PARSED_RESUME_PORT,
-        critic.id,
-        RESUME_MATCH_PARSED_RESUME_PORT,
-      ),
-      edgeTuple(
-        critic.id,
-        RESUME_MATCH_CRITIC_RESULT_PORT,
-        reportActionNode.id,
-        RESUME_MATCH_REPORT_CRITICS_PORT,
-      ),
-    ]),
-    edgeTuple(
-      parseActionNode.id,
-      RESUME_MATCH_PARSED_JOB_PORT,
-      reportActionNode.id,
-      RESUME_MATCH_PARSED_JOB_PORT,
+  const expectedEdges = resumeMatchExpectedEdges({
+    job: jobNode.id,
+    resume: resumeNode.id,
+    parse: parseActionNode.id,
+    critics: criticNodes.map((critic) => critic.id),
+    report: reportActionNode.id,
+    output: outputNode.id,
+  });
+  const expectedEdgeKeys = resumeMatchEdgeKeys(expectedEdges);
+  const actualEdgeKeys = resumeMatchEdgeKeys(
+    resolved.edges.map(
+      (edge) => [edge.sourceNodeId, edge.sourcePort, edge.targetNodeId, edge.targetPort] as const,
     ),
-    edgeTuple(
-      parseActionNode.id,
-      RESUME_MATCH_PARSED_RESUME_PORT,
-      reportActionNode.id,
-      RESUME_MATCH_PARSED_RESUME_PORT,
-    ),
-    edgeTuple(reportActionNode.id, RESUME_MATCH_REPORT_RESULT_PORT, outputNode.id, "value"),
-  ];
-  const edgeKey = (edge: readonly [string, string, string, string]) => JSON.stringify(edge);
-  const expectedEdgeKeys = expectedEdges.map(edgeKey).sort();
-  const actualEdgeKeys = resolved.edges
-    .map((edge) =>
-      edgeKey([edge.sourceNodeId, edge.sourcePort, edge.targetNodeId, edge.targetPort]),
-    )
-    .sort();
+  );
   if (
     expectedEdgeKeys.length !== actualEdgeKeys.length ||
     expectedEdgeKeys.some((key, index) => key !== actualEdgeKeys[index])
@@ -716,12 +640,9 @@ export function captureResumeMatchCompletion(
     };
   }
 
-  const outputNode = db
-    .select()
-    .from(runNodes)
-    .where(and(eq(runNodes.runId, runId), eq(runNodes.nodeId, resultNodes.outputNodeId)))
-    .get();
-  const output = outputFile(outputNode?.outputs?.value);
+  // 必须取输出节点**最后一轮成功**的产物：评审循环里被打回那轮它记 skipped，
+  // 按轮次最大取会拿到那轮的空产物顶替最终结果。
+  const output = outputFile(readLatestSuccessfulOutputs(runId, resultNodes.outputNodeId)?.value);
   const run = db.select({ runDir: runs.runDir }).from(runs).where(eq(runs.id, runId)).get();
   if (!output || !run) return { ok: false, error: "运行缺少可读取的 JSON 评分结果" };
   const artifact = readResultArtifact(run.runDir, output);

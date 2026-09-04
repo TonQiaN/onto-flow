@@ -47,31 +47,17 @@ import {
   createWorkflow,
   loadWorkflowSets,
   writeWorkflow,
-  type EdgePayload,
-  type NodePayload,
   type WorkflowDefinition,
 } from "../src/server/writers/workflow";
 import type { WriteResult } from "../src/server/writers/types";
 import {
   RESUME_MATCH_ACTION_BEHAVIOR_SHA256,
-  RESUME_MATCH_CRITIC_ACTION_NAMES,
-  RESUME_MATCH_CRITIC_ARTIFACTS,
-  RESUME_MATCH_CRITIC_RESULT_PORT,
-  RESUME_MATCH_JOB_INPUT_LABEL,
-  RESUME_MATCH_OUTPUT_LABEL,
-  RESUME_MATCH_PARSED_JOB_ARTIFACT,
-  RESUME_MATCH_PARSED_JOB_PORT,
-  RESUME_MATCH_PARSED_RESUME_ARTIFACT,
-  RESUME_MATCH_PARSED_RESUME_PORT,
   RESUME_MATCH_PARSE_ACTION_NAME,
   RESUME_MATCH_PARSE_MODEL_ID,
   RESUME_MATCH_PARSE_PROVIDER_ID,
   RESUME_MATCH_REPORT_ACTION_NAME,
-  RESUME_MATCH_REPORT_CRITICS_PORT,
-  RESUME_MATCH_REPORT_RESULT_PORT,
   RESUME_MATCH_RESULT_ARTIFACT,
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
-  RESUME_MATCH_RESUME_INPUT_LABEL,
   RESUME_MATCH_VALIDATOR_TOOL_NAME,
   RESUME_MATCH_VALIDATOR_TOOL_SHA256,
   RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256,
@@ -82,13 +68,13 @@ import {
   resumeMatchWorkflowBehaviorSha256,
   validateResumeMatchResult,
 } from "../src/lib/resume-match";
+import {
+  CRITICS,
+  resumeMatchSeedGraph,
+  resumeMatchSeedPorts,
+  type SeedPortSpec,
+} from "./seed-resume-graph";
 import { writeResumeSamples } from "./resume-samples";
-
-interface PortSpec {
-  name: string;
-  objectTypeId: string;
-  artifactPath?: string;
-}
 
 function unwrap<T>(result: WriteResult<T>): T {
   if (!result.ok) throw new Error(`${result.status}: ${result.error}`);
@@ -188,8 +174,8 @@ function upsertAction(input: {
   rule: string;
   modelId: string;
   effort: "off" | "low" | "high" | "max";
-  inputs: PortSpec[];
-  outputs: PortSpec[];
+  inputs: SeedPortSpec[];
+  outputs: SeedPortSpec[];
   toolIds?: string[];
 }): string {
   const model = db.select().from(models).where(eq(models.id, input.modelId)).get();
@@ -454,6 +440,19 @@ const tReport = upsertObjectType(
   RESUME_MATCH_RESULT_SCHEMA_TEXT,
 );
 
+// 八个 Action 的完整端口集合与工作流的节点、边都住在无副作用的 ./seed-resume-graph.ts：
+// 受理时 validateWorkflowContract 拿 src/lib/resume-match.ts 的同一份期望逐个精确比对，
+// scripts/resume-decision-policy.test.ts 也读这份数据，种子与契约因此不可能各自漂移。
+const SEED_TYPES = {
+  jobFile: tJdFile,
+  resumeFile: tResumeFile,
+  parsedJob: tJdMd,
+  parsedResume: tResumeMd,
+  criticResult: tVerdict,
+  result: tReport,
+};
+const SEED_PORTS = resumeMatchSeedPorts(SEED_TYPES);
+
 const EVIDENCE_RULE =
   "有事实依据的评价必须能指到简历原文的一处直引，直引不超过一句。" +
   "简历没有写的项明确记为「未证实」，说明它如何计入相应维度分数；不得补写事实或伪造引用。" +
@@ -491,84 +490,9 @@ const parse = upsertAction({
   modelId: visionModel.id,
   // 自主处理 PDF 是多步命令行工作（探测、转换、逐页核对），低思考强度不够谋划。
   effort: "high",
-  inputs: [
-    { name: "岗位文件", objectTypeId: tJdFile },
-    { name: "简历文件", objectTypeId: tResumeFile },
-  ],
-  outputs: [
-    {
-      name: RESUME_MATCH_PARSED_JOB_PORT,
-      objectTypeId: tJdMd,
-      artifactPath: RESUME_MATCH_PARSED_JOB_ARTIFACT,
-    },
-    {
-      name: RESUME_MATCH_PARSED_RESUME_PORT,
-      objectTypeId: tResumeMd,
-      artifactPath: RESUME_MATCH_PARSED_RESUME_ARTIFACT,
-    },
-  ],
+  inputs: SEED_PORTS.parse.inputs,
+  outputs: SEED_PORTS.parse.outputs,
 });
-
-/** 六个评委：同一套输入输出形状，只有职责与评分口径不同。 */
-const CRITICS: Array<{ key: string; name: string; focus: string; scoring: string }> = [
-  {
-    key: "must-have",
-    name: RESUME_MATCH_CRITIC_ACTION_NAMES[0],
-    focus:
-      "逐条核对岗位要求里「硬性条件」的每一项：简历中有明确证据满足记「满足」，" +
-      "明确不满足记「不满足」，没写记「未证实」，材料内部相互矛盾记「材料冲突」。" +
-      "未证实不等于候选人不具备，只表示当前材料没有达到硬性条件的证据门槛。",
-    scoring:
-      "本维度是否决维度，分数只取 0 或 100：只有每一条硬性条件都有明确证据满足才记 100；" +
-      "任一条不满足、未证实或材料冲突都记 0，并分别写明是事实不满足，还是当前材料未能证实。",
-  },
-  {
-    key: "skill-match",
-    name: RESUME_MATCH_CRITIC_ACTION_NAMES[1],
-    focus:
-      "把岗位要求里的技能项逐个在简历里查证，分三档：直接命中（写明用过并有具体场景）、" +
-      "间接命中（相近技术栈，必须说明相近在哪）、未证实。只出现在技能清单、" +
-      "正文经历里找不到对应场景的，记为「仅列举」，不算直接命中。",
-    scoring: "按命中比例与该技能对岗位的关键程度加权，不按简历罗列的技能总数。",
-  },
-  {
-    key: "experience-depth",
-    name: RESUME_MATCH_CRITIC_ACTION_NAMES[2],
-    focus:
-      "看职责层级、独立度、项目规模与复杂度，不看年限数字。区分「参与」「负责」「主导」，" +
-      "区分课程或个人项目与生产系统。",
-    scoring:
-      "并发量、数据量、团队人数这类可核查的量化描述是加分依据；没有量化描述时按证据不足处理，不按经验不足处理。",
-  },
-  {
-    key: "domain-fit",
-    name: RESUME_MATCH_CRITIC_ACTION_NAMES[3],
-    focus: "判断过往的行业、业务场景与客户类型能否接上本岗位。",
-    scoring:
-      "跨行但底层问题同构时（例如同为高并发交易系统），明确写出同构点，不因行业名称不同直接扣分。",
-  },
-  {
-    key: "stability",
-    name: RESUME_MATCH_CRITIC_ACTION_NAMES[4],
-    focus: "逐段核对起止时间与在职时长，只判断简历明示的时间线是否完整、自洽和可计算。",
-    scoring:
-      "只对缺少起止日期、日期前后矛盾等时间线质量问题计分。空窗、转行与短期任职本身不扣分，也不推测原因；" +
-      "材料未说明原因绝不影响分数，只记为与岗位匹配无关的未知事实；" +
-      "求学、服役、育儿、照护、健康或创业等经历不得成为扣分依据。",
-  },
-  {
-    key: "red-flag",
-    name: RESUME_MATCH_CRITIC_ACTION_NAMES[5],
-    focus:
-      "只找同一份简历中可直接定位、对同一事实作出互相矛盾陈述的问题，例如同一经历的起止日期前后不一致，" +
-      "或同一项目的职责、成果与可复算数字在不同段落互相否定。",
-    scoring:
-      "不得基于外部世界知识断言真伪。本维度是否决维度，分数只取 0 或 100：" +
-      "只有材料内部可直接证明、且足以改变岗位匹配判断的重大事实矛盾才记 0。" +
-      "时间段重叠、职级与年限关系、快速晋升、绝对化措辞、模板化表达、模糊、缺失或外部无法验证本身都不构成造假证据。" +
-      "没有发现足以否决的内部证据时明确写「未发现」并记 100。",
-  },
-];
 
 const criticIds = CRITICS.map((critic, index) =>
   upsertAction({
@@ -591,17 +515,8 @@ const criticIds = CRITICS.map((critic, index) =>
       "不得生成面试问题、人工复核、后续核实或交给他人判断等行动项；本维度判断必须在当前材料内完成。",
     modelId: textModel.id,
     effort: "low",
-    inputs: [
-      { name: RESUME_MATCH_PARSED_JOB_PORT, objectTypeId: tJdMd },
-      { name: RESUME_MATCH_PARSED_RESUME_PORT, objectTypeId: tResumeMd },
-    ],
-    outputs: [
-      {
-        name: RESUME_MATCH_CRITIC_RESULT_PORT,
-        objectTypeId: tVerdict,
-        artifactPath: RESUME_MATCH_CRITIC_ARTIFACTS[index],
-      },
-    ],
+    inputs: SEED_PORTS.critics[index].inputs,
+    outputs: SEED_PORTS.critics[index].outputs,
   }),
 );
 
@@ -645,18 +560,8 @@ const report = upsertAction({
     `只有 ${RESUME_MATCH_VALIDATOR_TOOL_NAME} 对 ${RESUME_MATCH_RESULT_ARTIFACT} 返回 valid=true 后才可以提交。`,
   modelId: textModel.id,
   effort: "high",
-  inputs: [
-    { name: RESUME_MATCH_PARSED_JOB_PORT, objectTypeId: tJdMd },
-    { name: RESUME_MATCH_PARSED_RESUME_PORT, objectTypeId: tResumeMd },
-    { name: RESUME_MATCH_REPORT_CRITICS_PORT, objectTypeId: tVerdict },
-  ],
-  outputs: [
-    {
-      name: RESUME_MATCH_REPORT_RESULT_PORT,
-      objectTypeId: tReport,
-      artifactPath: RESUME_MATCH_RESULT_ARTIFACT,
-    },
-  ],
+  inputs: SEED_PORTS.report.inputs,
+  outputs: SEED_PORTS.report.outputs,
   toolIds: [validateResultTool],
 });
 
@@ -697,127 +602,18 @@ const currentNodeRows = db
   .from(workflowNodes)
   .where(eq(workflowNodes.workflowId, wf.id))
   .all();
-const unusedNodeIds = new Set(currentNodeRows.map((node) => node.id));
-function nodeId(shape: Omit<NodePayload, "id" | "x" | "y">): string {
-  const found = currentNodeRows.find(
-    (node) =>
-      unusedNodeIds.has(node.id) &&
-      node.kind === shape.kind &&
-      node.actionId === shape.actionId &&
-      node.objectTypeId === shape.objectTypeId &&
-      node.label === shape.label,
-  );
-  if (!found) return crypto.randomUUID();
-  unusedNodeIds.delete(found.id);
-  return found.id;
-}
-
-function inputNode(label: string, objectTypeId: string, x: number, y: number): NodePayload {
-  const shape = { kind: "input" as const, actionId: null, objectTypeId, label };
-  return { id: nodeId(shape), ...shape, x, y };
-}
-
-function actionNode(label: string, actionId: string, x: number, y: number): NodePayload {
-  const shape = { kind: "action" as const, actionId, objectTypeId: null, label };
-  return { id: nodeId(shape), ...shape, x, y };
-}
-
-function outputNode(label: string, objectTypeId: string, x: number, y: number): NodePayload {
-  const shape = { kind: "output" as const, actionId: null, objectTypeId, label };
-  return { id: nodeId(shape), ...shape, x, y };
-}
-
-const jdNode = inputNode(RESUME_MATCH_JOB_INPUT_LABEL, tJdFile, 0, 80);
-const resumeNode = inputNode(RESUME_MATCH_RESUME_INPUT_LABEL, tResumeFile, 0, 260);
-const parseNode = actionNode("解析", parse, 260, 170);
-const criticNodes = CRITICS.map((critic, index) =>
-  actionNode(critic.name.replace("简历评分·", ""), criticIds[index], 540, index * 110),
-);
-const reportNode = actionNode("汇总", report, 820, 280);
-const outNode = outputNode(RESUME_MATCH_OUTPUT_LABEL, tReport, 1080, 280);
-const desiredNodes = [jdNode, resumeNode, parseNode, ...criticNodes, reportNode, outNode];
-
 const currentEdgeRows = db
   .select()
   .from(workflowEdges)
   .where(eq(workflowEdges.workflowId, wf.id))
   .all();
-const unusedEdgeIds = new Set(currentEdgeRows.map((edge) => edge.id));
-function edgeId(shape: Omit<EdgePayload, "id">): string {
-  const found = currentEdgeRows.find(
-    (edge) =>
-      unusedEdgeIds.has(edge.id) &&
-      edge.sourceNodeId === shape.sourceNodeId &&
-      edge.sourcePort === shape.sourcePort &&
-      edge.targetNodeId === shape.targetNodeId &&
-      edge.targetPort === shape.targetPort,
-  );
-  if (!found) return crypto.randomUUID();
-  unusedEdgeIds.delete(found.id);
-  return found.id;
-}
-
-function edge(shape: Omit<EdgePayload, "id">): EdgePayload {
-  return { id: edgeId(shape), ...shape };
-}
-
-const desiredEdges = [
-  edge({
-    sourceNodeId: jdNode.id,
-    sourcePort: "value",
-    targetNodeId: parseNode.id,
-    targetPort: "岗位文件",
-  }),
-  edge({
-    sourceNodeId: resumeNode.id,
-    sourcePort: "value",
-    targetNodeId: parseNode.id,
-    targetPort: "简历文件",
-  }),
-  // 扇出：解析的两个输出端口各连出六条线，六个评委并行跑
-  ...criticNodes.flatMap((criticNode) => [
-    edge({
-      sourceNodeId: parseNode.id,
-      sourcePort: RESUME_MATCH_PARSED_JOB_PORT,
-      targetNodeId: criticNode.id,
-      targetPort: RESUME_MATCH_PARSED_JOB_PORT,
-    }),
-    edge({
-      sourceNodeId: parseNode.id,
-      sourcePort: RESUME_MATCH_PARSED_RESUME_PORT,
-      targetNodeId: criticNode.id,
-      targetPort: RESUME_MATCH_PARSED_RESUME_PORT,
-    }),
-  ]),
-  // 最终汇总回看岗位与简历原文，再读齐六份评委结论完成裁决。
-  edge({
-    sourceNodeId: parseNode.id,
-    sourcePort: RESUME_MATCH_PARSED_JOB_PORT,
-    targetNodeId: reportNode.id,
-    targetPort: RESUME_MATCH_PARSED_JOB_PORT,
-  }),
-  edge({
-    sourceNodeId: parseNode.id,
-    sourcePort: RESUME_MATCH_PARSED_RESUME_PORT,
-    targetNodeId: reportNode.id,
-    targetPort: RESUME_MATCH_PARSED_RESUME_PORT,
-  }),
-  // 一个评委结论输入端口接进六条线，节点会等待全部结算。
-  ...criticNodes.map((criticNode) =>
-    edge({
-      sourceNodeId: criticNode.id,
-      sourcePort: RESUME_MATCH_CRITIC_RESULT_PORT,
-      targetNodeId: reportNode.id,
-      targetPort: RESUME_MATCH_REPORT_CRITICS_PORT,
-    }),
-  ),
-  edge({
-    sourceNodeId: reportNode.id,
-    sourcePort: RESUME_MATCH_REPORT_RESULT_PORT,
-    targetNodeId: outNode.id,
-    targetPort: "value",
-  }),
-];
+// 形状对得上的既有节点 / 边复用它的 id——幂等靠这个；图本身由纯模块拼，这里只喂库里的现状。
+const { nodes: desiredNodes, edges: desiredEdges } = resumeMatchSeedGraph({
+  types: SEED_TYPES,
+  actionIds: { parse, critics: criticIds, report },
+  currentNodes: currentNodeRows,
+  currentEdges: currentEdgeRows,
+});
 
 const byId = <T extends { id: string }>(items: T[]) =>
   [...items].sort((left, right) => left.id.localeCompare(right.id));
