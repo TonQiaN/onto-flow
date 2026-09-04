@@ -307,9 +307,7 @@
    在最后一轮成功之后的那个时刻把节点翻成失败（见下面的推导规则）。
 3. `run_events.session_id: text`：`events.ts` 的通用落库从 `ctx.sessionId` 写入；`action.ts` 里
    （`events.test.ts` 与 `action.test.ts` 手写的内存库 DDL 同步加这一列，否则它们调用被测模块时会撞
-   `no column named session_id`；`runner.test.ts` 的 DDL 若也建了 `run_events`，同样加）；`action.ts` 里
-   `refreshUnsettledUsageRollup()` 自己插的 `usage` 事件（`usageEventPayload()` 已带该会话 id）也
-   必须写这一列——两处插入点都改，别只改一处。事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
+   `no column named session_id`；`runner.test.ts` 的 DDL 若也建了 `run_events`，同样加）。事件从此能归到轮（会话 id 在第 0 轮是节点 id，之后是
    `<节点id>#<轮次+1>`，见 `engine/action.ts`）。列保持可空只是为了早于本批的历史行；新写入的事件
    没有一条允许为 null，`runner.test.ts` 断言之。
 
