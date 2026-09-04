@@ -177,7 +177,27 @@ first statement is `return handle(` — never a `const`, an alias, or a re-expor
 | 把 restore route 的 `import "@/server/writers";` 注释掉 | 红 | 红 |
 | 把 route 的 `import { handle } …` 注释掉 | 红 | 红「没有从 @/lib/http 导入 handle」 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，七轮改写对现有 route 的判定一次
+第八轮把「藏在字符串里的仿冒」也补上：`const marker = 'export const dynamic = "force-dynamic";'`
+在只抹注释的视图里字还在。`stripCode` 抹白时长度与换行都保留，所以抹过的视图与原文偏移一一
+对应——`occursAsCode(raw, snippet)` / `matchesAsCode(raw, re)` 先在原文里定位，再要求抹过字面量的
+视图在同一段偏移上是同样的「形状」；注释掉的只剩空白、藏进字符串的内容也被抹白，两种都对不上。
+三处存在性判定（`force-dynamic`、restore 的 `import "@/server/writers";`、`handle` 的 import）
+与 `restoreRevision` 的识别都改走它。
+
+十九种写法反向验证过（临时改一个 route，跑完随即还原，`git status` 干净）。除前面十四种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `const marker = 'export const dynamic = "force-dynamic";'` 顶替真导出 | 红 | 红 |
+| `const marker = 'import "@/server/writers";'` 顶替真导入 | 红 | 红 |
+| `const marker = 'import { handle } from "@/lib/http";'` 顶替真导入 | 红 | 红 |
+| 注释掉 `force-dynamic`（回归） | 红 | 红 |
+| 原样 | 绿 | 绿 |
+
+`await db.` 与客户端边界 / `"use server"` 三条仍看原文，理由是失败方向：注释与字符串只能**多出**
+文本、不能藏起真实代码，被它们欺骗的方向是误报（红）而不是漏放（绿）。撤掉人工检查怕的是漏放。
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，八轮改写对现有 route 的判定一次
 都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：

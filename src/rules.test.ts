@@ -57,6 +57,30 @@ function stripCode(content: string, literals = false): string {
   }
   return out;
 }
+
+/**
+ * 这段文本是否作为**真代码**出现过。`stripCode` 抹白时长度与换行都保留，所以抹过的视图与原文
+ * 偏移一一对应：先在原文里找到位置，再要求抹过字面量的视图在同一段偏移上是同样的「形状」。
+ * 注释掉的那行在视图里只剩空白，藏进字符串的仿冒（`const marker = 'import "@/server/writers";'`）
+ * 内容也被抹白，两种都对不上（Codex 对 #50 的七、八两轮复审）。
+ */
+function occursAsCode(raw: string, snippet: string): boolean {
+  const view = stripCode(raw, true);
+  const shape = stripCode(snippet, true);
+  for (let at = raw.indexOf(snippet); at !== -1; at = raw.indexOf(snippet, at + 1))
+    if (view.slice(at, at + snippet.length) === shape) return true;
+  return false;
+}
+
+/** 正则版的 occursAsCode：命中的那一段必须在抹过字面量的视图里是同样的形状 */
+function matchesAsCode(raw: string, re: RegExp): boolean {
+  const view = stripCode(raw, true);
+  const all = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+  for (const match of raw.matchAll(all))
+    if (view.slice(match.index, match.index + match[0].length) === stripCode(match[0], true))
+      return true;
+  return false;
+}
 const isTest = (file: string): boolean => /\.test\.tsx?$/.test(file);
 
 // 本文件的测试名引用了被禁的写法（await db.、"use server"），扫描集要把自己排除。
@@ -80,7 +104,7 @@ describe("AGENTS.md · Repository layout", () => {
   it('src/app/api 的每个 route.ts 都 `export const dynamic = "force-dynamic"`', () => {
     expect(apiRoutes.length).toBeGreaterThan(0);
     const missing = apiRoutes
-      .filter((file) => !stripCode(read(file)).includes('export const dynamic = "force-dynamic";'))
+      .filter((file) => !occursAsCode(read(file), 'export const dynamic = "force-dynamic";'))
       .map(rel);
     expect(missing).toEqual([]);
   });
@@ -165,9 +189,7 @@ describe("AGENTS.md · Conventions · handle()", () => {
         }
       if (STAR_EXPORT_RE.test(content)) out.push("route 里有 export *，可能带出方法");
       if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
-      // 这一条只抹注释、不抹字面量：`"@/lib/http"` 本身就是字符串，抹掉判定就没了；
-      // 但注释掉的那行 import 也不能算数
-      if (!/import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(stripCode(raw)))
+      if (!matchesAsCode(raw, /import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/))
         out.push("没有从 @/lib/http 导入 handle");
       return out;
     });
@@ -373,11 +395,11 @@ describe("AGENTS.md · Conventions · revision restore", () => {
    */
   it('引用 restoreRevision 的 route 带 import "@/server/writers";', () => {
     const restoreRoutes = apiRoutes.filter((file) =>
-      /\brestoreRevision\b/.test(stripCode(read(file))),
+      matchesAsCode(read(file), /\brestoreRevision\b/),
     );
     expect(restoreRoutes.map(rel)).toContain("src/app/api/revisions/[revId]/restore/route.ts");
     const missing = restoreRoutes
-      .filter((file) => !stripCode(read(file)).includes('import "@/server/writers";'))
+      .filter((file) => !occursAsCode(read(file), 'import "@/server/writers";'))
       .map(rel);
     expect(missing).toEqual([]);
   });
