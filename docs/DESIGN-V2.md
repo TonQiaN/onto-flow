@@ -179,6 +179,14 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 `folderRefFrom(folders, id)` 把扁平文件夹清单还原成带完整路径的 `FolderRef`（四个库页「新建时的
 默认归属」），`formatUsedBy(usedBy)` 把删除失败（409）返回的引用方名字拼成行内文案。
 
+四个可被引用的库与 `models` 表在客户端的**行形状只在 `entity-dto.ts` 声明一份**，同样经桶导出：
+`ActionDto` / `ActionPortDto`（`loadActionDtos` 的形状，`updatedAt` 是可选的——它今天不带时间戳）、
+`ObjectTypeRow` / `SkillRow` / `ToolRow`（各库整行，列表、详情与 POST / PUT 回包同形）、`ModelRow`。
+库页与画布已经在互相传这些对象（`workflows/[id]/action-inspector.tsx` 把工作流侧的行喂给
+`actions/action-editor.tsx`），各写一份只能靠结构兼容编过；工作流专有的 `ActionItem` / `NodeDto` /
+`EdgeDto` / `WorkflowDetail` / `WorkflowSets` 仍在 `src/app/workflows/[id]/types.ts`。
+服务端 `src/server/writers/action.ts` 的同名 `ActionDto` 是另一份，客户端不从 `@/server` 取值。
+
 ## 六、引擎改动（阶段一部分）
 
 1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口、工作流设置、技能集、Tool 集

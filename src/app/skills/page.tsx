@@ -20,10 +20,11 @@ import {
   type ListEnvelope,
   readError,
   RefCount,
+  type SkillRow,
   useLibraryQuery,
   type WithLibraryMeta,
 } from "@/components/library";
-import { SkillEditor, type SkillRow } from "./skill-editor";
+import { SkillEditor } from "./skill-editor";
 
 type SkillItem = SkillRow & WithLibraryMeta;
 
