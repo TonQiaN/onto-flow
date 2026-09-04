@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
-import { db, runEvents, runNodes, runResults, runs, workflows } from "@/db";
+import { db, runEvents, runResults, runs, workflows } from "@/db";
 import { classifyEdges, downstreamOf, type ResolvedPort, type ValidationIssue } from "@/lib/graph";
 import {
   parseResumeMatchResult,
@@ -39,6 +39,7 @@ import { startResolvedRun } from "@/server/engine/runner";
 import { resolveWorkflow, WorkflowResolveError, type ResolvedWorkflow } from "@/server/resolve";
 import { isAuthoritativeResumeMatchActionBehavior } from "@/server/resume-match-action-integrity";
 import { isAuthoritativeResumeMatchValidatorTool } from "@/server/resume-match-validator-integrity";
+import { readLatestSuccessfulOutputs } from "@/server/run-rounds";
 import { readSettings, type SettingsDocument } from "@/server/settings";
 import { type WriteResult, writeFail, writeOk } from "@/server/writers/types";
 
@@ -639,12 +640,9 @@ export function captureResumeMatchCompletion(
     };
   }
 
-  const outputNode = db
-    .select()
-    .from(runNodes)
-    .where(and(eq(runNodes.runId, runId), eq(runNodes.nodeId, resultNodes.outputNodeId)))
-    .get();
-  const output = outputFile(outputNode?.outputs?.value);
+  // 必须取输出节点**最后一轮成功**的产物：评审循环里被打回那轮它记 skipped，
+  // 按轮次最大取会拿到那轮的空产物顶替最终结果。
+  const output = outputFile(readLatestSuccessfulOutputs(runId, resultNodes.outputNodeId)?.value);
   const run = db.select({ runDir: runs.runDir }).from(runs).where(eq(runs.id, runId)).get();
   if (!output || !run) return { ok: false, error: "运行缺少可读取的 JSON 评分结果" };
   const artifact = readResultArtifact(run.runDir, output);

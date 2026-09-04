@@ -378,39 +378,17 @@ async function createFixture(request: APIRequestContext): Promise<RunFixture> {
             path.relative(process.cwd(), legacyRunDir),
           );
 
+        // run_nodes 只是节点的**最新状态**行；输入输出与快照只在轮次行上（ADR-0018）
         const statement = database.prepare(
-          "insert into run_nodes (id, run_id, node_id, label, status, snapshot, outputs, session_id, started_at, finished_at) values (?, ?, ?, ?, 'success', ?, ?, ?, ?, ?)",
+          "insert into run_nodes (id, run_id, node_id, label, status, session_id, started_at, finished_at) values (?, ?, ?, ?, 'success', ?, ?, ?)",
         );
-        // run_nodes 只是节点的**最新状态**行：甲的产物是最后一轮那份
-        statement.run(
-          randomUUID(),
-          runId,
-          nodeA,
-          "e2e-Agent甲",
-          snapshot,
-          fileOutputs(dataRoot, artifactA2),
-          `${nodeA}#2`,
-          now,
-          now + 300,
-        );
-        statement.run(
-          randomUUID(),
-          runId,
-          nodeB,
-          "e2e-Agent乙",
-          snapshot,
-          fileOutputs(dataRoot, artifactB),
-          nodeB,
-          now + 320,
-          now + 400,
-        );
+        statement.run(randomUUID(), runId, nodeA, "e2e-Agent甲", `${nodeA}#2`, now, now + 300);
+        statement.run(randomUUID(), runId, nodeB, "e2e-Agent乙", nodeB, now + 320, now + 400);
         statement.run(
           randomUUID(),
           legacyRunId,
           legacyNode,
           "e2e-Agent旧",
-          snapshot,
-          null,
           legacyNode,
           now,
           now + 400,

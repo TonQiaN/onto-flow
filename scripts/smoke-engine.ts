@@ -20,6 +20,7 @@ import {
   workflows,
 } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
+import { readLatestSuccessfulOutputs } from "../src/server/run-rounds";
 import { totalUsageTokens } from "./token-total";
 
 const PREFIX = "引擎冒烟";
@@ -209,7 +210,9 @@ async function main(): Promise<void> {
       `  ${n.label.padEnd(6)} ${n.status.padEnd(8)} tokens=${tok} 思考=${n.reasoningTokens}` +
         `${n.error ? ` 错误=${n.error}` : ""}`,
     );
-    if (n.outputs) console.log(`         产物 ${JSON.stringify(n.outputs)}`);
+    // 产物只在轮次行上；打印最后一轮成功的那份（run_nodes 已不留副本）。
+    const outputs = readLatestSuccessfulOutputs(runId, n.nodeId);
+    if (outputs) console.log(`         产物 ${JSON.stringify(outputs)}`);
   }
   const events = db.select().from(runEvents).where(eq(runEvents.runId, runId)).all();
   const byType = new Map<string, number>();

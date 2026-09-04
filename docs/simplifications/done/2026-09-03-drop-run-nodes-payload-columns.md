@@ -1,6 +1,6 @@
 # 简化：删掉 run_nodes 的 inputs / outputs / snapshot 三列，重载荷只留轮次行
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -95,3 +95,54 @@ run_node_rounds 行」。
 insert 要同步改。
 
 预估净删 90-135 行（生产 ~90 + `cleanup.ts` ~25 + 测试夹具）；风险等级：中。
+
+## 落地
+
+PR 待开。
+
+与提议的差异：多了三处记录没点名的读者，其中一处是**记录之外揭出来的既有 bug**。
+
+- `scripts/run-leetcode.ts:108` 也读 `run_nodes.outputs`（记录只点了 `resume-match.ts` 与
+  `smoke-engine.ts`），改读 `readLatestSuccessfulOutputs`。
+- **`scripts/run-resume.ts` 早在第 3c 批就已经坏了**：它自己声明的 `RunNode` 里带 `snapshot` /
+  `outputs`，但 `/api/runs/[id]` 从第 3c 批起就不再下发这两个字段（`NODE_SKELETON_COLUMNS` 摘掉了），
+  于是 `node.snapshot !== null` 对**每个**节点都为真（`undefined !== null`），
+  `Action 节点数应为 8，实际 11` 必然抛出，`inspectPdfConversions` / `inspectArtifacts` 则静默什么都不查。
+  typecheck 抓不到它，因为那是脚本自己手抄的 DTO。本 PR 把三处都改成读轮次行：产物按
+  `/api/runs/[id]/nodes/[nodeId]/rounds/[round]` 取该节点最后一轮成功的那份，Action 节点改由
+  「有会话的轮次行」判定。修好之后 `run-resume` 报出 `actionNodes: 8 / sessions: 8 / records: 134 /
+  validatorPassed: true`。
+- 新增两个按轮读的读者放在 `src/server/run-rounds.ts`（轮次行读取契约的那一个模块）：
+  `readLatestSuccessfulOutputs`（完成门禁与两个脚本共用）与 `readLatestRoundSnapshot`（trajectory 路由）。
+
+`docs/DESIGN-V3.md` 第 3 批的批次计划正文保持原样（那是当时的计划记录），只改了两处仍被当作现行契约读的
+句子：「保留策略」段与「数据路径」段。
+
+验收实际跑了：
+
+- `npm run check` 全绿（46 个文件、389 通过 1 跳过）、`npm run build` 通过。
+- `npx vitest run src/server/monitor/cleanup.test.ts src/server/engine/runner.test.ts
+  src/server/engine/action.test.ts src/server/resume-match.test.ts` 全绿；`resume-match.test.ts`
+  按记录补了「输出节点第 0 轮 skipped、第 1 轮 success」的夹具（用 `.get()` 不排序会取到第 0 轮的空产物，
+  这条用例就是那道防线）。
+- e2e（工作树自己的 `data/`，3593 端口的独立 dev server）：
+  `npx playwright test -c playwright.clean.config.ts e2e/runs.spec.ts e2e/monitor.spec.ts` **13 passed**。
+- **付费冒烟**（工作树自己的 `data/`，先 `db:push` + `db:seed`）：
+
+  | 冒烟 | 退出码 | 终态与核对 |
+  | --- | --- | --- |
+  | `smoke-engine.ts` | 0 | `终态：success`；四个节点的轮次行 `inputs` / `outputs` 都非空、两个 Action 轮次还带 `snapshot`；`pragma_table_info('run_nodes')` 已无那三列 |
+  | `smoke-graph.ts` | 0 | `终态：success`；回边两轮：起草 / 评委甲 / 评委乙 / 裁决各两轮，**每轮的 inputs / outputs / snapshot 长度互不相同**（抽屉按轮取到的是各自那一份）；输出节点第 0 轮 skipped、第 1 轮 success——正是完成门禁必须挑「最后一轮成功」的那个形状 |
+  | `run-resume.ts` | 0 | `status: success`、`nodes 11/11`、`artifacts 11`、`actionNodes 8`、`validatorCalls 1`、`validatorPassed true`、335024 token / 0.18518 元；`run_results.sha256` 与按内容重算的 sha256 一致，也与 `runs.imports.completion.resultSha256` 一致，内部 API 读回的 `result` 与脚本打印一致 |
+
+- **dryRun 证据**（同一台 3593 dev server，`POST /api/monitor/cleanup`，先把两条冒烟运行的时间回拨 3 天）：
+
+  | 目标 | dryRun | 真删 |
+  | --- | --- | --- |
+  | events | `count 183 / bytes 205017`，「事件明细 183 条，另清空 **14 行轮次**的输入输出与快照」 | 逐字相同，只在末尾多一句「已 VACUUM 回收文件空间」 |
+  | workspaces | `count 2 / bytes 1236043` | 逐字相同 |
+  | runs | `count 2`，「级联 10 个节点、15 行轮次、0 条事件、52 条用量明细、0 份持久结果」 | 逐字相同 |
+
+  events 文案已经**只报轮次行**，不再有「N 个节点」；14 = 两条够龄运行的 4 + 10 行，未够龄的简历运行
+  那 11 行没被算进去也没被清。真删后库里只剩简历那一条运行（1 run / 11 nodes / 11 rounds / 1 run_result），
+  级联正确。

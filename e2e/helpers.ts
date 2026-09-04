@@ -473,8 +473,6 @@ export interface RunFixtureNode {
   sessionId?: string | null;
   startedAt?: number | null;
   finishedAt?: number | null;
-  snapshot?: unknown;
-  outputs?: unknown;
 }
 
 export interface RunFixtureRound {
@@ -544,7 +542,7 @@ export function insertSyntheticRun(input: SyntheticRunInput): string {
         .run(...values);
 
       const insertNode = database.prepare(
-        "insert into run_nodes (id, run_id, node_id, label, status, snapshot, outputs, session_id, started_at, finished_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into run_nodes (id, run_id, node_id, label, status, session_id, started_at, finished_at) values (?, ?, ?, ?, ?, ?, ?, ?)",
       );
       for (const node of input.nodes ?? []) {
         insertNode.run(
@@ -553,8 +551,6 @@ export function insertSyntheticRun(input: SyntheticRunInput): string {
           node.nodeId,
           node.label,
           node.status ?? "pending",
-          node.snapshot == null ? null : JSON.stringify(node.snapshot),
-          node.outputs == null ? null : JSON.stringify(node.outputs),
           node.sessionId ?? null,
           node.startedAt ?? null,
           node.finishedAt ?? null,
