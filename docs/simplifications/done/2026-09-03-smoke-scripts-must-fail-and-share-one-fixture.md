@@ -92,7 +92,7 @@ real model call」——这条理由成立的前提是**冒烟会在真实调用
 
 ## 落地
 
-PR 待开。
+PR：https://github.com/TonQiaN/onto-flow/pull/51
 
 **与提议的差异（五处）**
 
