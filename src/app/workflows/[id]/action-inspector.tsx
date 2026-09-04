@@ -16,18 +16,15 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { ActionEditor } from "@/app/actions/action-editor";
-import { readError } from "@/components/library";
 import {
-  outsideSet,
-  pickBySet,
   type ActionDto,
-  type ActionItem,
   type ModelRow,
   type ObjectTypeRow,
+  readError,
   type SkillRow,
   type ToolRow,
-  type WorkflowSets,
-} from "./types";
+} from "@/components/library";
+import { outsideSet, pickBySet, type ActionItem, type WorkflowSets } from "./types";
 
 export interface InspectorTarget {
   /** 被双击的画布节点 */

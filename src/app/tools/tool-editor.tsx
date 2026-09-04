@@ -17,6 +17,7 @@ import {
   readError,
   ReferencesPanel,
   RevisionPanel,
+  type ToolRow,
 } from "@/components/library";
 import {
   formatSchema,
@@ -28,23 +29,6 @@ import {
   TOOL_PARAMETERS_TEMPLATE,
   toolCodeProblem,
 } from "./tool-form";
-
-/** tools 行：GET /api/tools/[id] 与列表项的形状 */
-export interface ToolRow {
-  id: string;
-  /** 库里的展示名（中文） */
-  name: string;
-  /** 模型可见的工具名，全库唯一 */
-  publicName: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  output: Record<string, unknown> | null;
-  timeoutMs: number | null;
-  /** execute 模块源码 */
-  code: string;
-  createdAt: string;
-  updatedAt: string;
-}
 
 type TabKey = "basic" | "refs" | "revisions";
 

@@ -1,16 +1,20 @@
 /**
- * Workflow 编辑器模块内共享类型与纯函数工具。
+ * Workflow 编辑器的图形状（NodeDto / EdgeDto / WorkflowDetail / ActionItem）与画布用的纯函数工具。
  * 与 docs/DESIGN.md 的 API 契约（ActionDto / NodeDto / EdgeDto）严格一致。
+ * 被四个库页与画布检查器共用的那批实体行（ActionDto / ObjectTypeRow / SkillRow / ToolRow /
+ * ModelRow）不在这里：它们归 @/components/library 的 entity-dto.ts，本目录与库页从同一处取。
  */
 import type { Edge } from "@xyflow/react";
+import type { FlowNode, NodeMeta, PortSnapshot } from "@/components/canvas/node-model";
 import type {
-  FlowNode,
-  NodeMeta,
-  PortKind,
-  PortSnapshot,
-  ReasoningEffort,
-} from "@/components/canvas/node-model";
-import type { FolderRef } from "@/components/library";
+  ActionDto,
+  ActionPortDto,
+  FolderRef,
+  ModelRow,
+  ObjectTypeRow,
+  SkillRow,
+  ToolRow,
+} from "@/components/library";
 import type { ValidationIssue } from "@/lib/graph";
 import {
   COMPOSITION_TOGGLE_KEYS,
@@ -19,70 +23,10 @@ import {
   type WorkflowSettings,
 } from "@/lib/workflow-settings";
 
-export interface ActionPortDto extends PortSnapshot {
-  id: string;
-  direction: "input" | "output";
-  position: number;
-  /** 输出端口写到工作区哪个文件（ADR-0008）；输入端口为 null */
-  artifactPath: string | null;
-}
-
-export interface ActionDto {
-  id: string;
-  name: string;
-  description: string;
-  prompt: string;
-  rule: string;
-  modelId: string;
-  reasoningEffort: ReasoningEffort;
-  maxReentries: number;
-  onExhausted: "fail" | "accept";
-  ports: ActionPortDto[];
-  /** 会话开始时以 /技能 注入的技能（ADR-0016）；必须 ⊆ 所在工作流的技能集 */
-  preloadSkillIds: string[];
-  /** 本 Action 会话看得见的 Tool；必须 ⊆ 所在工作流的 Tool 集 */
-  toolIds: string[];
-}
-
 /** 列表接口（DESIGN-V2 第一节信封）在 ActionDto 上追加的公共字段 */
 export interface ActionItem extends ActionDto {
   folder: FolderRef | null;
   refCount: number;
-}
-
-export interface ObjectTypeRow {
-  id: string;
-  name: string;
-  kind: PortKind;
-  description: string;
-  jsonSchema: string | null;
-  builtin: boolean;
-}
-
-export interface ModelRow {
-  id: string;
-  providerId: string;
-  modelId: string;
-  displayName: string;
-}
-
-export interface SkillRow {
-  id: string;
-  name: string;
-  description: string;
-  /** SKILL.md 正文；预载时整段进入会话首条消息，估算成本用它 */
-  content: string;
-}
-
-export interface ToolRow {
-  id: string;
-  /** 展示名（中文） */
-  name: string;
-  /** 模型看见的工具名 */
-  publicName: string;
-  description: string;
-  /** 参数 schema；连同公名与描述一起进入会话的工具清单 */
-  parameters: unknown;
 }
 
 export interface NodeDto {
@@ -188,7 +132,7 @@ export function toolTokenEstimate(
     JSON.stringify({
       name: tool.publicName,
       description: tool.description,
-      parameters: tool.parameters ?? {},
+      parameters: tool.parameters,
     }),
   );
 }

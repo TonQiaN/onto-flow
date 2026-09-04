@@ -10,7 +10,8 @@
  */
 import { useMemo, useState } from "react";
 import { typeColor } from "@/components/canvas/node-model";
-import { actionPorts, type ActionItem, type ObjectTypeRow } from "./types";
+import type { ObjectTypeRow } from "@/components/library";
+import { actionPorts, type ActionItem } from "./types";
 
 export const ACTION_DRAG_MIME = "application/ontoflow-action";
 

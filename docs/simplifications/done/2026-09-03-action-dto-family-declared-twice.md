@@ -1,6 +1,6 @@
 # 简化：Action / 对象类型 / Skill / Tool 的前端 DTO 只声明一份
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -77,3 +77,33 @@ import 了 `@/app/actions/action-editor` 的 `ActionEditor`，而 `:23-28` 把 `
 
 预估净删 50-70 行（保守只合并 `actions/shared.tsx` ↔ `workflows/types.ts` 为 −50，连三个编辑器一起为
 −70）；风险等级：中。
+
+## 落地
+
+[PR #45](https://github.com/TonQiaN/onto-flow/pull/45)。
+
+与提议的差异：
+
+- `src/app/actions/shared.tsx` **整份删除**（提议给的两条路里的第二条）：上一个 PR 已经把
+  `Kind` / `KIND_STYLE` / `KindBadge` / `EFFORT_LABEL` / `formatUsedBy` 搬走，这次六个 DTO 一走它就空了。
+- 新文件不 re-export、不留过渡口：`workflows/[id]/types.ts` 只 `import type` 自己要用的那几个，
+  `editor.tsx` / `action-inspector.tsx` / `node-panel.tsx` / `settings/page.tsx` 与三个编辑器
+  都直接从 `@/components/library` 桶取；`types.test.ts` 的 `ActionDto` 也改从桶取。
+- `ActionItem`（`ActionDto` + `folder` + `refCount`）按提议留在 `workflows/[id]/types.ts`；
+  `actions/page.tsx` 里那个同形的**局部**别名（`ActionDto & WithLibraryMeta`）也原样留着，它不导出。
+- 并集逐字段核对的结论：`ObjectTypeRow`（8 字段）/ `SkillRow`（6）/ `ToolRow`（10）三处都是各库
+  **整行**，列表 GET、详情 GET 与 POST / PUT 回包同形（`db.select().from(表)` 与 `.returning().get()`），
+  所以 `createdAt` / `updatedAt` / `jsonSchema` / `parameters` / `output` / `timeoutMs` / `code`
+  全部必填，没有一个需要 `?`。唯一带 `?` 的是 `ActionDto.updatedAt`——`loadActionDtos` 今天确实不带
+  时间戳（`actions/page.tsx` 那行「补上后此处自动显示」的注释仍然成立）。
+- 顺带：`ToolRow.parameters` 从 `unknown` 收成 `Record<string, unknown>` 后，`toolTokenEstimate`
+  里的 `tool.parameters ?? {}` 成了类型上不可能为空的防御，一并去掉。
+- `src/server/writers/action.ts` 的同名 `ActionDto` **不动**：客户端不从 `@/server` 导入运行时值，
+  那道边界比这里的去重优先；两份的关系写进了 `entity-dto.ts` 的抬头。
+
+验收实际跑了：`npm run check`（typecheck 是这条的主门，全绿）、`npm run build`、
+`npx vitest run "src/app/workflows/[id]/types.test.ts"`（8 通过）、
+`npx playwright test -c playwright.clean.config.ts e2e/workflow-editor.spec.ts e2e/actions.spec.ts`
+（5 通过），另跑了受影响的
+`e2e/workflow-settings.spec.ts e2e/skills.spec.ts e2e/tools.spec.ts e2e/object-types.spec.ts
+e2e/library-v2.spec.ts`（19 通过）。不涉及付费冒烟。
