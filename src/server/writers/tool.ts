@@ -1,8 +1,8 @@
 import { eq } from "drizzle-orm";
 import { db, tools } from "@/db";
 import { publicNameProblem, toolCodeProblem } from "@/lib/tool-names";
+import { objectSchemaProblem } from "@/server/harness/tool-schema";
 import { recordRevision } from "@/server/revisions";
-import { objectSchemaProblem } from "./json-schema";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
 
 /**

@@ -100,8 +100,3 @@ export interface SessionEventNotification {
   sessionId: string;
   event: SessionEvent;
 }
-
-export interface SessionStatusNotification {
-  sessionId: string;
-  status: "idle" | "running";
-}

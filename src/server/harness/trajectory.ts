@@ -28,6 +28,7 @@ import type {
   TrajectoryUsage,
 } from "@/lib/trajectory-view";
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
+import { RUN_SESSIONS_SUBDIR } from "./workspace";
 
 // 展示 DTO 的形状归 @/lib/trajectory-view（运行页抽屉手抄不出第二份）；
 // 这里连带导出，投影实现与它的调用方仍只认这一个模块。
@@ -226,7 +227,7 @@ export function readAgentTrajectory(options: ReadAgentTrajectoryOptions): AgentT
   // lexical 校验之外再校验 realpath，拒绝 data/runs 内指向外部的符号链接。
   assertDescendant(rootReal, runReal, "运行目录越界 data/runs");
 
-  const sessionsRoot = path.join(runReal, "sessions");
+  const sessionsRoot = path.join(runReal, RUN_SESSIONS_SUBDIR);
   if (!fs.existsSync(sessionsRoot)) {
     return { available: false, reason: "not-recorded", sessions: [] };
   }

@@ -37,7 +37,7 @@
 - [ ] 没有新增第五种删除保护。四种是：四个可被引用库经 `usedByNames()` 答 409；workflow DELETE 的运行中守卫；folder DELETE 的重名守卫；run DELETE 经 `monitor/cleanup.ts` 的 `deleteRun` 拒绝运行中
 - [ ] 没有手写引用 join：`src/server/references.ts` 是唯一 join 引用关系的模块；Skill / Tool 的引用方是**工作流**（`workflow_skills` / `workflow_tools`，detail「技能集」/「Tool 集」，href 指向工作流设置页），Action 的预载与可见 Tool 不是引用、不进删除保护
 - [ ] 破坏性路径仍只在 `src/server/monitor/cleanup.ts`；没有第二处删 `run_events` / `runs` / `data/runs/<id>`
-- [ ] 轮次行与节点行的线上形态没变（A round row has a skeleton and a payload）：`/api/runs/[id]` 与 SSE `snapshot` 帧的 `nodes` 与 `rounds` 都只有骨架，且是 `listNodeSkeletons` / `listRoundSkeletons`（`src/server/run-rounds.ts`）在 `select` 时就不取重载荷，不是取回来再删（`run_nodes` 上那三列是最新一轮的副本，带上就是把同一份大对象推两遍）；`src/app/runs/lib.ts` 的 `RunNodeRow` 是对应的骨架类型；`inputs` / `outputs` / `snapshot` 只经 `/api/runs/[id]/nodes/[nodeId]/rounds/[round]` 按轮出去，抽屉在页签打开或换轮时取一轮并缓存，停在轨迹页签一条都不发
+- [ ] 轮次行与节点行的线上形态没变（A round row has a skeleton and a payload）：`/api/runs/[id]` 与 SSE `snapshot` 帧的 `nodes` 与 `rounds` 都只有骨架，且是 `listNodeSkeletons` / `listRoundSkeletons`（`src/server/run-rounds.ts`）在 `select` 时就不取重载荷，不是取回来再删（`run_nodes` 上那三列是最新一轮的副本，带上就是把同一份大对象推两遍）；`src/app/runs/lib.ts` 的 `RunNodeRow` 是对应的骨架类型；`inputs` / `outputs` / `snapshot` 只经 `/api/runs/[id]/nodes/[nodeId]/rounds/[round]` 按轮出去，抽屉在页签打开或换轮时取一轮并缓存，停在轨迹页签一条都不发；骨架列（`exitName` / `error` 也在其中）只在传了才改写——`settleRound` / `settleRoundIfRunning` 的可选列一律不传即保持，只有终态与 `finishedAt` 无条件改写，随后落下的取消不会把这一轮真走过的出口清成 null（`runner.test.ts` 的反向次序用例咬住这一点）
 - [ ] 清理的保留分层没变（A round row has a skeleton and a payload）：events 目标删 `run_events` 并把 `run_node_rounds` **与 `run_nodes`** 的 `inputs` / `outputs` / `snapshot` 一起置空（后者是最新一轮的副本，漏了就仍整行经 `/api/runs/[id]` 返回），**不删行**；置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不是「该运行有够龄事件行」——免费的输入→输出运行与首个事件前就失败的 Action 没有事件行，同样要被置空并计进预览；runs 目标与 `deleteRun` 才随 `runs` 级联删掉整行；预览与真做用同一份统计（被置空的轮次行数 / 节点行数，以及级联的轮次行数）
 - [ ] 文件夹路径一律用 `isFolderEntityKind` 守门；工作流没有进文件夹（ADR-0005）
 
@@ -45,12 +45,12 @@
 
 - [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/runs/[id]/events`（原生 SSE）是仅有的例外，没有被复制
 - [ ] 每个 route `export const dynamic = "force-dynamic"`
-- [ ] 客户端代码（含 `"use client"` 文件与 `src/app`（`api/` 除外）、`src/components` 下没有指令的共享模块）没有从 `@/server` 或 `@/db` 导入运行时值；`import type` 只从 `@/server/monitor/types`。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
+- [ ] 客户端代码（含 `"use client"` 文件与 `src/app`（`api/` 除外）、`src/components` 下没有指令的共享模块）没有从 `@/server` 或 `@/db` 导入任何东西（`import type` 也不行，客户端要用的类型先搬进 `src/lib/`）。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
 - [ ] 能到达修订还原的 route 带 `import "@/server/writers";`，否则 restore 静默答 501
 - [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`；排序键与 30 / 100 只在 `src/lib/list-query.ts` 写一遍，服务端与共享列表 UI 都从它取，没有第二处；其它 GET 各自定形
 - [ ] 改了 `/api/runs` 的筛选或汇总 → `summary` 仍按同一组筛选**不分页**算：`runs` 是 distinct 的运行数（零用量的运行也算），token / 费用与每行同源、从按 `run_id` 预聚合的 `run_nodes` 子查询 **left join** 求和（权威汇总，`node_usage` 缺一条明细时不掉账），只有 `byModel` 走 `node_usage`；没有退化成内连接把无用量的运行挤掉；数组消费者一个不剩地改读 `items`（`rg -n '"/api/runs' src e2e scripts`）
 - [ ] 受理来源仍是 `imports.invocation.source` 的**读时投影**：`/api/runs` 用 `json_extract` 推导 `items[].source` 与 `source=` 筛选（无 invocation 的行 coalesce 成 `workflow`），没有为它新增列、没有回填历史行、没有第二份表示（The five library list GETs and `/api/runs`…）
-- [ ] 五个库页复用 `src/components/library/`，没有长出自己的树、工具栏、文件夹选择器或修订面板；筛选状态在 URL（`use-library-query`）不在组件 state
+- [ ] 五个库页复用 `src/components/library/`，没有长出自己的列表 / 文件夹 / 引用 / 修订 UI——按面而不是按四个组件名核对（曾有四份逐字相同的文件夹徽章与 409 文案从枚举的缝里过了评审）；筛选状态在 URL（`use-library-query`）不在组件 state
 - [ ] 不可信路径过 `@/server/fs-safety`：请求边界 `isWithinData`，使用处 `resolveWithinData` / `safeBasename`
 
 ## 5. 进程级状态与运行隔离（Conventions / The harness seam）
@@ -96,7 +96,7 @@
 - [ ] e2e **没有**断言会随真实使用增长的东西：计数、首页包含、某一行恰好是种子 / 最新一次运行。正确写法是在用例里取 API 载荷、断言 DOM 与载荷一致。这个 bug 已经修过三次
 - [ ] e2e 不依赖任何种子实体：`db:seed` 只种平台基线（内置对象类型与模型表），夹具由本 spec 在 `beforeAll` 自建、`afterAll` 收走；断言只对自建夹具或 API 载荷
 - [ ] e2e 没有发起含 Action 节点的运行，没有点「执行清理 / 确认删除 / 中止该运行」；自建实体用本 spec 的 `e2e-` 中文前缀并在 teardown 经 `cleanupByPrefix` 收走
-- [ ] 新单元测试是 `src/**` 或 `scripts/**` 下的 `*.test.ts`；服务层测试先把内存库挂到 `globalThis.ontoflowDb` 再 `await import()`，静态导入会碰到真实 `data/ontoflow.db`
+- [ ] 新单元测试是 `src/**` 或 `scripts/**` 下的 `*.test.ts`；服务层测试先把内存库挂到 `globalThis.ontoflowDb` 再 `await import()`，静态导入会碰到真实 `data/ontoflow.db`；内存库一律经 `createTestDb()` 从 `schema.ts` 生成，不手写 `CREATE TABLE`
 - [ ] 改动的不变量若是纯逻辑（图、文件夹、定价、解析）→ 有单元测试；用户可见的 → 有 e2e
 
 ## 9. 文字、注释与文档（Conventions / Comments and documentation）

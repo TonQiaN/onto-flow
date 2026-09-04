@@ -1,36 +1,8 @@
 /** 运行历史 API 的总 token 口径必须与详情页一致，且不触碰真实 data/ontoflow.db。 */
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
-import * as schema from "../../../db/schema";
+import { createTestDb, resetTestDb } from "@/server/writers/test-db";
 
-const sqlite = new Database(":memory:");
-sqlite.exec(`
-CREATE TABLE runs (
-  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, status TEXT NOT NULL,
-  workflow_name TEXT NOT NULL DEFAULT '', error TEXT, run_dir TEXT, imports TEXT,
-  started_at INTEGER NOT NULL, finished_at INTEGER
-);
-CREATE TABLE run_nodes (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, label TEXT NOT NULL,
-  status TEXT NOT NULL, snapshot TEXT,
-  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
-  reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0,
-  inputs TEXT, outputs TEXT, session_id TEXT, error TEXT,
-  started_at INTEGER, finished_at INTEGER
-);
-CREATE TABLE node_usage (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL,
-  session_id TEXT NOT NULL, message_id TEXT NOT NULL,
-  provider_id TEXT NOT NULL DEFAULT '', model_id TEXT NOT NULL DEFAULT '', variant TEXT,
-  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
-  reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0,
-  finish TEXT, ts INTEGER NOT NULL
-);
-`);
-(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
+const { sqlite } = await createTestDb();
 
 const { GET } = await import("./route");
 
@@ -75,7 +47,12 @@ const insertUsage = sqlite.prepare(
 );
 
 beforeEach(() => {
-  sqlite.exec("DELETE FROM node_usage; DELETE FROM run_nodes; DELETE FROM runs;");
+  resetTestDb(sqlite);
+  // runs 外键指向 workflows：两个夹具工作流的父行先落。
+  sqlite.exec(`
+    INSERT INTO workflows (id, name, created_at, updated_at) VALUES
+      ('workflow-1', '测试工作流', 0, 0), ('workflow-2', '另一个工作流', 0, 0);
+  `);
   insertRun("run-1", "workflow-1", "success", "测试工作流", "workflow", 1);
   sqlite
     .prepare(

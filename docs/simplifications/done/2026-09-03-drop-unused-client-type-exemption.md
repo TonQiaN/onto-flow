@@ -1,6 +1,6 @@
 # 简化：撤掉零消费者的「客户端可从 @/server/monitor/types 导类型」豁免
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -88,3 +88,32 @@ are still exemptions, **so fixing one means shrinking the list**」。`handle()`
 它），(a) 不新增风险，只是把「我们接受这个风险」写清楚。
 
 预估净删 (a) 约 12 行 / (b) 约 4 行；风险等级：低。
+
+## 落地
+
+[PR #34](https://github.com/TonQiaN/onto-flow/pull/34)。
+
+**与提议的差异：** 无。用户拍板选路 (a)（收紧）。`src/app/monitor/lib.ts` 与
+`src/app/monitor/cleanup-panel.tsx` 一个字节都没改。
+
+**三处同改：** `src/rules.test.ts` 删掉 `SANCTIONED_TYPE_SOURCE` 与那条分支，断言改成「客户端从
+`@/server` / `@/db` 的任何导入（含 `import type`）都违规」，测试名同改；`AGENTS.md` 的
+Conventions 行改成「imports nothing … `import type` included; a type the client needs moves to
+`src/lib/` first」、Checks 段的覆盖清单加上「with no exempt specifier」；`.github/REVIEW.md`
+第 48 条删掉「`import type` 只从 `@/server/monitor/types`」。另外把
+`src/server/monitor/types.ts` 那句为假的抬头（「服务端与前端共用」）改成「服务端载荷类型；前端在
+`src/app/monitor/lib.ts` 另有一份宽松解析的视图模型」。
+
+**验收实际跑了什么：**
+
+- `npx vitest run src/rules.test.ts` → 18 passed。另做了一次反向验证：临时给
+  `src/app/monitor/lib.ts` 加一行 `import type { CleanupResult } from "@/server/monitor/types";`，
+  断言如期变红（`src/app/monitor/lib.ts: import type 来自 @/server/monitor/types`），随即还原。
+  `clientFiles.length > 0` 的前置断言仍在，仍成立。
+- `npm run check`（typecheck + lint + fmt:check + vitest）→ 通过。
+- `npm run build` → 通过。
+- `rg -n 'import type .* from "@/(server|db)"' src/app src/components` 只剩两处已知的非违规：
+  `src/app/api/settings/composition/route.ts`（服务端 route，扫描集本就排除 `src/app/api/`）与
+  `src/app/tools/tool-form.ts` 的 `TOOL_EXECUTE_TEMPLATE` 模板字符串（扫描在模板声明处截断）。
+  记录里那条「无结果」的验收命令写宽了：它没有带上规则自身的这两个排除项。
+- e2e：不适用（走路 (a) 无用户可见变化）。付费冒烟：没跑（不触及 harness 接缝）。
