@@ -837,6 +837,10 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     return out;
   }
 
+  /** 块引用与列表项的容器前缀：`>` 与列表标记的任意组合，缩进不设上限。 */
+  const CONTAINER_PREFIX = String.raw`[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*`;
+  const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}`);
+
   /**
    * ``` / ~~~ 围栏之间是逐字引用（rg 输出、示例 Markdown），里面的 `](…)` 渲染不成链接，
    * 要在记录里写一条字面的坏链接就放进围栏。行内的 `` `…` `` **不剥**：这些记录里的行内代码
@@ -847,7 +851,9 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     const kept: string[] = [];
     let opener: string | null = null;
     for (const line of text.split("\n")) {
-      const fence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      // 围栏也能嵌在块引用或列表项里（`> ```markdown`），先剥容器前缀再认，否则栏内的
+      // 字面示例会被当成真链接报出来
+      const fence = /^(`{3,}|~{3,})(.*)$/.exec(line.replace(CONTAINER_PREFIX_RE, ""));
       const run = fence?.[1] ?? "";
       const info = fence?.[2] ?? "";
       if (opener === null) {
@@ -875,10 +881,8 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
    * 上限，因为列表项的续行缩进四格及以上仍是合法定义（这里剥的是缩进，不是把它当代码块——
    * 记录的列表续行普遍缩进四格，当代码块会一次漏掉一大批真链接）。
    */
-  const CONTAINER_PREFIX = String.raw`[ \t]*(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*`;
   // 标签里的 `]` 可以转义（`[ref\]]: 目标`）；把每个 `]` 都当终止符会让整条定义匹配不上
   const DEFINITION_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}\[(?:[^\]\\]|\\.)+]:(.*)$`);
-  const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}`);
 
   function recordLinkTargets(raw: string): string[] {
     const text = outsideFences(raw);
