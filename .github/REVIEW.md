@@ -27,7 +27,7 @@
 - [ ] 名称冲突交给数据库：writer 没有预查名字，`handle()` 把 `UNIQUE constraint failed` 映射成 409；folders 是唯一例外（根级 parent 为 NULL 无法约束）
 - [ ] 实体体校验在 writer 的 `parse…Payload` 里，route 只窄化自己的非实体参数；仍是手写 `typeof` 窄化，没有引入 schema 库
 - [ ] 每次实体写入在**同一事务**里记一版修订，包含关系；回滚复用同一个 `write<Kind>()`
-- [ ] 白名单文件里**新加**的原生 SQL 确实是查询构建器表达不了的聚合（「只经 `sql` 标签」「只在白名单文件里」「白名单文件今天仍在用」「`LIKE` 配 `escape '\'`」四项 `src/rules.test.ts` 已机械核对）；白名单变长了要问为什么
+- [ ] 白名单文件里**新加**的原生 SQL 确实是查询构建器表达不了的聚合（「只经 `sql` 标签」「只在白名单文件里」「白名单文件今天仍在用」「`LIKE` 配 `escape '\'`」四项 `src/rules.test.ts` 已机械核对）；白名单变长了要问为什么。**另有一路测试看不见**：绕开 `sql` 标签、直接拿 better-sqlite3 句柄跑 SQL（`db.prepare(…)` / `sqlite.exec(…)` 之类），扫描分不清它和 `RegExp.exec`，这一路只能靠人看
 - [ ] 全局设置仍是单行表里的一份 JSON 文档，整份在 `src/server/settings.ts` 写边界校验；凭据只以环境变量**名**出现，值从 Next 进程环境在 spawn 时取；插件开关是 `toggles` 五键、默认指令是 `defaultInstructions`，没有回到 `webSearchEnabled` 或硬编码指令
 - [ ] 三层归属没有越界（Settings have three tiers）：全局给基线；工作流拥有 `instructions` / `settings.toggles`（只写覆盖键）/ `settings.mcpServers` / 技能集 / Tool 集；Action 只有预载 ⊆ 技能集、可见 Tool ⊆ Tool 集。⊆ 在**工作流保存**（`parseGraphPayload` 400，指名 Action 与技能 / Tool）与**运行受理**（`resolveWorkflow` 抛 `WorkflowResolveError` → 422）两处校验，没有挪到 Action 保存，也没有只留一处
 - [ ] 工作流 PUT 对 `instructions` / `settings` / `skillIds` / `toolIds` 仍是「缺省沿用现值、出现即整体替换」；画布只发图的保存没有清空集合

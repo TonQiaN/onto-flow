@@ -294,6 +294,18 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
     return content.slice(0, cut);
   };
   const SERVER_SPECIFIER = /^@\/(?:server|db)(?:\/|$)/;
+  const SERVER_DIRS = [path.join(ROOT, "src", "server"), path.join(ROOT, "src", "db")];
+  /**
+   * 越界 = `@/server` / `@/db`，**或**相对路径解析后落进这两棵树。相对写法必须一起查：
+   * `import type { X } from "../../server/foo"` 类型导入运行时被擦掉，typecheck 与 build 都不报
+   * （Codex 对 #50 的十一轮复审）。
+   */
+  const crossesBoundary = (specifier: string, file: string): boolean => {
+    if (SERVER_SPECIFIER.test(specifier)) return true;
+    if (!specifier.startsWith(".")) return false;
+    const target = path.resolve(path.dirname(file), specifier);
+    return SERVER_DIRS.some((dir) => target === dir || target.startsWith(`${dir}${path.sep}`));
+  };
   // `[^;]*?` 把匹配限制在同一条语句里：`export type { X };` 没有 from，不能吞到下一条 import 的 from。
   const IMPORT_FROM_RE = /^(?:import|export)\s+(type\s+)?[^;]*?\s+from\s+["']([^"']+)["']/gm;
   const SIDE_EFFECT_IMPORT_RE = /^import\s+["']([^"']+)["']/gm;
@@ -302,18 +314,18 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
   it('含 "use client" 的文件与 src/app、src/components 下的共享模块不从 @/server 或 @/db 导入任何东西（含 import type）', () => {
     expect(clientFiles.length).toBeGreaterThan(0);
     const found = violations(clientFiles, (raw, file) => {
-      const content = file === undefined ? raw : scanText(file);
+      const content = scanText(file);
       const out: string[] = [];
       for (const match of content.matchAll(IMPORT_FROM_RE)) {
         const [, typeOnly, specifier] = match;
-        if (!SERVER_SPECIFIER.test(specifier)) continue;
+        if (!crossesBoundary(specifier, file)) continue;
         out.push(typeOnly ? `import type 来自 ${specifier}` : `从 ${specifier} 导入了运行时值`);
       }
       for (const match of content.matchAll(SIDE_EFFECT_IMPORT_RE)) {
-        if (SERVER_SPECIFIER.test(match[1])) out.push(`副作用导入 ${match[1]}`);
+        if (crossesBoundary(match[1], file)) out.push(`副作用导入 ${match[1]}`);
       }
       for (const match of content.matchAll(DYNAMIC_IMPORT_RE)) {
-        if (SERVER_SPECIFIER.test(match[1])) out.push(`动态导入 ${match[1]}`);
+        if (crossesBoundary(match[1], file)) out.push(`动态导入 ${match[1]}`);
       }
       return out;
     });

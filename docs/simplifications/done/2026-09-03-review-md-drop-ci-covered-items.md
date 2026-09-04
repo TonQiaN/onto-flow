@@ -232,8 +232,28 @@ first statement is `return handle(` — never a `const`, an alias, or a re-expor
 | `/* c */ export const dynamic = "force-dynamic";` | 绿 | 绿 |
 | 原样 | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十轮改写对现有 route 的判定一次
-都没变过。
+第十一轮两条，一条补测试、一条补清单：
+
+- **客户端边界的相对路径**：`import type { X } from "../../server/foo"` 不匹配
+  `^@/(server|db)`，而类型导入运行时被擦掉，typecheck 与 build 都不报。改成解析相对路径后判断
+  落点是否在 `src/server` / `src/db` 两棵树里，三处（静态、副作用、动态导入）统一走它。
+- **raw SQL 还有一路测试看不见**：绕开 `sql` 标签、直接拿 better-sqlite3 句柄跑 SQL
+  （`db.prepare(…)` / `sqlite.exec(…)`）。这一路机械核对不了——扫描分不清 `sqlite.exec` 与
+  `RegExp.exec`，而 `src/server/writers/test-db.ts` 正当地在用 `sqlite.exec`。所以不加断言，
+  改为把 REVIEW.md 那条（本来就保留的）再加一句点名这一路只能靠人看。这正是本记录留着第 30 行的
+  理由：CI 盖不住的那部分才归人。
+
+三十六种写法反向验证过。除前面三十二种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `import type { X } from "../../server/monitor/types"` | 红 | 红「import type 来自 ../../server/monitor/types」 |
+| `import { runCleanup } from "../../server/monitor/cleanup"` | 红 | 红 |
+| `await import("../../db")` | 红 | 红 |
+| `import type { X } from "./lib"`（同目录） | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十一轮改写对现有 route 与现有
+客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
 
