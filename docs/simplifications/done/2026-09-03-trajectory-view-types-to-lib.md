@@ -76,7 +76,7 @@ $ diff <(sed -n '183,248p' src/app/runs/lib.ts) <(sed -n '24,84p' src/server/har
 
 ## 落地
 
-PR 待开。
+PR: https://github.com/TonQiaN/onto-flow/pull/32
 
 **与提议的差异：** 无。五个声明（含服务端的 `TrajectorySessionStatus` 具名别名）搬进
 `src/lib/trajectory-view.ts`，`src/server/harness/trajectory.ts` 与 `src/app/runs/lib.ts` 各改成从它
