@@ -90,7 +90,7 @@ rule the moment the code stops obeying it」，以及「never as if the code alr
 
 ## 落地
 
-PR 待开。
+[PR #41](https://github.com/TonQiaN/onto-flow/pull/41)。
 
 **与提议的差异：**
 
