@@ -28,7 +28,7 @@ import type {
   TrajectoryUsage,
 } from "@/lib/trajectory-view";
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
-import { RUN_SESSIONS_SUBDIR } from "./workspace";
+import { findRunSessionsDir } from "./workspace";
 
 export interface ReadAgentTrajectoryOptions {
   /** runs.run_dir 原值；它相对仓库根，而不是相对 DATA_DIR。 */
@@ -216,8 +216,9 @@ export function readAgentTrajectory(options: ReadAgentTrajectoryOptions): AgentT
   // lexical 校验之外再校验 realpath，拒绝 data/runs 内指向外部的符号链接。
   assertDescendant(rootReal, runReal, "运行目录越界 data/runs");
 
-  const sessionsRoot = path.join(runReal, RUN_SESSIONS_SUBDIR);
-  if (!fs.existsSync(sessionsRoot)) {
+  // 会话根目录的拼接与存在判断都在 workspace.ts 里做，见 findRunSessionsDir 的注释。
+  const sessionsRoot = findRunSessionsDir(runReal);
+  if (sessionsRoot === null) {
     return { available: false, reason: "not-recorded", sessions: [] };
   }
   const sessionsReal = realDirectory(sessionsRoot, "会话目录不可读");
