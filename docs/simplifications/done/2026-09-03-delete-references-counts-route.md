@@ -48,7 +48,7 @@ $ rg -an 'references/counts|/counts' src/components src/app --glob '!src/app/api
 
 ## 落地
 
-PR 待开。
+PR [#31](https://github.com/TonQiaN/onto-flow/pull/31)。
 
 与提议的差异：无。提议三条全做：删 `src/app/api/references/counts/` 整个目录、删 `docs/DESIGN-V2.md`
 第三节表里那一行、`AGENTS.md` 仓库布局的「36 route handlers」改成 35（改前 `find src/app/api -name
@@ -58,4 +58,11 @@ route.ts | wc -l` = 36，改后 = 35）。`refCounts` / `listEntities` / `isEnti
 `src/rules.test.ts` 确认无需改（`rg -n '\b36\b' src/rules.test.ts` 无结果，`force-dynamic` 断言遍历现存
 文件），`.github/REVIEW.md` 无命中。
 
-验收实际跑了什么：见 PR 描述。
+验收实际跑了什么：
+
+- `npm run check` 全绿（46 个测试文件，387 passed / 1 skipped）。
+- `npm run build` 成功；生成的路由表里 `/api/references/counts` 已消失，`/api/*` 恰好 35 条。
+- `rg -n 'references/counts' src e2e scripts docs` 只剩本记录自身。
+- `npx playwright test e2e/library-v2.spec.ts` 4 passed（引用面板、修订历史、文件夹树三组断言），
+  跑在工作树自建的 `data/ontoflow.db`（`db:push` + `db:seed`，只有平台基线）上，独立端口 3593。
+- 付费冒烟：不适用，改动不触及会话 / 事件 / 用量 / 取消 / 组合四处接缝。
