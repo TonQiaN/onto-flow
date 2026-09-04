@@ -65,7 +65,7 @@ schema 改动走 `npm run db:push`。不碰四处高代价接缝（`cleanup.ts` 
 
 ## 落地
 
-PR 待开。
+PR：https://github.com/TonQiaN/onto-flow/pull/53
 
 **与提议的差异**：用户拍板选路 1（净删）。此外记录里的 `rg -n 'pinned'` 漏了两处不带 `-ed` 的同一事实，
 一并改掉：`README.md:27` 的「可 pin」（README 是唯一的产品说辞，行为变了必须同改）改成「可加备注」，
