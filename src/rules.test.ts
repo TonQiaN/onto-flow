@@ -870,8 +870,13 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   /**
    * 一份记录里全部链接目标：行内 `[文字](目标)` 与引用式的定义行 `[标签]: 目标`，查询串
    * （GitHub 的 `?plain=1` 之类）与锚点都已切掉——不切就不以 `.md` 结尾，整条链接被跳过。
-   * 定义的目标允许换到下一行写（CommonMark），只看定义行会取到空目标、把坏链接放过去。
+   * 定义的目标允许换到下一行写（CommonMark），只看定义行会取到空目标、把坏链接放过去；
+   * 定义还可以嵌在块引用或列表项里（`> [标签]: 目标`），容器前缀要先剥掉才认得出。
    */
+  const CONTAINER_PREFIX = String.raw` {0,3}(?:(?:>|[-*+]|\d{1,9}[.)])[ \t]*)*`;
+  const DEFINITION_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}\[[^\]]+]:(.*)$`);
+  const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}`);
+
   function recordLinkTargets(raw: string): string[] {
     const text = outsideFences(raw);
     const targets: string[] = [];
@@ -879,10 +884,11 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       targets.push(linkDestination(text, open + 2));
     const lines = text.split("\n");
     for (const [index, line] of lines.entries()) {
-      const definition = /^ {0,3}\[[^\]]+]:(.*)$/.exec(line);
+      const definition = DEFINITION_RE.exec(line);
       if (!definition) continue;
       const tail = definition[1] ?? "";
-      targets.push(linkDestination(tail.trim() === "" ? (lines[index + 1] ?? "") : tail, 0));
+      const next = (lines[index + 1] ?? "").replace(CONTAINER_PREFIX_RE, "");
+      targets.push(linkDestination(tail.trim() === "" ? next : tail, 0));
     }
     return targets.map((target) => target.split(/[?#]/)[0] ?? "");
   }
