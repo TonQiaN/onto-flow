@@ -62,36 +62,72 @@ describe("AGENTS.md · Conventions · handle()", () => {
    */
   const EXEMPT = ["src/app/api/runs/[id]/events/route.ts"];
   const METHOD_NAME_RE = /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/;
-  // Next 认的是**对外**的导出名，三种写法都算一个方法：函数声明、`export const GET = …`、
-  // 以及 `export { post as POST }`。少认一种，同一文件里一个走 handle() 的函数声明就把
-  // methods 与 handled 两边计数配平，旁边那个绕过 handle() 的方法整条断言都看不见
-  // （Codex 对 #50 的两轮复审各点出一种）。
-  const METHOD_RE =
-    /^export (?:(?:async )?function|const|let|var) (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/gm;
+  // Next 认的是**对外**的导出名，三种写法都要认：函数声明、`export const GET = …`、
+  // `export { post as POST }`（后者要回去找 post 的声明）。
+  const EXPORTED_DECL_RE =
+    /^export\s+(?:(?:async\s+)?function|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
   const EXPORT_CLAUSE_RE = /^export\s*\{([^}]*)\}/gm;
-  const countMethods = (content: string): number => {
-    let count = content.match(METHOD_RE)?.length ?? 0;
-    for (const clause of content.matchAll(EXPORT_CLAUSE_RE)) {
+  const LEADING_TRIVIA_RE = /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
+
+  /** 对外方法名 → 声明它的本地名 */
+  const exportedMethods = (content: string): Map<string, string> => {
+    const out = new Map<string, string>();
+    for (const match of content.matchAll(EXPORTED_DECL_RE))
+      if (METHOD_NAME_RE.test(match[1])) out.set(match[1], match[1]);
+    for (const clause of content.matchAll(EXPORT_CLAUSE_RE))
       for (const spec of clause[1].split(",")) {
-        // `post as POST` 取 as 之后那个名字；`GET` 取它自己
-        const exported = (spec.split(/\bas\b/).pop() ?? "").trim();
-        if (METHOD_NAME_RE.test(exported)) count += 1;
+        const parts = spec.split(/\bas\b/).map((part) => part.trim());
+        const local = parts[0];
+        const exported = parts.length > 1 ? parts[parts.length - 1] : local;
+        if (local && exported && METHOD_NAME_RE.test(exported)) out.set(exported, local);
+      }
+    return out;
+  };
+
+  /**
+   * 从声明处扫到函数体开头，返回体内第一段有效代码；箭头的表达式体补一个 return 以便同一条断言。
+   * 只按圆 / 方括号配平找体外的第一个 `{` 或 `=>`：今天没有 route 写返回类型注解，写了就定位不到，
+   * 断言会报「定位不到函数体」而不是悄悄放行。
+   */
+  const bodyOf = (content: string, local: string): string | null => {
+    const decl = new RegExp(
+      String.raw`^(?:export\s+)?(?:(?:async\s+)?function\s+${local}\b|(?:const|let|var)\s+${local}\s*=)`,
+      "m",
+    ).exec(content);
+    if (!decl) return null;
+    let depth = 0;
+    for (let i = decl.index + decl[0].length; i < content.length; i += 1) {
+      const ch = content[i];
+      if (ch === "(" || ch === "[") depth += 1;
+      else if (ch === ")" || ch === "]") depth -= 1;
+      else if (depth === 0 && ch === "{") return content.slice(i + 1);
+      else if (depth === 0 && ch === "=" && content[i + 1] === ">") {
+        const rest = content.slice(i + 2).replace(LEADING_TRIVIA_RE, "");
+        return rest.startsWith("{") ? rest.slice(1) : `return ${rest}`;
       }
     }
-    return count;
+    return null;
   };
 
   it("唯一例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));
     const found = violations(files, (content) => {
-      const methods = countMethods(content);
-      const handled = content.match(/\breturn handle\(/g)?.length ?? 0;
-      const imported = /import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(content);
       const out: string[] = [];
-      if (methods === 0) out.push("没有导出任何 HTTP 方法");
-      if (handled !== methods)
-        out.push(`导出 ${methods} 个方法，只有 ${handled} 处 return handle(`);
-      if (!imported) out.push("没有从 @/lib/http 导入 handle");
+      const methods = exportedMethods(content);
+      if (methods.size === 0) out.push("没有导出任何 HTTP 方法");
+      // 逐个方法看体的**第一句**，不是全文件数 return handle( 的个数：数个数的话，一个方法里
+      // 「先 return new Response(…) 再 return handle(…)」两条分支能把计数配平（Codex 对 #50 的三轮复审）。
+      for (const [exported, local] of methods) {
+        const body = bodyOf(content, local);
+        if (body === null) {
+          out.push(`${exported} 定位不到函数体（声明写法超出扫描能力）`);
+          continue;
+        }
+        if (!body.replace(LEADING_TRIVIA_RE, "").startsWith("return handle("))
+          out.push(`${exported} 的方法体第一句不是 return handle(`);
+      }
+      if (!/import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(content))
+        out.push("没有从 @/lib/http 导入 handle");
       return out;
     });
     expect(found).toEqual([]);

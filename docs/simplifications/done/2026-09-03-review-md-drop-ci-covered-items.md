@@ -95,11 +95,22 @@ REVIEW.md 与 AGENTS.md 的两处声明必须同一个 commit 改。
 还有一处是撤这 6 条的**前提补齐**：Codex 对 #50 的复审指出，`handle()` 那条其实没被完全覆盖——
 `METHOD_RE` 只认 `export function GET` 这种函数声明，一个 `export const POST = async … =>` 绕过
 它不算方法，同一文件里另有一个走 `handle()` 的函数声明就把两边计数配平了，断言看不见。撤掉人工
-那条之前必须先把测试补齐，否则「完全依赖 CI」这个前提不成立。第二轮复审又点出同类的第二种写法
-`const post = async () => …; export { post as POST };`。两种一起补：方法计数改成看**对外**的导出名，
-函数声明、`export const GET = …`、`export { post as POST }` 三种写法各算一个方法。两种绕过写法
-都反向验证过（临时加进一个 route，断言如期变红「导出 2 个方法，只有 1 处 return handle(」，随即
-还原）。今天仓库里这两种写法一处都没有，所以扩容不改变任何现有 route 的判定。
+那条之前必须先把测试补齐，否则「完全依赖 CI」这个前提不成立。第二轮点出 `const post = async () => …; export { post as POST };`
+同样绕得过，第三轮点出更根本的一层：**计数是全文件的、不是按方法的**——一个方法里「先
+`return new Response(…)` 再 `return handle(…)`」两条分支就能把 `methods === handled` 配平。
+
+三轮合起来的结论是「数个数」这个做法本身不对。断言改成按方法查，与它自己的测试名（「每个导出
+方法体都**以** `return handle(` **起头**」）对齐：先把对外方法名解析出来（函数声明、
+`export const GET = …`、`export { post as POST }` 三种写法，再导出的回去找本地声明），再按圆 /
+方括号配平扫到各自的函数体开头，要求体的**第一句**是 `return handle(`；箭头的表达式体补一个隐式
+`return` 走同一条判断；声明写法超出扫描能力（例如写了带 `{` 的返回类型注解）时报「定位不到函数体」
+而不是悄悄放行。
+
+四种写法都反向验证过（临时加进一个 route，跑完随即还原）：分支绕过 → 红「POST 的方法体第一句不是
+return handle(」；`export const PUT = async () => new Response(…)` → 红；
+`const post = …; export { post as DELETE };` → 红；`export const PATCH = () => handle(…)`
+（表达式体但真用了 handle）→ 绿。今天仓库里 route 全是「函数声明 + 体第一句 return handle(」，
+所以这次改写不改变任何现有 route 的判定。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
 
