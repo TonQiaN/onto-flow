@@ -156,7 +156,28 @@ first statement is `return handle(` — never a `const`, an alias, or a re-expor
 | `export * from "./elsewhere";` | 红 | 红「route 里有 export *，可能带出方法」 |
 | `export async function POST() { return handle(…) }`、`export const MAX_X = 1;` | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，六轮改写对现有 route 的判定一次
+第七轮把同一族问题铺开：撤掉的那几条里，`force-dynamic`（`includes('export const dynamic = …')`）
+与 restore 的 `import "@/server/writers";` 都是**在原文上** `includes`，把那一行注释掉照样绿；
+另外 `export const { POST } = handlers;`（解构）也还绕得过。三条一起补：
+
+- 把抹字面量那个函数提到模块级 `stripCode(content, literals?)`：默认只抹注释，`literals` 为真时
+  连字符串 / 模板串的内容一起抹。`force-dynamic`、restore 的 `import "@/server/writers";`、
+  `restoreRevision` 的识别、`handle` 的 import 判定全部改成看抹过注释的文本；`handle()` 的语句
+  边界扫描继续用 `literals: true`。
+- 导出变量语句里**凡出现方法名**就违规，不再限于 `POST =`——解构、计算属性一并拦住（已抹字面量，
+  字符串里的 "POST" 不误伤；`export const dynamic` 与 `export const MAX_UPLOAD_REQUEST_BYTES` 都
+  不含方法名，不受影响）。
+
+十四种写法反向验证过（临时改一个 route，跑完随即还原，`git status` 干净）。除前面十种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `export const { POST } = handlers;`（解构） | 红 | 红「POST 出现在 export const / let / var 里」 |
+| 把 `export const dynamic = "force-dynamic";` 注释掉 | 红 | 红 |
+| 把 restore route 的 `import "@/server/writers";` 注释掉 | 红 | 红 |
+| 把 route 的 `import { handle } …` 注释掉 | 红 | 红「没有从 @/lib/http 导入 handle」 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，七轮改写对现有 route 的判定一次
 都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：

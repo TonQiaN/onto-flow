@@ -26,6 +26,37 @@ function walk(dir: string, out: string[] = []): string[] {
 const rel = (file: string): string => path.relative(ROOT, file).split(path.sep).join("/");
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isSource = (file: string): boolean => /\.tsx?$/.test(file);
+/**
+ * 抹掉注释；`literals` 为真时连字符串 / 模板串的**内容**一起抹成空白（换行与长度都保留）。
+ * 只扫文本的断言都该先过它：注释掉的代码在原文里字还在，`// export const dynamic = "force-dynamic";`
+ * 用 includes 判定会被当成真的导出，被注释掉的 `import "@/server/writers";` 同理；字符串里的分号
+ * 还能把语句边界骗断（Codex 对 #50 的六、七两轮复审）。
+ * 正则字面量不识别——今天仓库里的正则都不含引号；真出现引号会让整段被抹白，用它的地方各自有
+ * 「抹完顶层 export 条数不变」这类自检兜底。
+ */
+function stripCode(content: string, literals = false): string {
+  let out = "";
+  for (let i = 0; i < content.length; i += 1) {
+    const ch = content[i];
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const start = i;
+      for (i += 1; i < content.length && content[i] !== ch; i += 1) if (content[i] === "\\") i += 1;
+      const literal = content.slice(start, Math.min(i + 1, content.length));
+      out += literals ? literal.replace(/[^\n]/g, " ") : literal;
+      continue;
+    }
+    if (ch === "/" && (content[i + 1] === "/" || content[i + 1] === "*")) {
+      const close =
+        content[i + 1] === "/" ? content.indexOf("\n", i) : content.indexOf("*/", i + 2);
+      const stop = close === -1 ? content.length : close + (content[i + 1] === "/" ? 1 : 2);
+      out += content.slice(i, stop).replace(/[^\n]/g, " ");
+      i = stop - 1;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
 const isTest = (file: string): boolean => /\.test\.tsx?$/.test(file);
 
 // 本文件的测试名引用了被禁的写法（await db.、"use server"），扫描集要把自己排除。
@@ -49,7 +80,7 @@ describe("AGENTS.md · Repository layout", () => {
   it('src/app/api 的每个 route.ts 都 `export const dynamic = "force-dynamic"`', () => {
     expect(apiRoutes.length).toBeGreaterThan(0);
     const missing = apiRoutes
-      .filter((file) => !read(file).includes('export const dynamic = "force-dynamic";'))
+      .filter((file) => !stripCode(read(file)).includes('export const dynamic = "force-dynamic";'))
       .map(rel);
     expect(missing).toEqual([]);
   });
@@ -70,39 +101,6 @@ describe("AGENTS.md · Conventions · handle()", () => {
   const EXPORT_CLAUSE_RE = /^export\s*\{([^}]*)\}/gm;
   const STAR_EXPORT_RE = /^export\s*\*/gm;
   const LEADING_TRIVIA_RE = /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
-
-  /**
-   * 把字符串、模板串与注释里的内容抹成空白再扫：分号、花括号、方法名都可能出现在字面量里
-   * （`export const helper = "x;", POST = …` 就靠字符串里的分号把语句边界骗断，Codex 对 #50 的
-   * 六轮复审）。正则字面量不识别——route 里唯一一个不含引号；真出现引号会让整段被抹白，下面
-   * 「顶层 export 数量不变」那条自检会红，不会悄悄放行。
-   */
-  const stripLiterals = (content: string): string => {
-    let out = "";
-    for (let i = 0; i < content.length; i += 1) {
-      const ch = content[i];
-      if (ch === '"' || ch === "'" || ch === "`") {
-        out += " ";
-        for (i += 1; i < content.length && content[i] !== ch; i += 1) {
-          if (content[i] === "\\") i += 1;
-          out += content[i] === "\n" ? "\n" : " ";
-        }
-        out += " ";
-        continue;
-      }
-      if (ch === "/" && (content[i + 1] === "/" || content[i + 1] === "*")) {
-        const stop =
-          content[i + 1] === "/"
-            ? content.indexOf("\n", i) + 1 || content.length
-            : content.indexOf("*/", i + 2) + 2 || content.length;
-        for (; i < stop; i += 1) out += content[i] === "\n" ? "\n" : " ";
-        i -= 1;
-        continue;
-      }
-      out += ch;
-    }
-    return out;
-  };
 
   /** 本条语句的结尾：括号全配平后的第一个 `;`。多声明符的 `const a = 1, POST = …` 要整条一起看 */
   const statementEnd = (content: string, from: number): number => {
@@ -133,7 +131,7 @@ describe("AGENTS.md · Conventions · handle()", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));
     const found = violations(files, (raw) => {
       const out: string[] = [];
-      const content = stripLiterals(raw);
+      const content = stripCode(raw, true);
       // 自检：抹字面量不该抹掉任何顶层 export（route 里 export 不会写在字面量里）。数量对不上说明
       // 扫描把一整段当成了字符串，后面的判断都不可信，直接记违规。
       const topLevelExports = (text: string): number => text.match(/^export\b/gm)?.length ?? 0;
@@ -153,8 +151,10 @@ describe("AGENTS.md · Conventions · handle()", () => {
       // 红的一边倒（Codex 对 #50 的五轮复审）。
       for (const match of content.matchAll(VAR_EXPORT_RE)) {
         const stmt = content.slice(match.index, statementEnd(content, match.index));
-        for (const decl of stmt.matchAll(new RegExp(String.raw`\b(${METHODS})\s*=`, "g")))
-          out.push(`${decl[1]} 写成了 export const / let / var，只能是导出的函数声明`);
+        // 整条语句里凡出现方法名就违规，不限于 `POST =`：解构 `export const { POST } = handlers;`
+        // 同样要拦（Codex 对 #50 的七轮复审）。抹过字面量，所以字符串里的 "POST" 不会误伤。
+        for (const decl of stmt.matchAll(new RegExp(String.raw`\b(${METHODS})\b`, "g")))
+          out.push(`${decl[1]} 出现在 export const / let / var 里，只能是导出的函数声明`);
       }
       for (const clause of content.matchAll(EXPORT_CLAUSE_RE))
         for (const spec of clause[1].split(",")) {
@@ -165,8 +165,9 @@ describe("AGENTS.md · Conventions · handle()", () => {
         }
       if (STAR_EXPORT_RE.test(content)) out.push("route 里有 export *，可能带出方法");
       if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
-      // 这一条要看原文：`"@/lib/http"` 本身就是字符串，抹掉就没了
-      if (!/import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(raw))
+      // 这一条只抹注释、不抹字面量：`"@/lib/http"` 本身就是字符串，抹掉判定就没了；
+      // 但注释掉的那行 import 也不能算数
+      if (!/import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(stripCode(raw)))
         out.push("没有从 @/lib/http 导入 handle");
       return out;
     });
@@ -371,10 +372,12 @@ describe("AGENTS.md · Conventions · revision restore", () => {
    * silently answers 501」——注册发生在 writers/index.ts 模块加载时。
    */
   it('引用 restoreRevision 的 route 带 import "@/server/writers";', () => {
-    const restoreRoutes = apiRoutes.filter((file) => /\brestoreRevision\b/.test(read(file)));
+    const restoreRoutes = apiRoutes.filter((file) =>
+      /\brestoreRevision\b/.test(stripCode(read(file))),
+    );
     expect(restoreRoutes.map(rel)).toContain("src/app/api/revisions/[revId]/restore/route.ts");
     const missing = restoreRoutes
-      .filter((file) => !read(file).includes('import "@/server/writers";'))
+      .filter((file) => !stripCode(read(file)).includes('import "@/server/writers";'))
       .map(rel);
     expect(missing).toEqual([]);
   });
