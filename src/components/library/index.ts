@@ -1,3 +1,4 @@
+export { FolderBadge, KIND_STYLE, KindBadge, RefCount } from "./entity-card";
 export { FolderPicker } from "./FolderPicker";
 export { FolderTree } from "./FolderTree";
 export { LibraryLayout } from "./LibraryLayout";
@@ -19,7 +20,9 @@ export {
   type FolderDto,
   type FolderRef,
   FOLDERS_CHANGED_EVENT,
+  folderRefFrom,
   formatTime,
+  formatUsedBy,
   isSortKey,
   type ListEnvelope,
   notifyFoldersChanged,

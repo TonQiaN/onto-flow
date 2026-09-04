@@ -23,21 +23,17 @@ import {
   type DeepSeekProviderSpec,
   type McpServerSpec,
 } from "./entries";
-import type { RunWorkspace } from "./workspace";
+import { RUN_SESSIONS_SUBDIR, type RunWorkspace } from "./workspace";
+// 可按工作流切换的能力开关的类型与出厂默认住在 src/lib/workflow-settings.ts：全局设置给
+// 默认值、工作流设置覆盖、受理时合成（ADR-0016）；这里只消费合成后的结果。
 import {
   DEFAULT_COMPOSITION_TOGGLES,
   INSTRUCTIONS_BATCH_MAX_BYTES,
   type CompositionToggles,
 } from "@/lib/workflow-settings";
 
-/** 运行目录内的会话持久化根目录名。 */
-export const RUN_SESSIONS_SUBDIR = "sessions";
 /** 运行 home 内的工具结果 spill 根目录名（spill-local 不钉 root 会落到进程级临时目录）。 */
-export const RUN_SPILL_SUBDIR = "spill";
-
-// 可按工作流切换的能力开关的类型与出厂默认住在 src/lib/workflow-settings.ts：全局设置给
-// 默认值、工作流设置覆盖、受理时合成（ADR-0016）；这里只消费合成后的结果。
-export { DEFAULT_COMPOSITION_TOGGLES, type CompositionToggles } from "@/lib/workflow-settings";
+const RUN_SPILL_SUBDIR = "spill";
 
 /** 全局设置进入一次运行的组合面。 */
 export interface RunCompositionOptions {

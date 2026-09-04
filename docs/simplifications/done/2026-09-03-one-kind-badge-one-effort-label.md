@@ -1,6 +1,6 @@
 # 简化：Kind / KIND_STYLE / KindBadge 与 ReasoningEffort / EFFORT_LABEL 各只留一份
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -69,3 +69,21 @@ src/components/canvas/node-model.ts:18  export const EFFORT_LABEL
 低。纯客户端常量搬家，`typecheck` 是完整的门。
 
 预估净删约 27 行；风险等级：低。
+
+## 落地
+
+[PR #38](https://github.com/TonQiaN/onto-flow/pull/38)。与 [四段库页原语归位](2026-09-03-library-page-primitives-to-shared.md) 合成同一个 PR 落地——
+两条共用新文件 `src/components/library/entity-card.tsx`，提议里就写了「两条合并实施更省事」。
+
+与提议的差异：
+
+- `shared.tsx` 的 `Kind`、`object-type-editor.tsx` 的 `Kind` 都换成了 `node-model.ts` 的 `PortKind`
+  （提议的「收成一个名字」）；`shared.tsx` 因此只剩类型、不再含 JSX，但文件名暂留 `.tsx`——下一张卡
+  [ActionDto 家族声明了两遍](../proposed/2026-09-03-action-dto-family-declared-twice.md) 会把它整份删掉。
+- `AGENTS.md` 描述 `src/components/canvas/` 的那行加了半句（提议标为可选）：说明 `node-model.ts` 也是
+  `PortKind` / `ReasoningEffort` 与它们文案的家，库页也从这里取。
+- `KindBadge` 只留带 `shrink-0` 的那份，`object-types/page.tsx:254` 的卡片按提议接受这个多余的 flex 约束。
+
+验收实际跑了：与另一条同一份——`npm run check`、`npm run build`、
+`npx playwright test -c playwright.clean.config.ts e2e/object-types.spec.ts e2e/actions.spec.ts`
+（连同 `library-v2` / `tools` / `skills` 一起 16 通过）。不涉及付费冒烟。

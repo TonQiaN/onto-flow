@@ -12,15 +12,7 @@
  */
 import { and, desc, eq, sql } from "drizzle-orm";
 import { db, revisions, type EntityKind } from "@/db";
-
-export type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
-
-const ok = <T>(data: T): Result<T> => ({ ok: true, data });
-const fail = (status: number, error: string): Result<never> => ({
-  ok: false,
-  status,
-  error,
-});
+import { type WriteResult, writeFail, writeOk } from "@/server/writers/types";
 
 export type Revision = typeof revisions.$inferSelect;
 /** 列表用：不带 payload（可能很大） */
@@ -30,25 +22,14 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 /** 全局 db 或某个事务；两者是同一条 sqlite 连接 */
 export type DbHandle = typeof db | Tx;
 
-/**
- * 写入器的返回：与 src/server/writers/types.ts 的 WriteResult 结构兼容。
- * 返回 void 视同成功（写入器自行抛错也可，异常由调用方的 handle() 兜底）。
- */
-export type WriteOutcome =
-  | { ok: true; data?: unknown }
-  | { ok: false; status: number; error: string };
-
-export type EntityWriter = (id: string, payload: unknown) => WriteOutcome | void;
+/** 写入器返回 void 视同成功（写入器自行抛错也可，异常由调用方的 handle() 兜底） */
+export type EntityWriter = (id: string, payload: unknown) => WriteResult<unknown> | void;
 
 const writers = new Map<EntityKind, EntityWriter>();
 
 /** 各库在自己的服务模块顶层调用，声明「这个 kind 怎么写回」 */
 export function registerEntityWriter(kind: EntityKind, writer: EntityWriter): void {
   writers.set(kind, writer);
-}
-
-export function hasEntityWriter(kind: EntityKind): boolean {
-  return writers.has(kind);
 }
 
 function maxVersionNo(kind: EntityKind, entityId: string, conn = db): number {
@@ -112,23 +93,23 @@ export function getRevision(revId: string): Revision | null {
 export function patchRevision(
   revId: string,
   patch: { pinned?: unknown; note?: unknown },
-): Result<Revision> {
+): WriteResult<Revision> {
   const existing = getRevision(revId);
-  if (!existing) return fail(404, "修订不存在");
+  if (!existing) return writeFail(404, "修订不存在");
 
   const values: { pinned?: boolean; note?: string } = {};
   if (patch.pinned !== undefined) {
-    if (typeof patch.pinned !== "boolean") return fail(400, "pinned 必须是布尔值");
+    if (typeof patch.pinned !== "boolean") return writeFail(400, "pinned 必须是布尔值");
     values.pinned = patch.pinned;
   }
   if (patch.note !== undefined) {
-    if (typeof patch.note !== "string") return fail(400, "note 必须是字符串");
+    if (typeof patch.note !== "string") return writeFail(400, "note 必须是字符串");
     values.note = patch.note.trim();
   }
-  if (Object.keys(values).length === 0) return ok(existing);
+  if (Object.keys(values).length === 0) return writeOk(existing);
 
   const row = db.update(revisions).set(values).where(eq(revisions.id, revId)).returning().get();
-  return ok(row);
+  return writeOk(row);
 }
 
 /**
@@ -140,20 +121,20 @@ export function patchRevision(
  */
 export function restoreRevision(
   revId: string,
-): Result<{ revision: Revision; restoredFrom: number }> {
+): WriteResult<{ revision: Revision; restoredFrom: number }> {
   const rev = getRevision(revId);
-  if (!rev) return fail(404, "修订不存在");
+  if (!rev) return writeFail(404, "修订不存在");
 
   const writer = writers.get(rev.entityKind);
   if (!writer)
-    return fail(
+    return writeFail(
       501,
       `实体类型「${rev.entityKind}」尚未注册写入器，无法回滚（需在其服务模块中调用 registerEntityWriter）`,
     );
 
   const before = maxVersionNo(rev.entityKind, rev.entityId);
   const outcome = writer(rev.entityId, rev.payload);
-  if (outcome && outcome.ok === false) return fail(outcome.status, outcome.error);
+  if (outcome && outcome.ok === false) return writeFail(outcome.status, outcome.error);
 
   const note = `回滚到第 ${rev.versionNo} 版`;
   const latest = db
@@ -168,5 +149,5 @@ export function restoreRevision(
       ? db.update(revisions).set({ note }).where(eq(revisions.id, latest.id)).returning().get()
       : recordRevision(rev.entityKind, rev.entityId, rev.payload, note);
 
-  return ok({ revision, restoredFrom: rev.versionNo });
+  return writeOk({ revision, restoredFrom: rev.versionNo });
 }

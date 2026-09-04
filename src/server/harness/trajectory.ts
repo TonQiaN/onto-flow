@@ -19,74 +19,27 @@ import {
 import type {} from "@deepseek-ai/dsh-llm-retry";
 // 注册 compaction/start、compaction/summary、compaction/end、compaction/prune 的声明合并。
 import type {} from "@deepseek-ai/dsh-compaction/types";
+import type {
+  AgentTrajectoryResponse,
+  TrajectoryDetail,
+  TrajectoryRecord,
+  TrajectorySession,
+  TrajectorySessionStatus,
+  TrajectoryUsage,
+} from "@/lib/trajectory-view";
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
+import { RUN_SESSIONS_SUBDIR } from "./workspace";
 
-export interface TrajectoryDetail {
-  label: string;
-  content: string;
-  format: "text" | "json";
-  truncated: boolean;
-}
-
-export interface TrajectoryUsage {
-  inputTokens: number;
-  outputTokens: number;
-  reasoningTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-}
-
-export interface TrajectoryRecord {
-  id: string;
-  seq: number;
-  kind: "system" | "user" | "context" | "assistant" | "tool" | "error";
-  lane: "input" | "model" | "tools";
-  label: string;
-  summary: string;
-  turn: number | null;
-  step: number | null;
-  startedAt: number;
-  finishedAt: number | null;
-  state: "complete" | "running" | "error";
-  callId?: string;
-  toolName?: string;
-  details: TrajectoryDetail[];
-  usage?: TrajectoryUsage;
-}
-
-export type TrajectorySessionStatus =
-  | "running"
-  | "completed"
-  | "error"
-  | "aborted"
-  | "blocked"
-  | "max-tokens"
-  | "interrupted"
-  | "unknown";
-
-export interface TrajectorySession {
-  id: string;
-  round: number;
-  status: TrajectorySessionStatus;
-  startedAt: number;
-  finishedAt: number | null;
-  durationMs: number | null;
-  provider: string;
-  model: string;
-  contextWindow: number | null;
-  turns: number;
-  steps: number;
-  calls: number;
-  records: TrajectoryRecord[];
-}
-
-export type AgentTrajectoryResponse =
-  | { available: true; sessions: TrajectorySession[] }
-  | {
-      available: false;
-      reason: "not-recorded" | "cleaned";
-      sessions: [];
-    };
+// 展示 DTO 的形状归 @/lib/trajectory-view（运行页抽屉手抄不出第二份）；
+// 这里连带导出，投影实现与它的调用方仍只认这一个模块。
+export type {
+  AgentTrajectoryResponse,
+  TrajectoryDetail,
+  TrajectoryRecord,
+  TrajectorySession,
+  TrajectorySessionStatus,
+  TrajectoryUsage,
+};
 
 export interface ReadAgentTrajectoryOptions {
   /** runs.run_dir 原值；它相对仓库根，而不是相对 DATA_DIR。 */
@@ -274,7 +227,7 @@ export function readAgentTrajectory(options: ReadAgentTrajectoryOptions): AgentT
   // lexical 校验之外再校验 realpath，拒绝 data/runs 内指向外部的符号链接。
   assertDescendant(rootReal, runReal, "运行目录越界 data/runs");
 
-  const sessionsRoot = path.join(runReal, "sessions");
+  const sessionsRoot = path.join(runReal, RUN_SESSIONS_SUBDIR);
   if (!fs.existsSync(sessionsRoot)) {
     return { available: false, reason: "not-recorded", sessions: [] };
   }
