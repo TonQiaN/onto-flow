@@ -1,6 +1,6 @@
 # 简化：README 的门禁命令与 CI 描述同步到 oxc 工具链，或让它指过去不再复述
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -64,3 +64,32 @@ B：`rg -n "npm run (check|test|typecheck|build|lint|fmt)" README.md` 只剩「�
 低。纯文档。B 的风险是把 `AGENTS.md` 的一条既有规则改掉，需在同一提交同步 `.github/REVIEW.md` 的对应行。
 
 预估净删：A 约 +4 行 / B 约 −12 行；风险等级：低。
+
+## 落地
+
+PR 待开。
+
+**与提议的差异：** 用户拍板选路 A（同步）。`AGENTS.md:211` 与 `.github/REVIEW.md` 的「三者一起改」
+那条规则一字未动——这次正是按它把 README 补齐。除提议点名的三处外，测试块还多补了两行：
+`npm run fmt`（就地格式化，写在 `fmt:check` 那行的注释里）与 `npm run knip`（并注明「是线索不是
+门禁」，与 AGENTS.md 「not a gate yet」一致），因为 AGENTS.md 的 Commands 块里两个都有而 README
+一个都没有。
+
+**改了什么：**
+
+- `README.md` 测试块：`npm run check` 的注释从「typecheck + 单测」改成
+  「typecheck + lint + fmt:check + 单测」，与 `package.json` 的 `check` 脚本逐字对应；补
+  `npm run lint`、`npm run fmt:check`、`npm run knip` 三行。
+- `README.md` CI 段：跑的命令从「`typecheck / test / build`」改成
+  「`typecheck / lint / fmt:check / test / build`」，与 `.github/workflows/ci.yml` 的 `check`
+  作业一致；并补一句门禁工具链是 oxc 一对（oxlint + oxfmt）而不是 ESLint + Prettier，链到
+  [ADR-0019](../../adr/0019-oxc-toolchain-not-eslint.md)。
+
+**验收实际跑了什么：**
+
+- 一行脚本核对「README 里出现的每个 npm 脚本名都在 `package.json` 的 `scripts` 里」：
+  `check / db:push / db:seed / dev / fmt / fmt:check / knip / lint / test / test:e2e` 十个全部命中，
+  退出码 0。
+- `rg -n "fmt:check" README.md` → 三处（测试块的 `check` 注释、`fmt:check` 那行、CI 段）。
+- `npm run check`（typecheck + lint + fmt:check + vitest）→ 通过。
+- e2e：不适用（纯文档）。付费冒烟：没跑（不触及 harness 接缝）。
