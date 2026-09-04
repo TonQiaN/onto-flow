@@ -246,20 +246,6 @@ export function sumTokens(usage: Partial<NodeUsage> | null | undefined): number 
   );
 }
 
-/** 多个节点的用量求和 */
-export function totalUsage(nodes: Array<Partial<NodeUsage>>): {
-  tokens: number;
-  cost: number;
-} {
-  return nodes.reduce<{ tokens: number; cost: number }>(
-    (acc, n) => ({
-      tokens: acc.tokens + sumTokens(n),
-      cost: acc.cost + (n.cost ?? 0),
-    }),
-    { tokens: 0, cost: 0 },
-  );
-}
-
 export function formatTokens(n: number): string {
   return Math.round(n).toLocaleString("zh-CN");
 }
