@@ -9,8 +9,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { eq } from "drizzle-orm";
-import { db, nodeUsage } from "../src/db";
+import { and, eq } from "drizzle-orm";
+import { db, nodeUsage, runNodes } from "../src/db";
 import { cancelRun, isRunExecutionActive, startRun } from "../src/server/engine/runner";
 import { abortRunBatch, admitWholeBatch } from "./batch-runs";
 import { checkParallelMarker } from "./parallel-marker";
@@ -124,12 +124,20 @@ async function main(): Promise<void> {
   });
 
   let failed = 0;
-  const startsAt: number[] = [];
-  const finishesAt: number[] = [];
+  // 并行证据取的是 **Action 节点** 的起止，不是 runs 的：runs.startedAt 是受理时刻
+  //（startRun 在受理事务里就写它，执行随后异步起），受理全在毫秒内完成，哪怕执行被串行化
+  // 也照样「全部先于最早收束」。会话真正在飞的区间只有节点行的起止说得准。
+  const actionStartsAt: number[] = [];
+  const actionFinishesAt: number[] = [];
   rows.forEach((row, i) => {
     const id = row.id;
-    startsAt.push(row.startedAt.getTime());
-    if (row.finishedAt) finishesAt.push(row.finishedAt.getTime());
+    const actionNode = db
+      .select()
+      .from(runNodes)
+      .where(and(eq(runNodes.runId, id), eq(runNodes.nodeId, ACTION_NODE_ID)))
+      .get();
+    if (actionNode?.startedAt) actionStartsAt.push(actionNode.startedAt.getTime());
+    if (actionNode?.finishedAt) actionFinishesAt.push(actionNode.finishedAt.getTime());
     const seconds = row.finishedAt
       ? `${Math.round((row.finishedAt.getTime() - row.startedAt.getTime()) / 1000)}s`
       : "-";
@@ -163,22 +171,23 @@ async function main(): Promise<void> {
     if (row.status !== "success") failed += 1;
   });
 
-  // 并行是这个冒烟唯一验的东西：全部成功但被引擎串行跑掉，同样不算通过。受理是同步的
-  // （startRun 落库后就返回，执行异步起），单次运行又要好几秒，所以「最早收束之前全部已启动」
-  // 是稳的判据，不是时序赌博。
-  const overlapped =
-    finishesAt.length === RUN_COUNT && Math.max(...startsAt) <= Math.min(...finishesAt);
+  // 并行是这个冒烟唯一验的东西：全部成功但被引擎串行跑掉，同样不算通过。判据是「最晚开始的
+  // Action 早于最早结束的 Action」——每个 Action 都是一个真在飞的 harness 子进程，一次运行要
+  // 好几秒而受理只要毫秒，所以这条判据稳，不是时序赌博。
+  const measured = actionStartsAt.length === RUN_COUNT && actionFinishesAt.length === RUN_COUNT;
+  const overlapped = measured && Math.max(...actionStartsAt) < Math.min(...actionFinishesAt);
   console.log(
     overlapped
-      ? `\n并行证据：最早收束时刻之前 ${RUN_COUNT} 个运行已全部启动（同时在飞 ${RUN_COUNT} 个）。`
-      : "\n启动/收束区间没有完整重叠：这批运行没有真正同时在飞。",
+      ? `\n并行证据：最早结束的 Action 之前 ${RUN_COUNT} 个 Action 会话已全部开始（同时在飞 ${RUN_COUNT} 个）。`
+      : "\nAction 会话的执行区间没有重叠：这批运行没有真正同时在飞。",
   );
 
   assertSmoke(failed === 0, `${failed} 个运行未成功`);
+  assertSmoke(measured, `有运行没留下 ${ACTION_NODE_ID} 节点的起止时刻，无法证明并行`);
   assertSmoke(
     overlapped,
-    `${RUN_COUNT} 个运行没有同时在飞：最晚启动 ${new Date(Math.max(...startsAt)).toISOString()}` +
-      ` 晚于最早收束 ${new Date(Math.min(...finishesAt)).toISOString()}，引擎把这批运行串行化了`,
+    `${RUN_COUNT} 个 Action 没有同时在飞：最晚开始 ${new Date(Math.max(...actionStartsAt)).toISOString()}` +
+      ` 不早于最早结束 ${new Date(Math.min(...actionFinishesAt)).toISOString()}，引擎把这批运行串行化了`,
   );
   console.log("全部成功。");
 }
