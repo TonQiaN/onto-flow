@@ -76,7 +76,6 @@ export function listRevisions(kind: EntityKind, entityId: string): RevisionSumma
       entityId: revisions.entityId,
       versionNo: revisions.versionNo,
       note: revisions.note,
-      pinned: revisions.pinned,
       createdAt: revisions.createdAt,
     })
     .from(revisions)
@@ -89,26 +88,19 @@ export function getRevision(revId: string): Revision | null {
   return db.select().from(revisions).where(eq(revisions.id, revId)).get() ?? null;
 }
 
-/** 只允许改 pinned / note，版本内容本身不可变 */
-export function patchRevision(
-  revId: string,
-  patch: { pinned?: unknown; note?: unknown },
-): WriteResult<Revision> {
+/** 只允许改 note，版本内容本身不可变 */
+export function patchRevision(revId: string, patch: { note?: unknown }): WriteResult<Revision> {
   const existing = getRevision(revId);
   if (!existing) return writeFail(404, "修订不存在");
+  if (patch.note === undefined) return writeOk(existing);
+  if (typeof patch.note !== "string") return writeFail(400, "note 必须是字符串");
 
-  const values: { pinned?: boolean; note?: string } = {};
-  if (patch.pinned !== undefined) {
-    if (typeof patch.pinned !== "boolean") return writeFail(400, "pinned 必须是布尔值");
-    values.pinned = patch.pinned;
-  }
-  if (patch.note !== undefined) {
-    if (typeof patch.note !== "string") return writeFail(400, "note 必须是字符串");
-    values.note = patch.note.trim();
-  }
-  if (Object.keys(values).length === 0) return writeOk(existing);
-
-  const row = db.update(revisions).set(values).where(eq(revisions.id, revId)).returning().get();
+  const row = db
+    .update(revisions)
+    .set({ note: patch.note.trim() })
+    .where(eq(revisions.id, revId))
+    .returning()
+    .get();
   return writeOk(row);
 }
 
