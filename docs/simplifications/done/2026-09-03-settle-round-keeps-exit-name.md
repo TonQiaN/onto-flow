@@ -1,6 +1,6 @@
 # 简化：settleRound 的可选列一律「不传即保持」，别让取消把已记下的出口清成 null
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -81,3 +81,30 @@ finishedAt 无条件改写」。连带：`runner.test.ts:1728` 那条用例的 m
 「按 `exitName` 画走过的出口」，拿到的是真值而不是 null。
 
 预估净删 ≈ 0 行（−2 局部 const，+2 展开，+1 注释）；风险等级：低。
+
+## 落地
+
+PR 待开（分支 `cleanup/5-settle-round-keeps-exit-name`，[DESIGN-V3 第 5 批](../../DESIGN-V3.md)）。
+
+与提议的差异：
+
+- 提议只说把 `settleRound` 的两个局部 const 换成展开，实际连 `values()` 那两处也直接内联成
+  `settle.exitName ?? null` / `settle.error ?? null`（const 没了别的用处），行为不变：新行仍写 null。
+- 提议只说 mock 的 `exitName` 改成 `"通过"`，实际连它返回的 `selectedExit` 一起改成 `"通过"`——
+  `action.ts` 收束时写的就是 `exitName: selectedExit`，两者不一致的 mock 会误导后来的人。
+  这个返回值在本用例里到不了消费点（`runOne` 的 post-await 取消检查先抛「运行已取消」），
+  共享夹具 `resolvedWorkflow()` 的端口不加 `exitName`，免得改到别的用例的连线激活。
+- REVIEW.md 的半句落在 §3「轮次行与节点行的线上形态没变」那条下面，与它同讲 `run_node_rounds`。
+- `AGENTS.md` / `docs/DESIGN-V3.md` 不改：前者没有陈述这条细则；后者 L272 说的
+  「结束时 update 终态、`finishedAt`、`exitName`、`outputs`、`error`」讲的是 Action 侧的收束
+  （那次调用本来就带这几列），取消分支的「无条件改成 cancelled」也仍成立（终态与
+  `finishedAt` 照旧无条件改写），改动没有推翻其中任何一句。
+
+验收实际跑了：`npx vitest run src/server/engine/runner.test.ts`（31 条全绿；把 `rounds.ts` 单独
+stash 掉再跑，那条用例如期红在 `expected null to be '通过'`，断言确实咬得住这次修复）、
+`npm run check`（typecheck + lint + fmt:check + vitest）。没有 `src/server/engine/rounds.test.ts`
+这个文件。未跑 `npm run build`（改动不触及 `src/app/`、`next.config.ts`、`tsconfig.json`）。
+未跑付费冒烟：改动只在 `rounds.ts` 的 SET 子句语义，会话、事件、用量、取消的时序一字未改
+（`runner.ts` 取消分支仍是无条件 `settleRound`，只是不再顺手清 `exit_name` / `error` 两列），
+而这条路径由 `runner.test.ts` 的反向次序用例直接覆盖。e2e 不适用（纯服务端写入语义，
+没有用户可见改动；回放的 `visuals-at.ts` 因 `status !== "success"` 短路根本读不到 `exitName`）。

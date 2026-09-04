@@ -1739,6 +1739,7 @@ describe("冻结图与轮次行", () => {
     });
     // 反向次序：action.ts 已经把这一轮收口成 success（此刻取消还没到，条件更新写得进去），
     // 取消随后才落下——`closeRunningRounds` 找不到 running 的行，只有 runner 的取消分支能纠正。
+    // 这一轮走的是具名出口，照 action.ts 的收束原样写下 exitName，用来盯住取消不会把它清成 null。
     controls.runActionNode.mockImplementation(
       async (ctx: { runId: string; node: { id: string }; round: number }) => {
         const key = { runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round };
@@ -1747,12 +1748,15 @@ describe("冻结图与轮次行", () => {
           ...key,
           status: "success",
           finishedAt: new Date(),
-          exitName: null,
+          exitName: "通过",
           outputs: { result: { kind: "text", text: "已收口的成功" } },
         });
         markSettled?.();
         await gate;
-        return { outputs: { result: { kind: "text", text: "已收口的成功" } }, selectedExit: null };
+        return {
+          outputs: { result: { kind: "text", text: "已收口的成功" } },
+          selectedExit: "通过",
+        };
       },
     );
 
@@ -1793,8 +1797,9 @@ describe("冻结图与轮次行", () => {
     expect(node.status).toBe("cancelled");
     expect(row.status).toBe("cancelled");
     expect(row.finishedAt).not.toBeNull();
-    // 收口只改终态列：这一轮真跑出来的产物留着，抽屉仍看得到。
+    // 收口只改终态列：这一轮真跑出来的产物与走过的出口都留着，抽屉仍看得到。
     expect(row.outputs).toContain("已收口的成功");
+    expect(row.exitName).toBe("通过");
   });
 
   it("取消赶在 Action 收束之前落下时，Action 侧的成功不覆盖 cancelled", async () => {
