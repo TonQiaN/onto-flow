@@ -13,24 +13,19 @@ import { and, asc, count, desc, eq, inArray, sql, type SQL } from "drizzle-orm";
 import type { AnySQLiteColumn, SQLiteTable } from "drizzle-orm/sqlite-core";
 import { db, entityFolders, type EntityKind } from "@/db";
 import {
+  DEFAULT_PAGE_SIZE,
+  DEFAULT_SORT,
+  isSortKey,
+  MAX_PAGE_SIZE,
+  type SortKey,
+} from "@/lib/list-query";
+import {
   foldersForEntities,
   isFolderEntityKind,
   subtreeIds,
   type FolderRef,
 } from "@/server/folders";
 import { refCounts } from "@/server/references";
-
-export const SORT_KEYS = [
-  "updated_desc",
-  "updated_asc",
-  "name_asc",
-  "name_desc",
-  "refs_desc",
-] as const;
-export type SortKey = (typeof SORT_KEYS)[number];
-
-export const DEFAULT_PAGE_SIZE = 30;
-export const MAX_PAGE_SIZE = 100;
 
 export interface PageQuery {
   page: number;
@@ -73,10 +68,8 @@ export function parseListQuery(url: string): ListQuery {
   const locateRaw = (sp.get("locate") ?? "").trim();
   const locate = locateRaw === "" ? null : locateRaw;
 
-  const sortRaw = sp.get("sort") ?? "";
-  const sort: SortKey = (SORT_KEYS as readonly string[]).includes(sortRaw)
-    ? (sortRaw as SortKey)
-    : "updated_desc";
+  const sortRaw = sp.get("sort");
+  const sort: SortKey = isSortKey(sortRaw) ? sortRaw : DEFAULT_SORT;
 
   return { q, folderId, locate, sort, ...parsePageQuery(url) };
 }

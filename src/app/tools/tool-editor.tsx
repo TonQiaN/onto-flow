@@ -18,15 +18,14 @@ import {
   ReferencesPanel,
   RevisionPanel,
 } from "@/components/library";
+import { publicNameProblem, toolCodeProblem } from "@/lib/tool-names";
 import {
   formatSchema,
   parseObjectSchemaText,
   parseOptionalObjectSchemaText,
   parseTimeoutText,
-  publicNameProblem,
   TOOL_EXECUTE_TEMPLATE,
   TOOL_PARAMETERS_TEMPLATE,
-  toolCodeProblem,
 } from "./tool-form";
 
 /** tools 行：GET /api/tools/[id] 与列表项的形状 */

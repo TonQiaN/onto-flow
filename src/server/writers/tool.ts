@@ -1,10 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, tools } from "@/db";
-import {
-  TOOL_PUBLIC_NAME_PATTERN,
-  TOOL_RESERVED_PUBLIC_NAME_PREFIX,
-  TOOL_RESERVED_PUBLIC_NAMES,
-} from "@/server/harness/tool-contract";
+import { publicNameProblem, toolCodeProblem } from "@/lib/tool-names";
 import { recordRevision } from "@/server/revisions";
 import { objectSchemaProblem } from "./json-schema";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
@@ -25,9 +21,6 @@ export interface ToolPayload {
 
 export type ToolRow = typeof tools.$inferSelect;
 
-/** 上游闭包只准平台包装引用；Tool 里出现它就意味着作者又在写裸插件。 */
-const FORBIDDEN_IMPORT = "@deepseek-ai/";
-
 export function parseToolPayload(raw: unknown): WriteResult<ToolPayload> {
   const parsed = asObject(raw);
   if (!parsed.ok) return writeFail(400, "请求体必须是 JSON 对象");
@@ -37,24 +30,8 @@ export function parseToolPayload(raw: unknown): WriteResult<ToolPayload> {
   if (!name) return writeFail(400, "名称不能为空");
 
   const publicName = typeof body.publicName === "string" ? body.publicName.trim() : "";
-  if (!TOOL_PUBLIC_NAME_PATTERN.test(publicName)) {
-    return writeFail(
-      400,
-      `模型可见的工具名「${publicName}」非法：小写字母开头，只含小写字母、数字与下划线，最长 64 位`,
-    );
-  }
-  if (TOOL_RESERVED_PUBLIC_NAMES.has(publicName)) {
-    return writeFail(
-      400,
-      `模型可见的工具名「${publicName}」是上游内建工具或会话数据面工具的名字，契约 Tool 不能占用`,
-    );
-  }
-  if (publicName.startsWith(TOOL_RESERVED_PUBLIC_NAME_PREFIX)) {
-    return writeFail(
-      400,
-      `模型可见的工具名「${publicName}」用了 MCP 工具的前缀 ${TOOL_RESERVED_PUBLIC_NAME_PREFIX}，契约 Tool 不能占用`,
-    );
-  }
+  const namingProblem = publicNameProblem(publicName);
+  if (namingProblem) return writeFail(400, namingProblem);
 
   const parametersProblem = objectSchemaProblem(body.parameters, "parameters");
   if (parametersProblem) return writeFail(400, parametersProblem);
@@ -75,13 +52,8 @@ export function parseToolPayload(raw: unknown): WriteResult<ToolPayload> {
   }
 
   const code = typeof body.code === "string" ? body.code : "";
-  if (code.trim() === "") return writeFail(400, "execute 模块源码不能为空");
-  if (code.includes(FORBIDDEN_IMPORT)) {
-    return writeFail(
-      400,
-      "execute 模块不能引用 @deepseek-ai/*：Tool 只经 ctx 拿能力，上游 API 由平台包装承接（ADR-0017）",
-    );
-  }
+  const codeProblem = toolCodeProblem(code);
+  if (codeProblem) return writeFail(400, codeProblem);
 
   return writeOk({
     name,

@@ -1,6 +1,6 @@
 # 简化：把客户端与写入口手抄两份的纯常量与纯校验搬进 src/lib/
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -90,3 +90,50 @@ server 侧的 `SORT_KEYS` / `SortKey` / `DEFAULT_PAGE_SIZE` / `MAX_PAGE_SIZE` �
 `tool-contract.ts` 若改成 re-export，`tool-plugin.ts:31` 与 `writers/tool.ts:4-6` 的 import 路径要一起看。
 
 预估净删 120-140 行（新增 `src/lib/` 约 +90，删重复约 −220）；风险等级：中。
+
+## 落地
+
+PR 待开。四组手抄按提议全部收敛到 `src/lib/`：
+
+- `src/lib/skill-files.ts`：两个导出上限 + 内部的 `SKILL_FILE_PATH_MAX_LENGTH` + `skillFilePathProblem` +
+  `foldSkillPath`。`writers/skill.ts` 与 `app/skills/skill-files.ts` 各自只留自己那半边（前者 base64 /
+  Buffer，后者 `size` / `formatBytes` / `defaultFilePath` / `base64ByteLength`）。
+- `src/lib/tool-names.ts`：`TOOL_PUBLIC_NAME_PATTERN` + 保留名清单与 `mcp__` 前缀（两者只有
+  `publicNameProblem` 用，不外露）+ `publicNameProblem` + `toolCodeProblem`。`writers/tool.ts` 的三段
+  inline 判断与 `FORBIDDEN_IMPORT` 常量删掉，改调这两个函数；`tool-plugin.ts` 与 `tool-editor.tsx` 也改到它。
+- `src/lib/json-schema-shape.ts`：`objectSchemaShapeProblem`（形状半边）。`harness/tool-schema.ts` 先调它
+  再跑上游 `assertObjectJsonSchema`（那段一行没动），`tool-form.ts` 直接用它。
+- `src/lib/list-query.ts`：`SORT_KEYS` / `SortKey` / `isSortKey` / `DEFAULT_SORT` / `DEFAULT_PAGE_SIZE` /
+  `MAX_PAGE_SIZE`。`writers/list.ts` 与 `components/library/types.ts` 共用；`SORT_OPTIONS` 改成由
+  `SORT_KEYS` 加一张 `Record<SortKey, string>` 标签表生成，五个键因此只列一遍，`parseListQuery` 的
+  inline `includes` 也换成共享的 `isSortKey`。
+
+### 与提议的差异（两处，都写在这里）
+
+1. **`tool-contract.ts` 不做 re-export，改为删掉那三个常量、消费方直接从 `@/lib/tool-names` 取。**
+   记录原文写的是「`harness/tool-contract.ts` 改为从它 re-export」。纯转出垫片正是同一批
+   [删掉 writers/json-schema.ts 这层垫片](2026-09-03-drop-writers-json-schema-shim.md) 要拆的东西，
+   AGENTS.md 的立场也是「不加兼容层、删掉旧路径」，所以这里直接改三个消费方
+   （`writers/tool.ts`、`harness/tool-plugin.ts`、`app/tools/tool-editor.tsx`），不新造一层。
+   `ToolContext` 那套类型面与 `TOOL_RUN_*` 超时常量原地不动——`TOOL_EXECUTE_TEMPLATE` 里那行
+   `import type { ToolContext } from "@/server/harness/tool-contract"` 因此仍然有效。
+2. **`src/lib/` 里的形状函数改名 `objectSchemaShapeProblem`。** `harness/tool-schema.ts` 仍导出
+   `objectSchemaProblem`（形状 + 上游断言），两个同名不同强度的函数会误导调用方。
+
+### 验收
+
+```
+npm run check                       ✅ typecheck / oxlint / oxfmt / vitest 46 文件 386 通过 1 跳过
+npm run build                       ✅
+npx vitest run src/app/tools/tool-form.test.ts src/app/skills/skill-files.test.ts \
+  src/server/writers/skill.test.ts src/server/writers/tool.test.ts \
+  src/server/harness/tool-plugin.test.ts src/rules.test.ts        ✅ 6 文件 78 通过
+npx playwright test e2e/tools.spec.ts e2e/skills.spec.ts          ✅ 7 passed
+```
+
+`npm run knip` 的「Unused exports」从 56 降到 49，本 PR 没有新增任何一条：搬进 `src/lib/` 后只剩
+本模块自己用的三个常量（`SKILL_FILE_PATH_MAX_LENGTH`、保留名清单、`mcp__` 前缀）都改成不导出。
+
+不碰的四处高代价接缝已核对：`tool-schema.ts` 的 `assertObjectJsonSchema` 调用一行没动，
+`rg '@deepseek-ai' src/lib` 为空（`tool-names.ts` 里只有 `toolCodeProblem` 拿它当**字符串**比对），
+`src/lib/` 也没有 `@/db` / `@/server` 的 import。未跑付费冒烟。

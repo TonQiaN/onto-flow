@@ -1,12 +1,14 @@
 /**
- * Skill 资源文件的客户端校验：与 src/server/writers/skill.ts 写入口同一套规则，
- * 在上传那一刻就把问题摆进编辑器，而不是等保存被 400 打回。上限与路径规则在两处
- * 各写一份——客户端不能从 @/server 导入运行时值；改一处必须同步另一处。
+ * Skill 编辑器专属的那半边：浏览器拿到的是 File 对象与 base64，所以按 `size` 判大小、
+ * 顺带管字节格式化与默认路径。上限与路径规则本身在 `@/lib/skill-files`，与写入口
+ * （src/server/writers/skill.ts）共用同一份，不再两处各抄一遍。
  */
-
-export const SKILL_FILE_MAX_COUNT = 32;
-export const SKILL_FILE_MAX_BYTES = 1024 * 1024;
-export const SKILL_FILE_PATH_MAX_LENGTH = 200;
+import {
+  foldSkillPath,
+  SKILL_FILE_MAX_BYTES,
+  SKILL_FILE_MAX_COUNT,
+  skillFilePathProblem,
+} from "@/lib/skill-files";
 
 /** 编辑器里的一个资源文件：内容以 base64 持有，保存时原样进载荷 */
 export interface SkillFileDraft {
@@ -14,32 +16,6 @@ export interface SkillFileDraft {
   path: string;
   contentBase64: string;
   size: number;
-}
-
-/**
- * 路径必须能原样落到 data/skills/<slug>/<path> 之下：绝对路径、`..`、空段、控制字符与
- * 反斜杠都拒绝；根下的 SKILL.md 由正文生成，资源文件不能顶替它（不区分大小写）。
- */
-export function skillFilePathProblem(path: string): string | null {
-  if (path === "") return "资源文件路径不能为空";
-  if (path.length > SKILL_FILE_PATH_MAX_LENGTH)
-    return `资源文件路径「${path.slice(0, 40)}…」超过 ${SKILL_FILE_PATH_MAX_LENGTH} 个字符`;
-  // oxlint-disable-next-line no-control-regex -- 控制字符与 NUL 在文件名里是货真价实的坑
-  if (/[\u0000-\u001f\u007f]/.test(path)) return "资源文件路径不能含控制字符";
-  if (path.startsWith("/")) return `资源文件路径「${path}」不能是绝对路径`;
-  if (path.includes("\\")) return `资源文件路径「${path}」只能用 / 分段`;
-  for (const segment of path.split("/")) {
-    if (segment === "" || segment === "." || segment === "..")
-      return `资源文件路径「${path}」不能含空段、. 或 ..`;
-  }
-  if (path.split("/")[0]?.toLowerCase() === "skill.md")
-    return "SKILL.md 由正文生成，不能作为资源文件上传，也不能作为目录名";
-  return null;
-}
-
-/** 文件系统眼里的同一路径：折叠大小写与 Unicode 正规化，与写入口同一规则 */
-function foldPath(path: string): string {
-  return path.normalize("NFC").toLowerCase();
 }
 
 /** 整份清单的问题：数量、单文件大小、路径合法性、重复与文件/目录冲突；合法返回 null */
@@ -52,11 +28,11 @@ export function skillFilesProblem(
   for (const file of files) {
     const problem = skillFilePathProblem(file.path);
     if (problem) return problem;
-    if (paths.has(foldPath(file.path)))
+    if (paths.has(foldSkillPath(file.path)))
       return `资源文件路径重复（不区分大小写与 Unicode 正规化）：「${file.path}」`;
     if (file.size > SKILL_FILE_MAX_BYTES)
       return `资源文件「${file.path}」超过 1 MiB（${formatBytes(file.size)}）`;
-    paths.add(foldPath(file.path));
+    paths.add(foldSkillPath(file.path));
   }
   // 同一个名字不能既是文件又是别的文件的目录：投影时 mkdir 会撞上已写好的文件；同样按折叠后的键比较
   for (const path of paths) {

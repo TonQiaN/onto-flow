@@ -18,12 +18,11 @@ import {
   ReferencesPanel,
   RevisionPanel,
 } from "@/components/library";
+import { SKILL_FILE_MAX_BYTES, SKILL_FILE_MAX_COUNT } from "@/lib/skill-files";
 import { estimateTokens } from "@/lib/workflow-settings";
 import {
   defaultFilePath,
   formatBytes,
-  SKILL_FILE_MAX_BYTES,
-  SKILL_FILE_MAX_COUNT,
   type SkillFileDraft,
   skillFilesProblem,
 } from "./skill-files";
