@@ -95,10 +95,11 @@ REVIEW.md 与 AGENTS.md 的两处声明必须同一个 commit 改。
 还有一处是撤这 6 条的**前提补齐**：Codex 对 #50 的复审指出，`handle()` 那条其实没被完全覆盖——
 `METHOD_RE` 只认 `export function GET` 这种函数声明，一个 `export const POST = async … =>` 绕过
 它不算方法，同一文件里另有一个走 `handle()` 的函数声明就把两边计数配平了，断言看不见。撤掉人工
-那条之前必须先把测试补齐，否则「完全依赖 CI」这个前提不成立。已把 `METHOD_RE` 扩到
-`function` / `const` / `let` / `var` 四种导出形式，并反向验证过（临时给一个 route 加一行
-`export const POST = async () => …`，断言如期变红「导出 2 个方法，只有 1 处 return handle(」）。
-今天仓库里没有 const 形式的方法导出，所以这次扩容不改变任何现有 route 的判定。
+那条之前必须先把测试补齐，否则「完全依赖 CI」这个前提不成立。第二轮复审又点出同类的第二种写法
+`const post = async () => …; export { post as POST };`。两种一起补：方法计数改成看**对外**的导出名，
+函数声明、`export const GET = …`、`export { post as POST }` 三种写法各算一个方法。两种绕过写法
+都反向验证过（临时加进一个 route，断言如期变红「导出 2 个方法，只有 1 处 return handle(」，随即
+还原）。今天仓库里这两种写法一处都没有，所以扩容不改变任何现有 route 的判定。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
 

@@ -61,15 +61,30 @@ describe("AGENTS.md · Conventions · handle()", () => {
    * api/runs/[id]/events returns a raw SSE Response — do not copy it.」
    */
   const EXEMPT = ["src/app/api/runs/[id]/events/route.ts"];
-  // 函数声明与 `export const GET = …` 都要数：只认函数声明的话，同一文件里一个走 handle() 的
-  // 函数声明就能把计数配平，旁边那个箭头函数导出的方法整条断言都看不见（Codex 对 #50 的复审）。
+  const METHOD_NAME_RE = /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/;
+  // Next 认的是**对外**的导出名，三种写法都算一个方法：函数声明、`export const GET = …`、
+  // 以及 `export { post as POST }`。少认一种，同一文件里一个走 handle() 的函数声明就把
+  // methods 与 handled 两边计数配平，旁边那个绕过 handle() 的方法整条断言都看不见
+  // （Codex 对 #50 的两轮复审各点出一种）。
   const METHOD_RE =
     /^export (?:(?:async )?function|const|let|var) (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/gm;
+  const EXPORT_CLAUSE_RE = /^export\s*\{([^}]*)\}/gm;
+  const countMethods = (content: string): number => {
+    let count = content.match(METHOD_RE)?.length ?? 0;
+    for (const clause of content.matchAll(EXPORT_CLAUSE_RE)) {
+      for (const spec of clause[1].split(",")) {
+        // `post as POST` 取 as 之后那个名字；`GET` 取它自己
+        const exported = (spec.split(/\bas\b/).pop() ?? "").trim();
+        if (METHOD_NAME_RE.test(exported)) count += 1;
+      }
+    }
+    return count;
+  };
 
   it("唯一例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));
     const found = violations(files, (content) => {
-      const methods = content.match(METHOD_RE)?.length ?? 0;
+      const methods = countMethods(content);
       const handled = content.match(/\breturn handle\(/g)?.length ?? 0;
       const imported = /import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(content);
       const out: string[] = [];
