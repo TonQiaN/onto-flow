@@ -362,7 +362,19 @@ restore 那条没被完全盖住，那它就该留在人工位上，只是范围
 | `import Ok = require("./lib");` | 绿 | 绿 |
 | 原样 | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十八轮改写对现有 route 与现有
+第十九轮：静态导入那两条正则还锚在列 0（与第十轮对 `export` 的那次同一类），
+`/* c */ import type { X } from "…"` 躲得过。四条导入正则统一容忍行首空白。
+
+七十六种写法反向验证过。除前面七十二种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `/* boundary */ import type { CleanupResult } from "../../server/monitor/types";` | 红 | 红 |
+| `/* c */ import "@/server/writers";` | 红 | 红「副作用导入 @/server/writers」 |
+| `/* c */ import { useState } from "react";` | 绿 | 绿 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十九轮改写对现有 route 与现有
 客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：

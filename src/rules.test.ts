@@ -349,8 +349,10 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
     return SERVER_DIRS.some((dir) => target === dir || target.startsWith(`${dir}${path.sep}`));
   };
   // `[^;]*?` 把匹配限制在同一条语句里：`export type { X };` 没有 from，不能吞到下一条 import 的 from。
-  const IMPORT_FROM_RE = /^(?:import|export)\s+(type\s+)?[^;]*?\s+from\s+["']([^"']+)["']/gm;
-  const SIDE_EFFECT_IMPORT_RE = /^import\s+["']([^"']+)["']/gm;
+  // 四条都容忍行首空白：注释抹成空白后 `/* c */ import type { X } from "…"` 不再从列 0 开始
+  // （Codex 对 #50 的十九轮复审，与第十轮对 export 的那次同一类）。
+  const IMPORT_FROM_RE = /^[ \t]*(?:import|export)\s+(type\s+)?[^;]*?\s+from\s+["']([^"']+)["']/gm;
+  const SIDE_EFFECT_IMPORT_RE = /^[ \t]*import\s+["']([^"']+)["']/gm;
   // 反引号也要收：`await import(\`../../server/x\`)` 是合法的无插值模板串说明符（Codex 对 #50 的
   // 十二轮复审）。静态 import 的说明符按语法只能是引号串，所以上面两条不用管反引号。
   const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["'`]([^"'`]+)["'`]/g;
