@@ -11,6 +11,7 @@
  * 差异是把快照复制换成 symlink。
  */
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { DATA_DIR } from "../fs-safety";
@@ -130,6 +131,18 @@ async function digestDirectory(
 
 export function runDirPath(workflowId: string, runId: string): string {
   return path.join(DATA_DIR, "runs", workflowId, runId);
+}
+
+/**
+ * 会话根目录存在时返回它，否则返回 null（运行没写过会话，或目录已被清理）。
+ *
+ * 拼路径与存在判断都留在本模块，因为 Turbopack 的输出文件追踪只内联同模块的字
+ * 面量：跨模块导入的 RUN_SESSIONS_SUBDIR 在调用方退化成动态段，`fs` 调用于是被
+ * 判成全动态文件模式，构建会把整个仓库当成候选文件并告警。
+ */
+export function findRunSessionsDir(runDir: string): string | null {
+  const sessionsDir = path.join(runDir, RUN_SESSIONS_SUBDIR);
+  return existsSync(sessionsDir) ? sessionsDir : null;
 }
 
 /**
