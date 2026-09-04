@@ -470,10 +470,28 @@ export function assertDeclaredArtifacts(
   return found;
 }
 
-/** 事件计数：按类型分档，看一眼就知道事件有没有实时落库。 */
-export function printEvents(runId: string): void {
+/**
+ * 事件按类型分档打印，并要求 `required` 里的每一档都非空。
+ *
+ * 不能只打印：会话事件的落库回调抛异常时 `RunProcess.#onNotification` 会吞掉它
+ *（`runtime.ts` 那里的注释说明了为什么——权威副本在运行目录的 jsonl 里），于是节点照样成功、
+ * 产物照样齐全，只有 `run_events` 空了；不断言就等于 `smoke-engine` 声称验的「事件落库」
+ * 永远为真（Codex 对本 PR 的四轮复审）。默认要 `tool` 与 `session.idle` 两档：结构化输出本身
+ * 就是一次工具调用、每个回合结束都会落一条 idle，两者与模型措辞无关；`reasoning` / `text`
+ * 看模型当轮心情，刻意不要求。
+ */
+export function assertEvents(
+  runId: string,
+  required: readonly string[] = ["tool", "session.idle"],
+): void {
   const events = db.select().from(runEvents).where(eq(runEvents.runId, runId)).all();
   const byType = new Map<string, number>();
   for (const e of events) byType.set(e.type, (byType.get(e.type) ?? 0) + 1);
   console.log(`\n事件 ${events.length} 条：${[...byType].map(([t, c]) => `${t}×${c}`).join(" ")}`);
+  for (const type of required) {
+    assertSmoke(
+      (byType.get(type) ?? 0) > 0,
+      `run_events 里没有一条 ${type} 事件：事件没有实时落库`,
+    );
+  }
 }

@@ -165,3 +165,13 @@ e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。
    engine 点名 `起草·草稿` + `摘要·摘要`，graph 点名两份评语 + 最后一轮草稿 + 「通过」出口的
    裁决书（「打回」出口的意见刻意不点名——最后一轮走的是「通过」，那份产物本来就不该存在），
    capabilities 点名 `报口令·回执`。改完四个付费脚本各重跑一次，退出码全 0。
+
+**Codex 四轮复审的一条（成立，已改并重跑 engine 与 graph）**
+
+5. **事件计数只打印不断言**：会话事件的落库回调抛异常时 `RunProcess.#onNotification` 会吞掉它
+   （运行目录的 jsonl 才是权威副本），于是节点照样成功、产物照样齐全，只有 `run_events` 空了，
+   而 `smoke-engine` 头注释声称验的「事件落库」永远为真。`printEvents` 改名 `assertEvents`，
+   默认要求 `tool` 与 `session.idle` 两档非空——结构化输出本身就是一次工具调用、每个回合结束都
+   落一条 idle，两者与模型措辞无关；`reasoning` / `text` 看模型当轮心情，刻意不要求。
+   重跑：engine 退出 0（`事件 17 条：reasoning×3 tool×12 session.idle×2`）、graph 退出 0
+   （`事件 197 条：… tool×146 session.idle×8`）。

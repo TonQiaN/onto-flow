@@ -19,9 +19,9 @@ import { db, runNodeRounds } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import {
   assertDeclaredArtifacts,
+  assertEvents,
   assertSmoke,
   awaitTerminal,
-  printEvents,
   printNodes,
   requireCredential,
   requireModel,
@@ -216,7 +216,7 @@ async function main(): Promise<void> {
 
   await awaitTerminal(started.runId, { timeoutMs: 900_000 });
   printNodes(started.runId);
-  printEvents(started.runId);
+  assertEvents(started.runId);
 
   // 回边真的走过：裁决报出过「打回」，起草因此被推进到第二轮。
   const rounds = db
