@@ -37,6 +37,7 @@ import {
 } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import { materializeSkill, skillSlug, SKILL_LIBRARY_DIR } from "../src/server/skill-library";
+import { RUN_SESSIONS_SUBDIR } from "../src/server/harness/workspace";
 import {
   readSettings,
   replaceSettingsIfCurrent,
@@ -281,13 +282,15 @@ async function main(): Promise<void> {
   console.log(`调用过的工具：${names.join(", ")}`);
   // 全局停用是把工具从清单里摘掉，所以证据在会话请求头里，不在调用记录里。
   const sessionFile = fs
-    .readdirSync(path.join(dir, "sessions"), { withFileTypes: true })
+    .readdirSync(path.join(dir, RUN_SESSIONS_SUBDIR), { withFileTypes: true })
     .flatMap((entry) =>
       entry.isDirectory()
         ? fs
-            .readdirSync(path.join(dir, "sessions", entry.name), { withFileTypes: true })
+            .readdirSync(path.join(dir, RUN_SESSIONS_SUBDIR, entry.name), { withFileTypes: true })
             .filter((child) => child.isDirectory())
-            .map((child) => path.join(dir, "sessions", entry.name, child.name, "session.jsonl"))
+            .map((child) =>
+              path.join(dir, RUN_SESSIONS_SUBDIR, entry.name, child.name, "session.jsonl"),
+            )
         : [],
     )
     .find((file) => fs.existsSync(file));
