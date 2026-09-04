@@ -1,6 +1,6 @@
 # 简化：把 REVIEW.md 里已被 rules.test.ts 全覆盖的 6 条从人工评审位上撤掉，raw-SQL 那条收窄到机械核对不了的语义
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -75,3 +75,38 @@ REVIEW.md 与 AGENTS.md 的两处声明必须同一个 commit 改。
 被它保护的规则一起删掉，就没有第二道人工闸门了。
 
 预估净删约 5 行（删 6 行、收窄 1 行、加 1 行）；风险等级：中。
+
+## 落地
+
+PR 待开。
+
+**与提议的差异：** 用户拍板选路 1（撤掉）。撤的 6 条、收窄的 1 条、§0 新增的 1 条都按提议做了；
+另有两处提议没点名、但不改就会自相矛盾的连带：
+
+- `.github/REVIEW.md` 第 4 节的标题「路由与客户端边界」在四条被撤掉之后，剩下的全是列表载荷与
+  页面复用，改成「路由载荷与页面」。
+- `AGENTS.md` Checks 段那句「A rule here changes in the same commit as that test **and the matching
+  REVIEW.md line**」与「Editing these instructions」里的「change **the three** together」，在
+  「机械核对的规则不再有 REVIEW.md 行」之后都为假，一并改准。
+
+记录里说**不删**的三条（信封、模块级 `const map = new Map()`、`@deepseek-ai` 传递依赖钉版）
+逐条复核后原样保留。
+
+**REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
+
+| REVIEW.md 原行 | 条目 | 覆盖它的断言 |
+|---|---|---|
+| `:26` | 没有 `await db.…` | `src/rules.test.ts:92` |
+| `:30` | 原生 SQL（**收窄，未撤**） | `:352`（只经 `sql` 标签、只在白名单文件）、`:360`（白名单文件今天仍在用）、`:366`（`LIKE` 配 `escape '\'`）——盖不住「新加的这条是不是查询构造器真表达不了的聚合」，这一句留下 |
+| `:46` | route 体在 `handle()` 里、唯一例外没被复制 | `:66`、`:82` |
+| `:47` | 每个 route `export const dynamic = "force-dynamic"` | `:49` |
+| `:48` | 客户端边界、没有 `"use server"` | `:154`、`:175` |
+| `:49` | restore route 带 `import "@/server/writers";` | `:279` |
+| `:109` | `.claude/skills/` ↔ `.codex/skills/` 字节一致 | `:402` |
+
+**验收实际跑了什么：**
+
+- `npx vitest run src/rules.test.ts` → 绿（含记录树骨架门禁，记录已移入 `done/` 并改了状态行）。
+- `npm run check`（typecheck + lint + fmt:check + vitest）→ 通过。
+- `.github/REVIEW.md` 从 117 行减到 112 行；上表七条里六条已不在清单上，第 30 行只剩人要判断的那一句。
+- e2e：不适用（纯文档）。付费冒烟：没跑（不触及 harness 接缝）。

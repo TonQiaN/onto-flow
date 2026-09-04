@@ -12,6 +12,7 @@
 - [ ] 用户可见的改动 → 跑了**对应的那一个** e2e spec 并写明是哪个，不是「跑了全套」也不是没跑（Checks）
 - [ ] 触及 harness 接缝（会话、事件、用量、取消、组合）→ 写明是否跑了付费冒烟（`smoke-harness` / `smoke-engine`）与结论；没跑要说为什么可以不跑（The harness seam）
 - [ ] 新增原生或 server-only 依赖 → `next.config.ts` 的 `serverExternalPackages` 有它；Turbopack `root` 钉住没动（Checks）
+- [ ] CI 的 `check` 作业跑 `src/rules.test.ts`：它机械核对的约定（`force-dynamic`、`handle()` 的唯一例外、`await db.`、客户端与 `@/server` / `@/db` 的边界与 `"use server"`、`globalThis` 的 `ontoflow` 前缀、列表信封的三个导入、raw-SQL 白名单与 `LIKE` 转义、restore route 的 `import "@/server/writers"` 与每种 `EntityKind` 的写入器、`@deepseek-ai` 精确钉版、`.claude/skills/` ↔ `.codex/skills/` 字节一致、`docs/simplifications/` 记录树骨架）评审**不必重复勾**；要看的是**白名单或例外名单变长了没有——变长了就问为什么**（Checks）
 - [ ] `@deepseek-ai/*` 版本精确钉死，没有 `^` / `~`；不是 `latest`；`@deepseek-ai/dsh-*` 直接与传递依赖同时在 `overrides` 里同版（Pin `@deepseek-ai` versions exactly）
 
 ## 1. 立场：不做兼容层（Stance: no compatibility layers）
@@ -23,11 +24,10 @@
 ## 2. 写路径与数据库（Conventions）
 
 - [ ] 写路径返回结果对象（`WriteResult` + `writeOk` / `writeFail`），没有新长出私有副本；成功体就是 `result.data` 的 route 用 `respond()` 而不是手抄三行拆包。只有引擎 `throw`，由 `runner.ts` 变成 `run_nodes.error`
-- [ ] 没有 `await db.…`：better-sqlite3 是同步的，Drizzle 调用以 `.get()` / `.all()` / `.run()` 结尾
 - [ ] 名称冲突交给数据库：writer 没有预查名字，`handle()` 把 `UNIQUE constraint failed` 映射成 409；folders 是唯一例外（根级 parent 为 NULL 无法约束）
 - [ ] 实体体校验在 writer 的 `parse…Payload` 里，route 只窄化自己的非实体参数；仍是手写 `typeof` 窄化，没有引入 schema 库
 - [ ] 每次实体写入在**同一事务**里记一版修订，包含关系；回滚复用同一个 `write<Kind>()`
-- [ ] 原生 SQL 只经 `sql` 标签（`sql\`…\`` 与 `sql<T>\`…\`` 两种拼法都算）、只出现在查询构建器表达不了聚合的地方；白名单是 AGENTS.md 那句点名的七个文件（`monitor/cleanup.ts`、`monitor/health.ts` 与另外五个），`src/rules.test.ts` 钉住并要求名单里的文件今天仍在用；`LIKE` 里的用户输入已转义并配 `escape '\'`
+- [ ] 白名单文件里**新加**的原生 SQL 确实是查询构建器表达不了的聚合（「只经 `sql` 标签」「只在白名单文件里」「白名单文件今天仍在用」「`LIKE` 配 `escape '\'`」四项 `src/rules.test.ts` 已机械核对）；白名单变长了要问为什么
 - [ ] 全局设置仍是单行表里的一份 JSON 文档，整份在 `src/server/settings.ts` 写边界校验；凭据只以环境变量**名**出现，值从 Next 进程环境在 spawn 时取；插件开关是 `toggles` 五键、默认指令是 `defaultInstructions`，没有回到 `webSearchEnabled` 或硬编码指令
 - [ ] 三层归属没有越界（Settings have three tiers）：全局给基线；工作流拥有 `instructions` / `settings.toggles`（只写覆盖键）/ `settings.mcpServers` / 技能集 / Tool 集；Action 只有预载 ⊆ 技能集、可见 Tool ⊆ Tool 集。⊆ 在**工作流保存**（`parseGraphPayload` 400，指名 Action 与技能 / Tool）与**运行受理**（`resolveWorkflow` 抛 `WorkflowResolveError` → 422）两处校验，没有挪到 Action 保存，也没有只留一处
 - [ ] 工作流 PUT 对 `instructions` / `settings` / `skillIds` / `toolIds` 仍是「缺省沿用现值、出现即整体替换」；画布只发图的保存没有清空集合
@@ -41,12 +41,8 @@
 - [ ] 清理的保留分层没变（A round row has a skeleton and a payload）：events 目标删 `run_events` 并把 `run_node_rounds` **与 `run_nodes`** 的 `inputs` / `outputs` / `snapshot` 一起置空（后者是最新一轮的副本，漏了就仍整行经 `/api/runs/[id]` 返回），**不删行**；置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不是「该运行有够龄事件行」——免费的输入→输出运行与首个事件前就失败的 Action 没有事件行，同样要被置空并计进预览；runs 目标与 `deleteRun` 才随 `runs` 级联删掉整行；预览与真做用同一份统计（被置空的轮次行数 / 节点行数，以及级联的轮次行数）
 - [ ] 文件夹路径一律用 `isFolderEntityKind` 守门；工作流没有进文件夹（ADR-0005）
 
-## 4. 路由与客户端边界（Conventions）
+## 4. 路由载荷与页面（Conventions）
 
-- [ ] 每个 API route 体都跑在 `@/lib/http` 的 `handle()` 里；`api/runs/[id]/events`（原生 SSE）是仅有的例外，没有被复制
-- [ ] 每个 route `export const dynamic = "force-dynamic"`
-- [ ] 客户端代码（含 `"use client"` 文件与 `src/app`（`api/` 除外）、`src/components` 下没有指令的共享模块）没有从 `@/server` 或 `@/db` 导入任何东西（`import type` 也不行，客户端要用的类型先搬进 `src/lib/`）。没有 Server Action，所有变更是 `fetch` 到 `/api/*`
-- [ ] 能到达修订还原的 route 带 `import "@/server/writers";`，否则 restore 静默答 501
 - [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`（没有第二处写死 30 / 100）；其它 GET 各自定形
 - [ ] 改了 `/api/runs` 的筛选或汇总 → `summary` 仍按同一组筛选**不分页**算：`runs` 是 distinct 的运行数（零用量的运行也算），token / 费用与每行同源、从按 `run_id` 预聚合的 `run_nodes` 子查询 **left join** 求和（权威汇总，`node_usage` 缺一条明细时不掉账），只有 `byModel` 走 `node_usage`；没有退化成内连接把无用量的运行挤掉；数组消费者一个不剩地改读 `items`（`rg -n '"/api/runs' src e2e scripts`）
 - [ ] 受理来源仍是 `imports.invocation.source` 的**读时投影**：`/api/runs` 用 `json_extract` 推导 `items[].source` 与 `source=` 筛选（无 invocation 的行 coalesce 成 `workflow`），没有为它新增列、没有回填历史行、没有第二份表示（The five library list GETs and `/api/runs`…）
@@ -106,7 +102,6 @@
 - [ ] 新增的 `any` 带注释说明为何无法窄化
 - [ ] 改了 `docs/DESIGN.md` / `docs/DESIGN-V2.md` 所陈述的契约 → 同一 PR 更新那份文档；定了新术语 → `CONTEXT.md` 只放词汇与语义，不放实现
 - [ ] README 与 AGENTS.md 的 Commands 块、引擎 spec 三者要一起改或都不改（README 复述了它们）
-- [ ] 改了 `.claude/skills/` → `.codex/skills/` 同一 PR 保持字节一致
 
 ## 10. ADR（Decisions and the glossary）
 
