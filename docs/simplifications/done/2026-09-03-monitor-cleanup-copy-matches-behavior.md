@@ -78,7 +78,7 @@ Chrome 里打开 `/monitor`，对事件项点一次「预览影响」，确认�
 
 ## 落地
 
-PR：[#31](https://github.com/TonQiaN/onto-flow/pull/31)（PR 待开）
+PR：[#35](https://github.com/TonQiaN/onto-flow/pull/35)
 
 **与提议的差异：**
 
