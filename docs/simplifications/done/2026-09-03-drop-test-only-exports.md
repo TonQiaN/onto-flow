@@ -1,6 +1,6 @@
 # 简化：删掉只有单测在用的 totalUsage 与 base64ByteLength
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -73,3 +73,26 @@ conventions above」保护的是**有被测对象**的测试。这两个函数�
 低。两处都无生产调用点，删除后 `typecheck` 会立刻抓到任何遗漏。
 
 预估净删 30 行；风险等级：低。
+
+## 落地
+
+PR 待开（分支 `cleanup/5-drop-test-only-exports`，[DESIGN-V3 第 5 批](../../DESIGN-V3.md)）。
+
+与提议的差异：
+
+- `base64ByteLength` 按用户拍板走**路 A（净删除）**：`skill-files.ts` 里的函数与
+  `skill-files.test.ts` 的那条用例（4 条断言）一起删，`RevisionPanel.tsx:145-147` 的内联算法
+  一字未动——路 B 会新造一条 `src/components/` → `src/app/` 的反向依赖，而唯一被接受的那条
+  刚在第 4 批被删掉。
+- 提议只说删 `totalUsage` 的断言，实际连夹具里的 `cost: 0.12` 一起删：合计没了以后没有任何
+  断言再读这个字段，留着就是一条没人看的夹具数据。`reasoningTokens: 7` 必须留——它正是
+  「output 已含 reasoning，不重复加」那条用例要证明的东西。
+- 复核了记录里「无连带改动」的判断：`rg -n "\btotalUsage\b|\bbase64ByteLength\b"` 在 `src` /
+  `e2e` / `scripts` / `docs`（除本记录）/ `README.md` / `AGENTS.md` / `CONTEXT.md` / `.github`
+  上现已清零，`src/rules.test.ts` 也没有钉过这两个名字。
+
+验收实际跑了：`npx vitest run src/app/runs/lib.test.ts src/app/skills/skill-files.test.ts`
+（2 文件 9 条全绿）、`npm run check`（typecheck + lint + fmt:check + vitest，46 文件
+386 passed / 1 skipped）、`npm run build`（碰了 `src/app/`，路由表照旧）、
+`npx playwright test e2e/skills.spec.ts`（本目录自己的干净库 + 3595 端口，3 条全绿——
+记录里「保险起见」点名的那个 spec）。不碰四处高代价接缝，未跑付费冒烟。
