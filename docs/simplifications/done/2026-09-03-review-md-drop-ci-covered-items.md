@@ -217,7 +217,22 @@ first statement is `return handle(` — never a `const`, an alias, or a re-expor
 | `export default function foo() {}` | 红 | 红（这一轮新拦下的） |
 | `export async function POST() { return handle(…) }`、`export const MAX_X = 1;` | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，九轮改写对现有 route 的判定一次
+第十轮：抹注释留下空白之后，`/* 说明 */ export async function POST(){}` 这种同行前缀会把锚死在
+列 0 的 `^export` 全部躲过去。所有 `^export` 改成 `^[ \t]*export`；自检的两边也都改成抹过注释的
+视图（只差字面量），免得同行注释前缀让自检误报。
+
+三十二种写法反向验证过。除前面二十六种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `/* route */ export async function POST() { return new Response(…) }` | 红 | 红「POST 的方法体第一句不是 return handle(」 |
+| `/* x */ export { post as "POST" };` | 红 | 红「第 12 行的 export 形状不认识」 |
+| 未闭合引号（自检回归） | 红 | 红「抹字面量后顶层 export 数量变了」 |
+| `/* route */ export async function POST() { return handle(…) }` | 绿 | 绿 |
+| `/* c */ export const dynamic = "force-dynamic";` | 绿 | 绿 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十轮改写对现有 route 的判定一次
 都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：

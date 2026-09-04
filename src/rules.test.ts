@@ -142,18 +142,20 @@ describe("AGENTS.md · Conventions · handle()", () => {
    */
   const EXEMPT = ["src/app/api/runs/[id]/events/route.ts"];
   const METHODS = "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS";
+  // 每个 ^export 都容忍行首空白：注释被抹成空白后，`/* 说明 */ export async function POST(){}`
+  // 这种同行前缀会把锚死在列 0 的匹配全部躲过去（Codex 对 #50 的十轮复审）。
   const FUNCTION_METHOD_RE = new RegExp(
-    String.raw`^export\s+(?:async\s+)?function\s+(${METHODS})\b`,
+    String.raw`^[ \t]*export\s+(?:async\s+)?function\s+(${METHODS})\b`,
     "gm",
   );
-  const VAR_EXPORT_RE = /^export\s+(?:const|let|var)\b/gm;
-  const EXPORT_AT_RE = /^export\b/gm;
+  const VAR_EXPORT_RE = /^[ \t]*export\s+(?:const|let|var)\b/gm;
+  const EXPORT_AT_RE = /^[ \t]*export\b/gm;
   // route 顶层只许两种导出形状：方法用的函数声明，和 `export const <标识符> = …`（`dynamic`、
   // uploads 的字节上限）。别的一律记违规，不再逐种枚举——`export { post as "POST" }`、
   // `export const { POST } = handlers`、`export *`、`export default` 都被这一条一次性拦下
   // （Codex 对 #50 的九轮复审）。
   const ALLOWED_EXPORT_RE =
-    /^export\s+(?:(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=)/;
+    /^[ \t]*export\s+(?:(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=)/;
   const LEADING_TRIVIA_RE = /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
 
   /** 本条语句的结尾：括号全配平后的第一个 `;`。多声明符的 `const a = 1, POST = …` 要整条一起看 */
@@ -187,9 +189,11 @@ describe("AGENTS.md · Conventions · handle()", () => {
       const out: string[] = [];
       const content = stripCode(raw, true);
       // 自检：抹字面量不该抹掉任何顶层 export（route 里 export 不会写在字面量里）。数量对不上说明
-      // 扫描把一整段当成了字符串，后面的判断都不可信，直接记违规。
-      const topLevelExports = (text: string): number => text.match(/^export\b/gm)?.length ?? 0;
-      if (topLevelExports(content) !== topLevelExports(raw))
+      // 扫描把一整段当成了字符串，后面的判断都不可信，直接记违规。两边都是抹过注释的视图，
+      // 差别只在字面量，所以同行注释前缀不会让它误报。
+      const topLevelExports = (text: string): number =>
+        text.match(/^[ \t]*export\b/gm)?.length ?? 0;
+      if (topLevelExports(content) !== topLevelExports(stripCode(raw)))
         out.push("抹字面量后顶层 export 数量变了，扫描不可信");
       let methods = 0;
       for (const match of content.matchAll(FUNCTION_METHOD_RE)) {
