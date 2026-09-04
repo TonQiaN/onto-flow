@@ -39,7 +39,7 @@ agent-workflow-studio 整段搬过来的上游形状，**从来没有本仓库�
 
 - 上表的死代码全删。
 - 过度导出的一批去掉 `export` 关键字（不改行数，只让 knip 归零，见
-  [knip 归零](../proposed/2026-09-03-knip-to-zero-then-gate.md)）。
+  [knip 归零](2026-09-03-knip-to-zero-then-gate.md)）。
 - `RUN_SESSIONS_SUBDIR` 搬到 `workspace.ts`（那里本就住着其余六个 `RUN_*_SUBDIR`），`composition.ts` 与
   `trajectory.ts` 两边引它，`scripts/smoke-capabilities.ts` 同引；`trajectory.test.ts` / `e2e/runs.spec.ts`
   保持字面量（测试自建路径是刻意的）。搬到 `workspace.ts` 而不是让 `trajectory.ts` 引 `composition.ts`，
@@ -81,7 +81,7 @@ PR：https://github.com/TonQiaN/onto-flow/pull/37
    （不连续 seq、未提交尾行、未知 required event、版本不受支持……）。去掉 export 要么删这些断言、要么
    把解析器改成从 `readAgentTrajectory` 迂回测，两者都是拿覆盖换一个 knip 早已不报的名字——knip 把
    `*.test.ts` 当 entry，它本来就不在 knip 的清单里。其余 13 个过度导出照提议去掉了 `export`。
-2. `ToolExecute`（`tool-contract.ts:95`）**没有删**。它不在本记录的表里；[knip 归零](../proposed/2026-09-03-knip-to-zero-then-gate.md)
+2. `ToolExecute`（`tool-contract.ts:95`）**没有删**。它不在本记录的表里；[knip 归零](2026-09-03-knip-to-zero-then-gate.md)
    的第 2 步把它派给了本记录，但同一份记录的「已考察但不作为删除项」又把它的兄弟
    （`ToolContext` / `ToolRunOptions` / `ToolRunSandbox` / `ToolRunResult`）作为 ADR-0017 的公开面保住——
    `ToolExecute` 正是「execute 模块默认导出的形状」，同一个公开面，同一条理由。归零靠 `knip.json` 的

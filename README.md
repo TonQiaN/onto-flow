@@ -116,17 +116,17 @@ token 与费用等脱敏指标，不回显岗位、简历或结果正文。
 ## 测试
 
 ```bash
-npm run check      # typecheck + lint + fmt:check + 单测；提交前跑这个
+npm run check      # typecheck + lint + fmt:check + knip + 单测；提交前跑这个
 npm test           # vitest 单测
 npm run lint       # oxlint（带 oxlint-tsgolint 的类型感知规则）
 npm run fmt:check  # oxfmt 只检查；就地格式化是 npm run fmt
 npm run test:e2e   # Playwright E2E（复用 3592 端口的 dev server）
 npx vitest run src/rules.test.ts   # AGENTS.md 里能机械核对的约定
-npm run knip       # 未用文件 / 导出 / 依赖的提示；是线索不是门禁
+npm run knip       # 未用文件 / 导出 / 依赖；输出必须为空，否则退出非零
 ```
 
 仓库没有 git hook，门槛在 GitHub Actions：`.github/workflows/ci.yml` 在每个 PR 与 push `main` 上
-跑 `typecheck / lint / fmt:check / test / build` 与 Playwright，不花钱；lint 与格式化走 oxc 一对
+跑 `typecheck / lint / fmt:check / knip / test / build` 与 Playwright，不花钱；lint 与格式化走 oxc 一对
 （oxlint + oxfmt）而不是 ESLint + Prettier（[ADR-0019](docs/adr/0019-oxc-toolchain-not-eslint.md)）；
 `.github/workflows/smoke.yml` 是付费冒烟，按需或每日定时跑 `smoke-harness` 与 `smoke-engine`，
 需要仓库 secret `DEEPSEEK_API_KEY`；在 issue 或 PR 评论里 `@claude` 触发按需评审

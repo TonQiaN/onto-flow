@@ -96,8 +96,8 @@
 
 - `knip.json`：入口 `src/instrumentation.ts`、`src/server/harness/runner.ts`（子进程入口）、
   `src/server/harness/rpc/**`（组合按绝对路径装载）、`scripts/*.ts`；Next / Vitest / Playwright
-  插件自动识别其余入口。脚本 `"knip": "knip"`。**不进 CI**：它是 `find-simplifications` 的线索
-  工具，误报调零后（第 5 批）再提为门禁。
+  插件自动识别其余入口。脚本 `"knip": "knip"`。**当时不进 CI**：它是 `find-simplifications` 的线索
+  工具，误报调零后再提为门禁——第 5 批已经调零并加进 `check` 作业。
 
 **记录树 `docs/simplifications/`**
 
@@ -473,7 +473,8 @@ REVIEW.md；
 在干净的 `main` 上跑 skill（并行子 agent 分领域：harness 接缝、引擎、API 路由、页面、写入器与
 库、测试与脚本），产出 `docs/simplifications/proposed/` 一批文件 + 只含文档的 PR；用户逐条拍板后，
 每个采纳的候选一个实施 PR；否决的移 `rejected/`。knip 的误报在本轮调零后，把 `npm run knip` 加进
-CI `check` 作业并在 AGENTS.md 门禁句里补上。
+CI `check` 作业并在 AGENTS.md 门禁句里补上——这一步是本批**最后一个**合并的 PR，否则其余删除记录
+落地前 CI 会红。
 
 ## 总验收（第 4 批合并后）
 

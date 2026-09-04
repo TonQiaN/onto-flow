@@ -81,7 +81,7 @@ layers」直接覆盖的死路径。
 - 改 `docs/DESIGN.md:247` 的「画布运行条」为「运行页」。
 - `src/rules.test.ts`、`.github/REVIEW.md`、`AGENTS.md` 均不需要改（这些符号在三处都没有出现）。
 - e2e 一行不改。
-- 本条是 [knip 归零](../proposed/2026-09-03-knip-to-zero-then-gate.md) 的客户端那一份；两条一起落地时桶收窄只做一次。
+- 本条是 [knip 归零](2026-09-03-knip-to-zero-then-gate.md) 的客户端那一份；两条一起落地时桶收窄只做一次。
 
 ## 放弃了什么
 

@@ -173,15 +173,14 @@ export interface RunEventRow {
   payload: Record<string, unknown> | null;
 }
 
-// 轨迹接口的展示 DTO 与服务端投影同源，放在 @/lib/trajectory-view；这里连带导出，
-// 运行页抽屉仍从本模块取全部运行相关类型。
+// 轨迹接口的展示 DTO 与服务端投影同源，放在 @/lib/trajectory-view；这里只连带导出抽屉确实
+// 从本模块取的那几个，运行页因此只认一个模块。多挂一个就是没人取的死再导出，knip 会挡下来；
+// 抽屉之外要用这批类型的，直接从 @/lib/trajectory-view 取。
 export type {
   AgentTrajectoryResponse,
   TrajectoryDetail,
   TrajectoryRecord,
   TrajectorySession,
-  TrajectorySessionStatus,
-  TrajectoryUsage,
 } from "@/lib/trajectory-view";
 
 /** 时间归一：接受毫秒数 / ISO 字符串 / Date，其余返回 null */
