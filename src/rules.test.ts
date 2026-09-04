@@ -962,8 +962,44 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   }
 
   /**
-   * 内联解析这一层：字符引用（`missing&#46;md` / `&#x2e;`）解成字符，结果才是这条链接真正的
-   * URL。`&amp;` 放在数字引用之后解，`&amp;#46;` 才不会被二次解成 `.`。
+   * 路径里用得上的命名字符引用——HTML5 的全表两千多条，本仓没有实体库也不为一条文档断言引一个，
+   * 这里只收 ASCII 标点那一批（能出现在文件名与 URL 里的全部）。表外的引用不猜：`namedLeftover`
+   * 会把它当成「解不动的目标」报出来，宁可响也不静默放行。
+   */
+  const NAMED_REFERENCES: Record<string, string> = {
+    period: ".",
+    sol: "/",
+    bsol: "\\",
+    colon: ":",
+    num: "#",
+    quest: "?",
+    lowbar: "_",
+    percnt: "%",
+    lpar: "(",
+    rpar: ")",
+    commat: "@",
+    excl: "!",
+    ast: "*",
+    plus: "+",
+    comma: ",",
+    equals: "=",
+    semi: ";",
+    tilde: "~",
+    dollar: "$",
+    apos: "'",
+    quot: '"',
+    lt: "<",
+    gt: ">",
+    amp: "&",
+  };
+
+  /** 解完之后还剩下的命名引用：表里没有，不猜。 */
+  const NAMED_LEFTOVER_RE = /&[a-zA-Z][a-zA-Z0-9]{1,31};/;
+
+  /**
+   * 内联解析这一层：字符引用（`missing&#46;md` / `&#x2e;` / `&period;`）解成字符，结果才是
+   * 这条链接真正的 URL。`&amp;` 与其余命名引用同一遍解，`&amp;#46;` 因此只解一次、留下字面的
+   * `&#46;`，不会被二次解成 `.`。
    */
   function decodeCharacterReferences(destination: string): string {
     return destination
@@ -971,7 +1007,10 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
         fromCodePoint(Number.parseInt(hex, 16)),
       )
       .replace(/&#(\d{1,7});/g, (_all, decimal: string) => fromCodePoint(Number(decimal)))
-      .replace(/&amp;/g, "&");
+      .replace(
+        /&([a-zA-Z][a-zA-Z0-9]{1,31});/g,
+        (all, name: string) => NAMED_REFERENCES[name] ?? all,
+      );
   }
 
   /**
@@ -1001,6 +1040,11 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
           // `notes%3Aold.md` 会解出个 `notes:old.md` 冒充外链溜过去。
           const url = decodeCharacterReferences(destination);
           if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//")) continue;
+          if (NAMED_LEFTOVER_RE.test(url)) {
+            // 解不动就报出来：静默跳过等于给坏链接留通道，改法也现成——把 `&period;` 写成 `.`
+            problems.push(`${state}/${name}: 链接「${url}」含表外的命名字符引用，核对不了`);
+            continue;
+          }
           const target = percentDecode(url.split(/[?#]/)[0] ?? "");
           if (!target.endsWith(".md")) continue;
           if (!fs.existsSync(path.resolve(dir, target)))
