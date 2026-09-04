@@ -3,12 +3,14 @@ import { and, eq } from "drizzle-orm";
 import { db, runNodes, runs } from "@/db";
 import { handle, jsonError } from "@/lib/http";
 import { readAgentTrajectory } from "@/server/harness/trajectory";
+import { readLatestRoundSnapshot } from "@/server/run-rounds";
 
 export const dynamic = "force-dynamic";
 
 /**
  * 节点快照里的技能集：slug → 展示名。会话日志里的预载注入只带 slug，轨迹面板
- * 要靠这张表把它标成「预载技能：<名>」。历史快照缺字段时给空表，面板退回显示 slug。
+ * 要靠这张表把它标成「预载技能：<名>」。快照读该节点仍留着快照的最大一轮——技能集在
+ * 受理时冻结、各轮同源。历史快照缺字段、或快照被事件清理置空时给空表，面板退回显示 slug。
  */
 function snapshotSkillNames(snapshot: unknown): Record<string, string> {
   const names: Record<string, string> = {};
@@ -46,7 +48,7 @@ export async function GET(
       nodeId,
       activeSessionId:
         run.status === "running" && node.status === "running" ? node.sessionId : null,
-      skillNames: snapshotSkillNames(node.snapshot),
+      skillNames: snapshotSkillNames(readLatestRoundSnapshot(id, nodeId)),
     });
     return NextResponse.json(trajectory);
   });

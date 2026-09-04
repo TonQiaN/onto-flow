@@ -860,11 +860,7 @@ async function executeRun(
     ownRound?: { inputs: Record<string, PortValue[]> },
   ): void => {
     const finishedAt = new Date();
-    updateRunNode(runId, state.node.id, {
-      status: "success",
-      outputs: state.outputs,
-      finishedAt,
-    });
+    updateRunNode(runId, state.node.id, { status: "success", finishedAt });
     if (ownRound) {
       settleRound({
         runId,
@@ -925,12 +921,7 @@ async function executeRun(
         throw new Error(`输入端口「${port.name}」没有可用的上游值`);
       }
     }
-    updateRunNode(runId, nodeId, {
-      status: "running",
-      startedAt: new Date(),
-      inputs: nodeInputs,
-      error: null,
-    });
+    updateRunNode(runId, nodeId, { status: "running", startedAt: new Date(), error: null });
 
     if (state.node.kind === "output") {
       // 输出节点只有一个 value 口，透传第一份（多条入线的输出节点没有意义）。

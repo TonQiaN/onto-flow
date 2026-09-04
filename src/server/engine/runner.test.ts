@@ -1428,8 +1428,12 @@ describe("回边重入", () => {
       { node: "writer-node", round: 1 },
       { node: "tester-node", round: 1 },
     ]);
+    // 产物只在轮次行上：输出节点最后一轮成功的那份才是定稿。
     const output = sqlite
-      .prepare("SELECT status, outputs FROM run_nodes WHERE run_id = ? AND node_id = 'output-node'")
+      .prepare(
+        "SELECT status, outputs FROM run_node_rounds WHERE run_id = ? AND node_id = 'output-node'" +
+          " ORDER BY round DESC LIMIT 1",
+      )
       .get(startedRun.runId) as { status: string; outputs: string };
     expect(output.status).toBe("success");
     expect(output.outputs).toContain("验收通过的脚本");

@@ -52,14 +52,20 @@ interface RunNode {
   nodeId: string;
   label: string;
   status: "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
-  snapshot: Record<string, unknown> | null;
-  outputs: Record<string, unknown> | null;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
   cost: number;
   error: string | null;
+}
+
+/** 轮次行的骨架；输入输出与快照按轮另取（ADR-0018） */
+interface RunRound {
+  nodeId: string;
+  round: number;
+  status: "running" | "success" | "failed" | "cancelled" | "skipped";
+  sessionId: string | null;
 }
 
 interface RunDetail {
@@ -70,6 +76,25 @@ interface RunDetail {
     runDir: string | null;
   };
   nodes: RunNode[];
+  rounds: RunRound[];
+}
+
+/** 某个节点最后一轮成功的轮次号；没有成功过返回 null */
+function lastSuccessfulRound(rounds: RunRound[], nodeId: string): number | null {
+  const rows = rounds.filter((row) => row.nodeId === nodeId && row.status === "success");
+  return rows.length === 0 ? null : Math.max(...rows.map((row) => row.round));
+}
+
+/** 这一轮的产物；输入输出只在轮次行上，经按轮取的那条路由拿（ADR-0018） */
+async function roundOutputs(
+  runId: string,
+  nodeId: string,
+  round: number,
+): Promise<Record<string, unknown> | null> {
+  const payload = await requestJson<{ outputs: Record<string, unknown> | null }>(
+    `/api/runs/${runId}/nodes/${nodeId}/rounds/${round}`,
+  );
+  return payload.outputs;
 }
 
 interface HistoryItem {
@@ -186,11 +211,14 @@ async function waitForTerminal(statusUrl: string): Promise<StatusResponse> {
 
 async function inspectArtifacts(
   runId: string,
-  nodes: RunNode[],
+  detail: RunDetail,
 ): Promise<Array<{ path: string; bytes: number }>> {
   const byPath = new Map<string, FilePortValue>();
-  for (const node of nodes) {
-    for (const value of Object.values(node.outputs ?? {})) {
+  // 产物只在轮次行上：每个节点取它最后一轮成功的那份（ADR-0018）。
+  for (const node of detail.nodes) {
+    const round = lastSuccessfulRound(detail.rounds, node.nodeId);
+    if (round === null) continue;
+    for (const value of Object.values((await roundOutputs(runId, node.nodeId, round)) ?? {})) {
       const file = filePortValue(value);
       if (file) byPath.set(file.file.path, file);
     }
@@ -224,22 +252,30 @@ async function inspectArtifacts(
   return artifacts;
 }
 
-function inspectPdfConversions(detail: RunDetail) {
+async function inspectPdfConversions(runId: string, detail: RunDetail) {
   const workspaceDir = detail.run.runDir
     ? path.join(process.cwd(), detail.run.runDir, "workspace")
     : null;
-  return detail.nodes.flatMap((node) => {
-    if (node.label !== "岗位JD" && node.label !== "简历") return [];
-    const input = filePortValue(node.outputs?.value);
-    if (!input || input.file.mime.toLowerCase() !== "application/pdf") return [];
+  const pages = [];
+  for (const node of detail.nodes) {
+    if (node.label !== "岗位JD" && node.label !== "简历") continue;
+    const round = lastSuccessfulRound(detail.rounds, node.nodeId);
+    if (round === null) continue;
+    const input = filePortValue((await roundOutputs(runId, node.nodeId, round))?.value);
+    if (!input || input.file.mime.toLowerCase() !== "application/pdf") continue;
     if (!workspaceDir) throw new Error("PDF 运行缺少可检查的工作区路径");
     const expectedPages = readPdfPageCount(resolveWithinData(input.file.path));
-    return [{ label: node.label, ...inspectPdfPages(workspaceDir, node.nodeId, expectedPages) }];
-  });
+    pages.push({ label: node.label, ...inspectPdfPages(workspaceDir, node.nodeId, expectedPages) });
+  }
+  return pages;
 }
 
-async function inspectTrajectories(runId: string, nodes: RunNode[]) {
-  const actionNodes = nodes.filter((node) => node.snapshot !== null);
+async function inspectTrajectories(runId: string, detail: RunDetail) {
+  // Action 节点＝有会话的轮次行；输入 / 输出 / 被跳过的节点没有会话（ADR-0018）。
+  const withSession = new Set(
+    detail.rounds.filter((row) => row.sessionId !== null).map((row) => row.nodeId),
+  );
+  const actionNodes = detail.nodes.filter((node) => withSession.has(node.nodeId));
   if (actionNodes.length !== 8) throw new Error(`Action 节点数应为 8，实际 ${actionNodes.length}`);
   let sessions = 0;
   let records = 0;
@@ -341,7 +377,7 @@ async function main(): Promise<void> {
     throw new Error(`运行历史里的受理来源应为 resume-match-api，实际 ${historyRow.source}`);
   }
 
-  const artifacts = await inspectArtifacts(started.runId, detail.nodes);
+  const artifacts = await inspectArtifacts(started.runId, detail);
   if (artifacts.length !== 11) {
     throw new Error(
       `工作区文件应为两份物化输入加九份 Action 产物，共 11 份；实际 ${artifacts.length}`,
@@ -350,7 +386,7 @@ async function main(): Promise<void> {
   if (!artifacts.some((artifact) => artifact.path.endsWith(`/${RESUME_MATCH_RESULT_ARTIFACT}`))) {
     throw new Error(`工作区缺少 ${RESUME_MATCH_RESULT_ARTIFACT}`);
   }
-  const pdfPages = inspectPdfConversions(detail);
+  const pdfPages = await inspectPdfConversions(started.runId, detail);
   const incompletePdfs = pdfPages.filter((inspection) => !inspection.complete);
   if (incompletePdfs.length > 0) {
     throw new Error(
@@ -359,7 +395,7 @@ async function main(): Promise<void> {
         .join("；")}`,
     );
   }
-  const trajectory = await inspectTrajectories(started.runId, detail.nodes);
+  const trajectory = await inspectTrajectories(started.runId, detail);
 
   const totalTokens = detail.nodes.reduce((sum, node) => sum + totalUsageTokens(node), 0);
   const totalCost = detail.nodes.reduce((sum, node) => sum + node.cost, 0);
