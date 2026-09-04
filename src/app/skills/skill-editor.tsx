@@ -17,6 +17,7 @@ import {
   readError,
   ReferencesPanel,
   RevisionPanel,
+  type SkillRow,
 } from "@/components/library";
 import { SKILL_FILE_MAX_BYTES, SKILL_FILE_MAX_COUNT } from "@/lib/skill-files";
 import { estimateTokens } from "@/lib/workflow-settings";
@@ -26,16 +27,6 @@ import {
   type SkillFileDraft,
   skillFilesProblem,
 } from "./skill-files";
-
-export interface SkillRow {
-  id: string;
-  name: string;
-  description: string;
-  /** SKILL.md 正文（不含 frontmatter） */
-  content: string;
-  createdAt: string;
-  updatedAt: string;
-}
 
 /** GET /api/skills/[id] 的资源文件项 */
 export interface SkillFileDto {

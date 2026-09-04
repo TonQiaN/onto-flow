@@ -8,6 +8,7 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { EFFORT_LABEL } from "@/components/canvas/node-model";
 import {
+  type ActionDto,
   DEFAULT_PAGE_SIZE,
   DND_ENTITY_MIME,
   FolderBadge,
@@ -21,19 +22,16 @@ import {
   LibraryLayout,
   LibraryToolbar,
   type ListEnvelope,
+  type ModelRow,
+  type ObjectTypeRow,
   readError,
   RefCount,
+  type SkillRow,
+  type ToolRow,
   useLibraryQuery,
   type WithLibraryMeta,
 } from "@/components/library";
 import { ActionEditor } from "./action-editor";
-import {
-  type ActionDto,
-  type ModelRow,
-  type ObjectTypeRow,
-  type SkillRow,
-  type ToolRow,
-} from "./shared";
 
 type ActionItem = ActionDto & WithLibraryMeta;
 

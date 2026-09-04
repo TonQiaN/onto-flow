@@ -179,6 +179,14 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 `folderRefFrom(folders, id)` 把扁平文件夹清单还原成带完整路径的 `FolderRef`（四个库页「新建时的
 默认归属」），`formatUsedBy(usedBy)` 把删除失败（409）返回的引用方名字拼成行内文案。
 
+四个可被引用的库与 `models` 表在客户端的**行形状只在 `entity-dto.ts` 声明一份**，同样经桶导出：
+`ActionDto` / `ActionPortDto`（`loadActionDtos` 的形状，`updatedAt` 是可选的——它今天不带时间戳）、
+`ObjectTypeRow` / `SkillRow` / `ToolRow`（各库整行，列表、详情与 POST / PUT 回包同形）、`ModelRow`。
+库页与画布已经在互相传这些对象（`workflows/[id]/action-inspector.tsx` 把工作流侧的行喂给
+`actions/action-editor.tsx`），各写一份只能靠结构兼容编过；工作流专有的 `ActionItem` / `NodeDto` /
+`EdgeDto` / `WorkflowDetail` / `WorkflowSets` 仍在 `src/app/workflows/[id]/types.ts`。
+服务端 `src/server/writers/action.ts` 的同名 `ActionDto` 是另一份，客户端不从 `@/server` 取值。
+
 ## 六、引擎改动（阶段一部分）
 
 1. **运行快照**：`resolveWorkflow` 在受理时冻结图、Action、模型、端口、工作流设置、技能集、Tool 集
@@ -206,8 +214,9 @@ workflows 列表页不分类，无 `folder`（LibraryLayout 不传 tree）。
 ## 七、阶段二 / 阶段三 要点（届时细化）
 
 - 阶段二：节点面板按文件夹路径分组（单归属，未归类沉底）+ 关键词搜索；双击节点 → 复用 Action 编辑器（同一组件）+ ReferencesPanel +
-  影响预览 + 「复制为新 Action 并替换本节点」；五态视觉 + 边流动动画 + 自动跟随 + 取消运行
-  （`session/cancel` + 标记 cancelled + 下游 skipped）。
+  影响预览 + 「复制为新 Action 并替换本节点」；五态视觉 + 边流动动画 + 取消运行
+  （`session/cancel` + 标记 cancelled + 下游 skipped）。「自动跟随」不在画布上：看一次运行只有
+  `/runs/<id>`（ADR-0018），跟随光标是那一页时间线上的按钮，编辑器受理成功即跳走。
 - 阶段三：`/monitor` 系统健康一页（引擎就绪、运行子进程、数据库与磁盘占用、孤儿运行与孤儿实体、
   手动清理）。路由只有 `GET /api/monitor/health` 与 `POST /api/monitor/cleanup` 两条；
   清理三项（工作区 / 事件明细 / 旧运行）一律先 dryRun 预览再二次确认。用工作台的普通浅色外壳，

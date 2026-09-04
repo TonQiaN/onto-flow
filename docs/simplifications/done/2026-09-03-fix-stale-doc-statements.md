@@ -1,6 +1,6 @@
 # 简化：修掉 AGENTS.md / CONTEXT.md / DESIGN-V2 里与代码对不上的陈述
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -87,3 +87,35 @@ rule the moment the code stops obeying it」，以及「never as if the code alr
 低。六处全部有 `rg` 证据，改的都是散文。
 
 预估净删 ≈ 0（六处改写，净 ±2 行）；风险等级：低。
+
+## 落地
+
+[PR #41](https://github.com/TonQiaN/onto-flow/pull/41)。
+
+**与提议的差异：**
+
+- ① 只剩枚举那一半：数量（「one exemption」）已随 [#29](https://github.com/TonQiaN/onto-flow/pull/29)
+  落地，本 PR 只在 Checks 段同句枚举里补上 `docs/simplifications/` 记录树骨架断言。
+- ③ 措辞比提议更进一步：不止举两个例子，连「the one sanctioned run-starting shape」这个句式也换掉了
+  （改成「The only run-starting shape E2E may use is …」），否则记录自己那条验收命令
+  `rg -n "one sanctioned run-starting" AGENTS.md` 仍会有结果。顺带复核了第三个 spec：
+  `e2e/workflow-editor.spec.ts` 也 `page.route` 了 `/api/workflows/<id>/run`，但它 `route.fulfill`
+  成 500「不应发起运行」，从不真发起——今天真发起运行的确实只有 `parallel-runs.spec.ts` 与
+  `workflow-settings.spec.ts` 两个。
+- ④ 那句主人是**纯描述**，没有写记录里那句「写完即冻结」：Codex 对 #41 的复审指出，那半句会
+  凭空立一条只能靠肉眼守、却在 `.github/REVIEW.md` 里没有对应行的规则，与 AGENTS.md
+  「a rule a reviewer must check by eye has a line in `.github/REVIEW.md`; change the three
+  together」冲突。为它加一行清单反过来又踩本批 `review-md-drop-ci-covered-items` 要消的「永远
+  勾对的行」，所以改成只说这目录里是什么、为什么留着。
+- ⑤ 走「写成 ADR-0010 之后的模型」这一路，并按 CONTEXT.md「只记语义、不记实现」把列名
+  （`workflow_nodes.action_id`）留在 AGENTS.md，词条里只说「工作流的节点仍在引用库里的 Action」。
+- ⑥ 走「把自动跟随移到运行页语境」这一路，阶段二其余各项未改写（未逐项复核，不冒充现状）。
+
+**验收实际跑了什么：**
+
+- `rg -n "four exemptions|two exemptions|one sanctioned run-starting" AGENTS.md` → 无结果。
+- `rg -n "run_events" e2e/` → 无结果（复核第 ② 句改对了：`e2e/runs.spec.ts` 插的是
+  `run_node_rounds` 与 `node_usage`，没有 `run_events`）。
+- `npx vitest run src/rules.test.ts` → 绿（记录树骨架门禁与 `handle()` 白名单反向断言都在里面）。
+- `npm run check`（typecheck + lint + fmt:check + vitest）→ 通过。
+- e2e：不适用（纯文档）。付费冒烟：没跑（不触及 harness 接缝）。

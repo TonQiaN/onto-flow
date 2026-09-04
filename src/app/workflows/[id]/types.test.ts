@@ -10,10 +10,10 @@ import {
   toggleChoice,
   toggleId,
   toolTokenEstimate,
-  type ActionDto,
   type NodeDto,
 } from "./types";
 import { sourceExitName, type FlowNodeData } from "@/components/canvas/node-model";
+import type { ActionDto } from "@/components/library";
 
 const action: ActionDto = {
   id: "decision",

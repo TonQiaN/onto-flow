@@ -70,6 +70,136 @@ export const RESUME_MATCH_VALIDATOR_TOOL_NAME = "validate_resume_match_result";
 export const RESUME_MATCH_VALIDATOR_TOOL_SHA256 =
   "ccde68a40af2e905f20ead6b2a6698f3e76f9fcf0e1dddcf2dfdcba9caf63794";
 
+/* --------------------- 固定编排：期望的边与八个 Action 的端口 --------------------- */
+
+/** 一条边的四元组：源节点、源端口、目标节点、目标端口。 */
+export type ResumeMatchEdgeTuple = readonly [string, string, string, string];
+
+/** 图里每个角色对应的节点 id；受理时从解析出的图里认出来，测试里由种子图给出。 */
+export interface ResumeMatchGraphNodeIds {
+  job: string;
+  resume: string;
+  parse: string;
+  /** 六位评委，顺序同 RESUME_MATCH_CRITIC_ACTION_NAMES */
+  critics: readonly string[];
+  report: string;
+  output: string;
+}
+
+/**
+ * 专用付费入口要求的**完整**边集合。
+ *
+ * 六位评审缺一、重复一位，或只断开其中一条岗位 / 简历 / 结论边，通用图仍可能合法，
+ * 却会在付费之后得到不完整评分——所以这里是精确集合，多一条类型匹配的合法边也要拒绝。
+ * 受理时 `validateWorkflowContract` 与种子的拓扑单测吃同一份定义，种子与契约不会各自漂移。
+ */
+export function resumeMatchExpectedEdges(ids: ResumeMatchGraphNodeIds): ResumeMatchEdgeTuple[] {
+  return [
+    [ids.job, "value", ids.parse, RESUME_MATCH_JOB_PARSE_PORT],
+    [ids.resume, "value", ids.parse, RESUME_MATCH_RESUME_PARSE_PORT],
+    ...ids.critics.flatMap((critic): ResumeMatchEdgeTuple[] => [
+      [ids.parse, RESUME_MATCH_PARSED_JOB_PORT, critic, RESUME_MATCH_PARSED_JOB_PORT],
+      [ids.parse, RESUME_MATCH_PARSED_RESUME_PORT, critic, RESUME_MATCH_PARSED_RESUME_PORT],
+      [critic, RESUME_MATCH_CRITIC_RESULT_PORT, ids.report, RESUME_MATCH_REPORT_CRITICS_PORT],
+    ]),
+    [ids.parse, RESUME_MATCH_PARSED_JOB_PORT, ids.report, RESUME_MATCH_PARSED_JOB_PORT],
+    [ids.parse, RESUME_MATCH_PARSED_RESUME_PORT, ids.report, RESUME_MATCH_PARSED_RESUME_PORT],
+    [ids.report, RESUME_MATCH_REPORT_RESULT_PORT, ids.output, "value"],
+  ];
+}
+
+/** 排序后的边键，供两边做精确集合比较。 */
+export function resumeMatchEdgeKeys(edges: readonly ResumeMatchEdgeTuple[]): string[] {
+  return edges.map((edge) => JSON.stringify(edge)).sort();
+}
+
+/** 端口契约：名字、值类型、对象类型与产物路径都进比较，出口名恒为 null（本工作流没有分支）。 */
+export interface ResumeMatchPortContract {
+  name: string;
+  kind: "text" | "file" | "json";
+  objectTypeId: string;
+  artifactPath: string | null;
+  exitName: string | null;
+}
+
+/** 这条工作流六个对象类型的 id；受理时从图上读，种子里就是它建的那六行。 */
+export interface ResumeMatchObjectTypeIds {
+  jobFile: string;
+  resumeFile: string;
+  parsedJob: string;
+  parsedResume: string;
+  criticResult: string;
+  result: string;
+}
+
+function port(
+  name: string,
+  kind: ResumeMatchPortContract["kind"],
+  objectTypeId: string,
+  artifactPath: string | null = null,
+): ResumeMatchPortContract {
+  return { name, kind, objectTypeId, artifactPath, exitName: null };
+}
+
+/**
+ * 八个 Action 的**完整**端口集合。
+ *
+ * 未连线的端口不会出现在固定边集合里，但输出仍会要求 Agent 落盘，所以专用付费入口
+ * 同时锁定端口集合，不让额外产物在模型跑完之后才暴露冲突。
+ */
+export function resumeMatchExpectedPorts(types: ResumeMatchObjectTypeIds): {
+  parse: { inputs: ResumeMatchPortContract[]; outputs: ResumeMatchPortContract[] };
+  critics: Array<{ inputs: ResumeMatchPortContract[]; outputs: ResumeMatchPortContract[] }>;
+  report: { inputs: ResumeMatchPortContract[]; outputs: ResumeMatchPortContract[] };
+} {
+  return {
+    parse: {
+      inputs: [
+        port(RESUME_MATCH_JOB_PARSE_PORT, "file", types.jobFile),
+        port(RESUME_MATCH_RESUME_PARSE_PORT, "file", types.resumeFile),
+      ],
+      outputs: [
+        port(
+          RESUME_MATCH_PARSED_JOB_PORT,
+          "file",
+          types.parsedJob,
+          RESUME_MATCH_PARSED_JOB_ARTIFACT,
+        ),
+        port(
+          RESUME_MATCH_PARSED_RESUME_PORT,
+          "file",
+          types.parsedResume,
+          RESUME_MATCH_PARSED_RESUME_ARTIFACT,
+        ),
+      ],
+    },
+    critics: RESUME_MATCH_CRITIC_ACTION_NAMES.map((_name, index) => ({
+      inputs: [
+        port(RESUME_MATCH_PARSED_JOB_PORT, "file", types.parsedJob),
+        port(RESUME_MATCH_PARSED_RESUME_PORT, "file", types.parsedResume),
+      ],
+      outputs: [
+        port(
+          RESUME_MATCH_CRITIC_RESULT_PORT,
+          "file",
+          types.criticResult,
+          RESUME_MATCH_CRITIC_ARTIFACTS[index],
+        ),
+      ],
+    })),
+    report: {
+      inputs: [
+        port(RESUME_MATCH_PARSED_JOB_PORT, "file", types.parsedJob),
+        port(RESUME_MATCH_PARSED_RESUME_PORT, "file", types.parsedResume),
+        port(RESUME_MATCH_REPORT_CRITICS_PORT, "file", types.criticResult),
+      ],
+      outputs: [
+        port(RESUME_MATCH_REPORT_RESULT_PORT, "json", types.result, RESUME_MATCH_RESULT_ARTIFACT),
+      ],
+    },
+  };
+}
+
 export interface ResumeMatchActionBehavior {
   name: string;
   prompt: string;

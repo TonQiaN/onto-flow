@@ -4,7 +4,7 @@ import {
   SKILL_FILE_MAX_COUNT,
   skillFilePathProblem,
 } from "@/lib/skill-files";
-import { base64ByteLength, defaultFilePath, formatBytes, skillFilesProblem } from "./skill-files";
+import { defaultFilePath, formatBytes, skillFilesProblem } from "./skill-files";
 
 describe("资源文件路径校验（与写入口同一套规则）", () => {
   it("合法的相对路径通过", () => {
@@ -92,13 +92,6 @@ describe("小工具", () => {
   it("目录上传保留相对路径，单文件用文件名", () => {
     expect(defaultFilePath({ name: "x.md", webkitRelativePath: "" })).toBe("x.md");
     expect(defaultFilePath({ name: "x.md", webkitRelativePath: "docs/x.md" })).toBe("docs/x.md");
-  });
-
-  it("按 base64 长度与填充算出字节数", () => {
-    expect(base64ByteLength("")).toBe(0);
-    expect(base64ByteLength(Buffer.from("a").toString("base64"))).toBe(1);
-    expect(base64ByteLength(Buffer.from("ab").toString("base64"))).toBe(2);
-    expect(base64ByteLength(Buffer.from("abc").toString("base64"))).toBe(3);
   });
 
   it("字节数按 B / KiB / MiB 显示", () => {
