@@ -951,16 +951,21 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       const next = (lines[index + 1] ?? "").replace(CONTAINER_PREFIX_RE, "");
       targets.push(linkDestination(tail.trim() === "" ? next : tail, 0));
     }
-    // 百分号编码要解回来再落盘核对：非 ASCII 文件名（`01-%E9%AA%A8%E6%9E%B6.md`）Markdown
-    // 解析得开，`existsSync` 拿字面量却找不到。编码坏了就按原样，交给存在性检查报出来。
-    return targets.map((target) => {
-      const path = target.split(/[?#]/)[0] ?? "";
-      try {
-        return decodeURIComponent(path);
-      } catch {
-        return path;
-      }
-    });
+    // 只切查询串与锚点，**不解码**：解码留给落盘核对那一步，判「是不是外链」必须看原样，
+    // 否则 `notes%3Aold.md` 解出个 `notes:old.md`，会被当成带 scheme 的外链放过去。
+    return targets.map((target) => target.split(/[?#]/)[0] ?? "");
+  }
+
+  /**
+   * 百分号编码要解回来再落盘核对：非 ASCII 文件名（`01-%E9%AA%A8%E6%9E%B6.md`）Markdown
+   * 解析得开，`existsSync` 拿字面量却找不到。编码坏了就按原样，交给存在性检查报出来。
+   */
+  function decodePath(target: string): string {
+    try {
+      return decodeURIComponent(target);
+    } catch {
+      return target;
+    }
   }
 
   /**
@@ -972,9 +977,11 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     for (const state of STATES) {
       const dir = path.join(ROOT_DIR, state);
       for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
-        for (const target of recordLinkTargets(read(path.join(dir, name)))) {
+        for (const raw of recordLinkTargets(read(path.join(dir, name)))) {
+          // 外链判定看**原样**，解码后才落盘核对：顺序反过来会被编码的冒号骗成外链
+          if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) continue;
+          const target = decodePath(raw);
           if (!target.endsWith(".md")) continue;
-          if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue;
           if (!fs.existsSync(path.resolve(dir, target)))
             problems.push(`${state}/${name}: 链接「${target}」解析不到文件`);
         }
