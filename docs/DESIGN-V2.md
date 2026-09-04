@@ -6,7 +6,7 @@ v1 与现行 DeepSeek Harness 引擎契约见 [DESIGN.md](./DESIGN.md)，领域�
 
 v2 三阶段：① 库与数据层 ② 画布与运行体验 ③ 系统健康页。本文件是三阶段共同的接口基准。
 
-## 已定的地基（schema 已 push，勿改）
+## 已定的地基（schema 以 `drizzle-kit push` 原地演进）
 
 - `folders` / `entity_folders`：跨四库（`entityKind ∈ action|skill|tool|object_type`）共享的
   单归属文件夹树（ADR-0005）。`folders.name` 是单段名（不含 `/`），层级由 `parentId` 表达；

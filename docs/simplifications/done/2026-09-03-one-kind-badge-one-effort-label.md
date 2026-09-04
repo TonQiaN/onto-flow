@@ -79,7 +79,7 @@ src/components/canvas/node-model.ts:18  export const EFFORT_LABEL
 
 - `shared.tsx` 的 `Kind`、`object-type-editor.tsx` 的 `Kind` 都换成了 `node-model.ts` 的 `PortKind`
   （提议的「收成一个名字」）；`shared.tsx` 因此只剩类型、不再含 JSX，但文件名暂留 `.tsx`——下一张卡
-  [ActionDto 家族声明了两遍](../proposed/2026-09-03-action-dto-family-declared-twice.md) 会把它整份删掉。
+  [ActionDto 家族声明了两遍](2026-09-03-action-dto-family-declared-twice.md) 会把它整份删掉。
 - `AGENTS.md` 描述 `src/components/canvas/` 的那行加了半句（提议标为可选）：说明 `node-model.ts` 也是
   `PortKind` / `ReasoningEffort` 与它们文案的家，库页也从这里取。
 - `KindBadge` 只留带 `shrink-0` 的那份，`object-types/page.tsx:254` 的卡片按提议接受这个多余的 flex 约束。

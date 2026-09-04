@@ -801,4 +801,261 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     }
     expect(problems).toEqual([]);
   });
+
+  /**
+   * 从 `](` 之后读出行内链接的**目标**，读不出就是空串。只解析目标、不去找配对的右括号：
+   * 目标之后可以跟标题（`"…"` / `'…'`），标题里的括号不必配对，一起数深度会把整条链接丢掉；
+   * 而被丢掉的链接正是坏链接的静默通道。目标本身允许成对的圆括号（`](a-(b).md)`）与反斜杠转义，
+   * `<…>` 裹住的则原样取到配对的 `>`（容纳带空格的路径）。
+   */
+  function linkDestination(text: string, from: number): string {
+    let i = from;
+    while (/\s/.test(text[i] ?? "")) i += 1;
+    let out = "";
+    if (text[i] === "<") {
+      for (i += 1; i < text.length; i += 1) {
+        const ch = text[i] ?? "";
+        // 反斜杠连同被转义的字符一起留着：`\&period;` 里的 `&` 不该参与字符引用解析，
+        // 谁被转义过要一路带到解引用那一步才知道（转义在 resolveDestination 里统一去掉）
+        if (ch === "\\") out += ch + (text[(i += 1)] ?? "");
+        else if (ch === "\n") return "";
+        else if (ch === ">") return out;
+        else out += ch;
+      }
+      return "";
+    }
+    let depth = 0;
+    for (; i < text.length; i += 1) {
+      const ch = text[i] ?? "";
+      if (ch === "\\") out += ch + (text[(i += 1)] ?? "");
+      else if (/\s/.test(ch)) break;
+      else if (ch === ")" && depth === 0) break;
+      else {
+        if (ch === "(") depth += 1;
+        else if (ch === ")") depth -= 1;
+        out += ch;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 块引用与列表项的容器前缀：`>` 与列表标记的任意组合，缩进不设上限。列表标记后面必须有空白
+   * （或就是行尾的空项）才算标记——`-\`\`\`markdown` 按 CommonMark 是普通段落文字，剥掉那个
+   * `-` 会把它当成开栏，之后的真链接被静默抹掉；`>` 则不要求后随空白。
+   */
+  const CONTAINER_PREFIX = String.raw`[ \t]*(?:>[ \t]*|(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|(?=$)))*`;
+  const CONTAINER_PREFIX_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}`);
+
+  /** 制表符按 CommonMark 的 4 列停位展开；展开之后列宽就等于字符数，缩进判定不必再分两套。 */
+  function expandTabs(line: string): string {
+    let out = "";
+    for (const ch of line) out += ch === "\t" ? " ".repeat(4 - (out.length % 4)) : ch;
+    return out;
+  }
+
+  /**
+   * ``` / ~~~ 围栏之间是逐字引用（rg 输出、示例 Markdown），里面的 `](…)` 渲染不成链接，
+   * 要在记录里写一条字面的坏链接就放进围栏。行内的 `` `…` `` **不剥**：这些记录里的行内代码
+   * 常常跟着正文折行，跨行配对一旦错位就会吞掉后面的真链接——漏报比误报坏，而误报会指名
+   * 文件与链接、一眼可查。四空格缩进也不当代码块：记录的列表续行普遍缩进四格，那里面全是真链接。
+   */
+  function outsideFences(text: string): string {
+    const kept: string[] = [];
+    let opener: string | null = null;
+    let openerColumn = 0;
+    let openerQuotes = 0;
+    for (const raw of text.split("\n")) {
+      const line = expandTabs(raw);
+      // 围栏也能嵌在块引用或列表项里（`> ```markdown`），先剥容器前缀再认，否则栏内的
+      // 字面示例会被当成真链接报出来
+      const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? "";
+      const quotes = (prefix.match(/>/g) ?? []).length;
+      // 列一律相对**最后一个 `>` 之后**来数：`>` 前面的缩进是可选的，`   > \`\`\`` 与
+      // `> \`\`\`` 是同一层容器，按原始列算会把下一行判成出栏。
+      const inner = prefix.slice(prefix.lastIndexOf(">") + 1);
+      const startsItem = /[-*+]|\d{1,9}[.)]/.test(inner);
+      // 这一行的内容列：带列表标记的行从标记那一列算起（它新起一项，不是上一项的续行），
+      // 其余行按（引用之后的）容器前缀宽度算。
+      const column = startsItem ? (/^[ \t]*/.exec(inner)?.[0] ?? "").length : inner.length;
+      // 围栏自己的可选缩进最多三格（相对容器）：顶层的 `    \`\`\`` 是缩进代码块而不是围栏，
+      // 当成开栏会一路吞到文件末尾。容器标记之后的那段空白才是围栏自己的缩进，其中属于标记的
+      // 那部分要先扣掉——`>` 后一格、列表标记后 1–4 格都是标记自带的填充，不是缩进。
+      // 已在栏内时，缩进要相对**开栏所在容器的内容列**量：`-    \`\`\`` 的内容列是 5，
+      // 同项里的收栏与其后的正文都缩进 5 格，按绝对列量会判成缩进代码、一路吞到容器结束。
+      const afterMarker = /(>|[-*+]|\d{1,9}[.)])( *)$/.exec(prefix);
+      const padding = (afterMarker?.[2] ?? "").length;
+      // 显式标注类型：fenceIndent → opener → run → fence → fenceIndent 是一圈推断循环
+      const fenceIndent: number = !afterMarker
+        ? Math.max(0, prefix.length - (opener === null ? 0 : openerColumn))
+        : afterMarker[1] === ">"
+          ? Math.max(0, padding - 1)
+          : padding <= 4
+            ? 0
+            : padding - 1;
+      const fence = fenceIndent <= 3 ? /^(`{3,}|~{3,})(.*)$/.exec(line.slice(prefix.length)) : null;
+      const run = fence?.[1] ?? "";
+      const info = fence?.[2] ?? "";
+      if (opener !== null) {
+        // 容器结束，没写收栏的栏也跟着结束：块引用退回顶层、列表项换下一条或退回顶层，那一行
+        // 已经不在栏内了。判据只有一条——内容列比开栏那一行浅（或块引用少了一层）就是离开了
+        // 容器。栏内的列表标记一律是代码内容（顶层栏的内容列是 0，永远不会提前出栏；列表续行
+        // 里开的栏，同缩进的 `- 示例` 也仍在栏内）。
+        // 这一判要排在收栏判之前：块引用里未收栏、后面跟一条顶层 ```，那行按 Markdown 是**新开**
+        // 一栏而不是收上一栏，先判收栏会把它吃掉、把新栏的内容当正文扫。
+        const hasContent = line.slice(prefix.length).trim() !== "";
+        if (hasContent && (column < openerColumn || quotes < openerQuotes)) opener = null;
+        else {
+          // 收栏只认「同字符、不短于开栏、后面没有别的内容」；栏内的 ```not-close 不是收栏，
+          // 把它当收栏会让真正的收栏重新开栏，之后整份记录的链接就被静默抹掉
+          if (fence && run[0] === opener[0] && run.length >= opener.length && info.trim() === "")
+            opener = null;
+          kept.push("");
+          continue;
+        }
+      }
+      // 反引号栏的信息串里不能再有反引号（CommonMark），带反引号的那行根本不是围栏
+      if (fence && !(run.startsWith("`") && info.includes("`"))) {
+        opener = run;
+        // 出栏列只由**列表标记**确立（引用层数单独记在 openerQuotes 里）。裸缩进不算：围栏本身
+        // 就允许 1–3 格的可选缩进，而更深的缩进要区分「顶层缩进的栏」与「列表续行里的栏」得有
+        // 块解析器。代价是「列表续行里开的栏又忘了收栏」会一直抹到显式收栏为止——那要先有一份
+        // 忘写收栏的记录才碰得上，而按裸缩进出栏会让合法的缩进围栏被当正文扫，是天天碰得上的误报。
+        openerColumn = startsItem ? inner.length : 0;
+        openerQuotes = quotes;
+        kept.push("");
+      } else kept.push(line);
+    }
+    return kept.join("\n");
+  }
+
+  /**
+   * 一份记录里全部链接目标：行内 `[文字](目标)` 与引用式的定义行 `[标签]: 目标`，查询串
+   * （GitHub 的 `?plain=1` 之类）与锚点都已切掉——不切就不以 `.md` 结尾，整条链接被跳过。
+   * 定义的目标允许换到下一行写（CommonMark），只看定义行会取到空目标、把坏链接放过去；
+   * 定义还可以嵌在块引用或列表项里（`> [标签]: 目标`），容器前缀要先剥掉才认得出；缩进不设
+   * 上限，因为列表项的续行缩进四格及以上仍是合法定义（这里剥的是缩进，不是把它当代码块——
+   * 记录的列表续行普遍缩进四格，当代码块会一次漏掉一大批真链接）。
+   */
+  // 标签里的 `]` 可以转义（`[ref\]]: 目标`）；把每个 `]` 都当终止符会让整条定义匹配不上
+  const DEFINITION_RE = new RegExp(String.raw`^${CONTAINER_PREFIX}\[(?:[^\]\\]|\\.)+]:(.*)$`);
+
+  function recordLinkTargets(raw: string): string[] {
+    const text = outsideFences(raw);
+    const targets: string[] = [];
+    for (let open = text.indexOf("]("); open >= 0; open = text.indexOf("](", open + 2))
+      targets.push(linkDestination(text, open + 2));
+    const lines = text.split("\n");
+    for (const [index, line] of lines.entries()) {
+      const definition = DEFINITION_RE.exec(line);
+      if (!definition) continue;
+      const tail = definition[1] ?? "";
+      const next = (lines[index + 1] ?? "").replace(CONTAINER_PREFIX_RE, "");
+      targets.push(linkDestination(tail.trim() === "" ? next : tail, 0));
+    }
+    // 原样返回，一步都不解：目标要按 Markdown 的顺序处理，切锚点必须排在字符引用之后
+    // （`missing&#46;md` 里的 `#` 属于引用而不是锚点），判外链又必须排在百分号解码之前。
+    return targets;
+  }
+
+  /** 无效码位按 CommonMark 变成替换字符，而不是抛 RangeError 把整条断言炸掉。 */
+  function fromCodePoint(code: number): string {
+    return code > 0 && code <= 0x10_ff_ff ? String.fromCodePoint(code) : "\uFFFD";
+  }
+
+  /**
+   * 路径里用得上的命名字符引用——HTML5 的全表两千多条，本仓没有实体库也不为一条文档断言引一个，
+   * 这里只收 ASCII 标点那一批（能出现在文件名与 URL 里的全部）。表外的引用不猜：`namedLeftover`
+   * 会把它当成「解不动的目标」报出来，宁可响也不静默放行。
+   */
+  const NAMED_REFERENCES: Record<string, string> = {
+    period: ".",
+    sol: "/",
+    bsol: "\\",
+    colon: ":",
+    num: "#",
+    quest: "?",
+    lowbar: "_",
+    percnt: "%",
+    lpar: "(",
+    rpar: ")",
+    commat: "@",
+    excl: "!",
+    ast: "*",
+    plus: "+",
+    comma: ",",
+    equals: "=",
+    semi: ";",
+    tilde: "~",
+    dollar: "$",
+    apos: "'",
+    quot: '"',
+    lt: "<",
+    gt: ">",
+    amp: "&",
+  };
+
+  /**
+   * 内联解析这一层，一遍扫完：反斜杠转义、字符引用（`&#46;` / `&#x2e;` / `&period;`）一起处理。
+   * 必须同一遍——`\&period;md` 里的 `&` 被转义过，那串是字面文字而不是引用；先去转义再解引用
+   * 会把它解成 `.`，链接指向的其实是另一个文件。`&amp;#46;` 同理只解一次，留下字面的 `&#46;`。
+   * `unresolved` 记「碰到了表外的命名引用」：不猜，交给调用方报出来。
+   */
+  function resolveDestination(destination: string): { url: string; unresolved: boolean } {
+    let unresolved = false;
+    const url = destination.replace(
+      /\\[\s\S]|&#[xX]([0-9a-fA-F]{1,6});|&#(\d{1,7});|&([a-zA-Z][a-zA-Z0-9]{1,31});/g,
+      (all: string, hex?: string, decimal?: string, name?: string) => {
+        if (all.startsWith("\\")) return all.slice(1);
+        if (hex !== undefined) return fromCodePoint(Number.parseInt(hex, 16));
+        if (decimal !== undefined) return fromCodePoint(Number(decimal));
+        const named = NAMED_REFERENCES[name ?? ""];
+        if (named === undefined) unresolved = true;
+        return named ?? all;
+      },
+    );
+    return { url, unresolved };
+  }
+
+  /**
+   * URL 这一层：百分号编码解回来才落盘核对，非 ASCII 文件名（`01-%E9%AA%A8%E6%9E%B6.md`）
+   * Markdown 解析得开、`existsSync` 拿字面量却找不到。编码坏了就按原样，交给存在性检查报出来。
+   */
+  function percentDecode(urlPath: string): string {
+    try {
+      return decodeURIComponent(urlPath);
+    } catch {
+      return urlPath;
+    }
+  }
+
+  /**
+   * 记录之间互相引用；一份记录从 proposed/ 搬到 done/ 时，指向它的相对链接必须跟着改，
+   * 否则链接静默指向不存在的路径。归档只移动文件、不改链接是这里咬住的那个疏漏。
+   */
+  it("记录里的相对 .md 链接都能从所在目录解析到真实文件", () => {
+    const problems: string[] = [];
+    for (const state of STATES) {
+      const dir = path.join(ROOT_DIR, state);
+      for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
+        for (const destination of recordLinkTargets(read(path.join(dir, name)))) {
+          // 顺序照 Markdown 来：先解字符引用得到真正的 URL，再判外链（`&#58;` 解出来就是
+          // 真 scheme），再切查询串与锚点，最后才解百分号编码——把百分号解码提到判外链之前，
+          // `notes%3Aold.md` 会解出个 `notes:old.md` 冒充外链溜过去。
+          const { url, unresolved } = resolveDestination(destination);
+          if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//")) continue;
+          if (unresolved) {
+            // 解不动就报出来：静默跳过等于给坏链接留通道，改法也现成——把 `&period;` 写成 `.`
+            problems.push(`${state}/${name}: 链接「${url}」含表外的命名字符引用，核对不了`);
+            continue;
+          }
+          const target = percentDecode(url.split(/[?#]/)[0] ?? "");
+          if (!target.endsWith(".md")) continue;
+          if (!fs.existsSync(path.resolve(dir, target)))
+            problems.push(`${state}/${name}: 链接「${target}」解析不到文件`);
+        }
+      }
+    }
+    expect(problems).toEqual([]);
+  });
 });
