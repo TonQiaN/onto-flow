@@ -563,11 +563,24 @@ export function assertEvents(
   assertSmoke(sessions.length > 0, "这次运行没有一个成功的 Action 轮次，事件断言无从谈起");
   for (const round of sessions) {
     const mine = events.filter((e) => e.sessionId === round.sessionId);
+    const where = `会话 ${round.sessionId}（节点 ${round.nodeId} 第 ${round.round} 轮）`;
     for (const type of required) {
       assertSmoke(
         mine.some((e) => e.type === type),
-        `会话 ${round.sessionId}（节点 ${round.nodeId} 第 ${round.round} 轮）没有一条 ${type} 事件：事件没有实时落库`,
+        `${where}没有一条 ${type} 事件：事件没有实时落库`,
       );
     }
+    // tool/call 落库时也是 type "tool"（status "running"），只查类型的话，tool/result 那条链路
+    // 断了照样通过、时间轴上留下永远在跑的调用。成功的 Action 必然交过一次结构化输出，
+    // 那条结果事件是 status "ok" 的 structured_output（八~十四轮复审）。
+    assertSmoke(
+      mine.some((e) => {
+        const payload = e.payload as { tool?: string; status?: string } | null;
+        return (
+          e.type === "tool" && payload?.tool === "structured_output" && payload.status === "ok"
+        );
+      }),
+      `${where}没有一条成功的 structured_output 结果事件：工具结果没有落库`,
+    );
   }
 }

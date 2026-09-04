@@ -242,6 +242,14 @@ async function main(): Promise<void> {
       `裁决第 ${round.round} 轮只收到 ${Array.isArray(notes) ? notes.length : 0} 份评语：` +
         `汇总没有等齐两位评委`,
     );
+    // 两条入线不能解析到同一份产物：只数个数的话，两条边都取到评委甲那份也是 2。
+    const names = notes
+      .map((note) => (note as { file?: { name?: string } } | null)?.file?.name ?? "?")
+      .sort((left, right) => left.localeCompare(right));
+    assertSmoke(
+      names[0] === "critic-a.md" && names[1] === "critic-b.md",
+      `裁决第 ${round.round} 轮收到的两份评语不是两位评委各一份：${names.join("、")}`,
+    );
   }
 
   // 扇出的两份评语、最后一轮的草稿，以及「通过」出口的裁决书都必须在；「打回」出口的
