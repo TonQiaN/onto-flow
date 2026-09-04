@@ -28,6 +28,8 @@ import {
   runEvents,
   runNodes,
   runs,
+  skills,
+  tools,
   workflowEdges,
   workflowNodes,
   workflows,
@@ -40,6 +42,8 @@ import {
   type ActionPayload,
   type PortPayload,
 } from "../src/server/writers/action";
+import { createSkill, loadSkillDto, writeSkill, type SkillDto } from "../src/server/writers/skill";
+import { createTool, writeTool, type ToolPayload, type ToolRow } from "../src/server/writers/tool";
 import {
   createObjectType,
   writeObjectType,
@@ -216,6 +220,50 @@ export function upsertAction(input: ActionFixture): string {
     unwrap(writeAction(existing.id, desired));
   }
   return existing.id;
+}
+
+export interface SkillFixture {
+  name: string;
+  description: string;
+  content: string;
+}
+
+/** 按名字找 Skill，缺则建、变则改；写入器同时把磁盘投影物化出来。 */
+export function upsertSkill(input: SkillFixture): SkillDto {
+  const desired = { ...input, files: [] };
+  const existing = db.select().from(skills).where(eq(skills.name, input.name)).get();
+  if (!existing) return unwrap(createSkill(desired));
+  const dto = loadSkillDto(existing.id);
+  if (!dto) throw new Error(`技能「${input.name}」读取失败`);
+  const current = {
+    name: dto.name,
+    description: dto.description,
+    content: dto.content,
+    files: dto.files.map((f) => f.path),
+  };
+  if (!sameDefinition(current, { ...input, files: [] }) || !hasRevision("skill", existing.id)) {
+    return unwrap(writeSkill(existing.id, desired));
+  }
+  return dto;
+}
+
+/** 按公名找 Tool（公名是模型调用与收窄用的身份），缺则建、变则改。 */
+export function upsertTool(input: ToolPayload): ToolRow {
+  const existing = db.select().from(tools).where(eq(tools.publicName, input.publicName)).get();
+  if (!existing) return unwrap(createTool(input));
+  const current: ToolPayload = {
+    name: existing.name,
+    publicName: existing.publicName,
+    description: existing.description,
+    parameters: existing.parameters,
+    output: existing.output,
+    timeoutMs: existing.timeoutMs,
+    code: existing.code,
+  };
+  if (!sameDefinition(current, input) || !hasRevision("tool", existing.id)) {
+    return unwrap(writeTool(existing.id, input));
+  }
+  return existing;
 }
 
 export interface WorkflowFixture {

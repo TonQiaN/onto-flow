@@ -12,12 +12,12 @@
  *   而是它根本不在清单里——本冒烟直接读会话记录的请求头来断言这一点。
  *
  * 运行：DEEPSEEK_API_KEY=... npx tsx scripts/smoke-capabilities.ts
- * 会真实调用模型并产生费用。**六项检查任何一项不过即非零退出**（夹具在 smoke-fixture.ts）。
+ * 会真实调用模型并产生费用。**七项检查任何一项不过即非零退出**（夹具在 smoke-fixture.ts）。
  */
 import fs from "node:fs";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { db, runEvents, skills, tools } from "../src/db";
+import { db, runEvents } from "../src/db";
 import { startRun } from "../src/server/engine/runner";
 import { RUN_SESSIONS_SUBDIR } from "../src/server/harness/workspace";
 import { skillSlug, SKILL_LIBRARY_DIR } from "../src/server/skill-library";
@@ -26,8 +26,6 @@ import {
   replaceSettingsIfCurrent,
   type SettingsDocument,
 } from "../src/server/settings";
-import { createSkill, writeSkill } from "../src/server/writers/skill";
-import { createTool, writeTool } from "../src/server/writers/tool";
 import {
   assertDeclaredArtifacts,
   assertSmoke,
@@ -35,9 +33,10 @@ import {
   printNodes,
   requireCredential,
   requireModel,
-  unwrap,
   upsertAction,
   upsertObjectType,
+  upsertSkill,
+  upsertTool,
   upsertWorkflow,
 } from "./smoke-fixture";
 
@@ -105,26 +104,16 @@ async function main(): Promise<void> {
     temporarySettings = nextSettings;
   }
 
-  // Skill：经写入器落库（同一事务记修订）并由它物化磁盘投影。
-  const skillName = `${PREFIX}口令`;
-  const skillPayload = {
-    name: skillName,
+  // Skill 与 Tool 都经写入器落库（同一事务记修订，技能的磁盘投影由写入器物化），
+  // 且与其余夹具同一条幂等纪律：定义没变就一个字节都不写，不给库里堆同样的修订。
+  const skill = upsertSkill({
+    name: `${PREFIX}口令`,
     description: "报口令时该用的规则",
     content: SKILL_CONTENT,
-    files: [],
-  };
-  const existingSkill = db.select().from(skills).where(eq(skills.name, skillName)).get();
-  const skill = existingSkill
-    ? unwrap(writeSkill(existingSkill.id, skillPayload))
-    : unwrap(createSkill(skillPayload));
+  });
   const slug = skillSlug(skill);
   console.log(`技能投影：${path.join(SKILL_LIBRARY_DIR, slug)}/SKILL.md（slug=${slug}）`);
-
-  // Tool：按公名查找（公名是模型调用与收窄用的身份），契约字段整体覆盖。
-  const existingTool = db.select().from(tools).where(eq(tools.publicName, TOOL_PUBLIC_NAME)).get();
-  const tool = existingTool
-    ? unwrap(writeTool(existingTool.id, TOOL_CONTRACT))
-    : unwrap(createTool(TOOL_CONTRACT));
+  const tool = upsertTool(TOOL_CONTRACT);
 
   const tIn = upsertObjectType(`${PREFIX}题目`, "text");
   const tOut = upsertObjectType(`${PREFIX}回执`, "file");
@@ -220,16 +209,22 @@ async function main(): Promise<void> {
   assertSmoke(text.includes(PASSPHRASE), `产物里没有技能里的口令「${PASSPHRASE}」`);
   assertSmoke(text.includes(STAMP_MARK), `产物里没有工具盖的印章「${STAMP_MARK}」`);
 
-  const toolCalls = db
+  // ⑤ 印章那串字模型自己也抄得出来，所以只看产物不够：要求事件日志里有一条
+  // smoke_stamp 的成功结果（tool/result 落库为 status: "ok"）。
+  const toolEvents = db
     .select()
     .from(runEvents)
     .where(eq(runEvents.runId, started.runId))
     .all()
-    .filter((e) => e.type === "tool");
-  const names = [...new Set(toolCalls.map((e) => (e.payload as { tool?: string })?.tool))];
-  console.log(`调用过的工具：${names.join(", ")}`);
+    .filter((e) => e.type === "tool")
+    .map((e) => e.payload as { tool?: string; status?: string });
+  console.log(`调用过的工具：${[...new Set(toolEvents.map((e) => e.tool))].join(", ")}`);
+  assertSmoke(
+    toolEvents.some((e) => e.tool === TOOL_PUBLIC_NAME && e.status === "ok"),
+    `事件日志里没有一次成功的 ${TOOL_PUBLIC_NAME} 调用：印章可能是模型自己抄的`,
+  );
 
-  // ⑤⑥ 全局停用是把工具从清单里摘掉，所以证据在会话请求头里，不在调用记录里。
+  // ⑥⑦ 全局停用是把工具从清单里摘掉，所以证据在会话请求头里，不在调用记录里。
   const sessionFile = fs
     .readdirSync(path.join(dir, RUN_SESSIONS_SUBDIR), { withFileTypes: true })
     .flatMap((entry) =>

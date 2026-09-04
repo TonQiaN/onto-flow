@@ -140,3 +140,12 @@ PR：https://github.com/TonQiaN/onto-flow/pull/51
 重跑退出 0。
 
 e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。
+
+**Codex 首轮复审的两条（都成立，已改并重跑付费验证）**
+
+1. **印章那项检查证明不了「工具被调用」**：`【冒烟印章】` 这串字模型自己也抄得出来。现在同时要求
+   事件日志里有一条 `smoke_stamp` 的**成功结果**（`tool/result` 落库为 `status: "ok"`）；
+   `smoke-capabilities` 因此从六项变七项。
+2. **Skill / Tool 的写是无条件的**，与夹具自己立的「定义没变就不写」纪律相悖，每跑一次就多两版
+   相同修订并重新物化技能。改成 `upsertSkill` / `upsertTool` 进夹具，与其余三个 upsert 同一套
+   比对。重跑一次能力冒烟核对：`revisions` 里 skill / tool 各仍为 1 行，退出码 0。
