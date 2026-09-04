@@ -80,7 +80,7 @@ import 了 `@/app/actions/action-editor` 的 `ActionEditor`，而 `:23-28` 把 `
 
 ## 落地
 
-PR 待开。
+[PR #45](https://github.com/TonQiaN/onto-flow/pull/45)。
 
 与提议的差异：
 
