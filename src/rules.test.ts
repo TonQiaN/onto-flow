@@ -864,7 +864,11 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       // 这一行的内容列：带列表标记的行从标记那一列算起（它新起一项，不是上一项的续行），
       // 其余行按（引用之后的）容器前缀宽度算。
       const column = startsItem ? (/^[ \t]*/.exec(inner)?.[0] ?? "").length : inner.length;
-      const fence = /^(`{3,}|~{3,})(.*)$/.exec(line.slice(prefix.length));
+      // 围栏自己的可选缩进最多三格（相对容器）：顶层的 `    \`\`\`` 是缩进代码块而不是围栏，
+      // 当成开栏会一路吞到文件末尾。容器标记之后的那段空白才是围栏自己的缩进。
+      const afterMarker = /(?:>|[-*+]|\d{1,9}[.)])([ \t]*)$/.exec(prefix);
+      const fenceIndent = afterMarker ? (afterMarker[1] ?? "").length : prefix.length;
+      const fence = fenceIndent <= 3 ? /^(`{3,}|~{3,})(.*)$/.exec(line.slice(prefix.length)) : null;
       const run = fence?.[1] ?? "";
       const info = fence?.[2] ?? "";
       if (opener !== null) {
