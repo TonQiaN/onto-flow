@@ -72,7 +72,7 @@ skills、tools、workflows、settings、internal/resume-matches）；`settings.t
 
 ## 落地
 
-PR 待开。与提议无差异：`folders.ts` / `revisions.ts` 的私有 `Result` / `ok` / `fail`、`revisions.ts` 的
+PR [#36](https://github.com/TonQiaN/onto-flow/pull/36)。与提议无差异：`folders.ts` / `revisions.ts` 的私有 `Result` / `ok` / `fail`、`revisions.ts` 的
 `WriteOutcome` 与 `hasEntityWriter` 都删了，`EntityWriter` 改成 `(id, payload) => WriteResult<unknown> | void`，
 点名的 6 个 route 拆包改 `return respond(...)`，`folders.test.ts` 的 `unwrap` 改吃 `WriteResult`。
 `AGENTS.md:139` 与 `.github/REVIEW.md` §2 第 1 条同改；`src/rules.test.ts` 确认无对应断言。
