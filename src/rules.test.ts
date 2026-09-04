@@ -803,14 +803,34 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   });
 
   /**
+   * `](` 的配对右括号下标，找不到配对时返回 -1。目标里允许成对的圆括号（`](a-(b).md)`）与反斜杠
+   * 转义，用正则截到第一个 `)` 会把这种链接整条丢掉——被丢掉的链接正是坏链接的静默通道。
+   * 上面扫 TS 源码的 `parenClose` 不复用：那个不认转义、括号不配对时抛异常，Markdown 正文里
+   * 出现不配对的括号是常事，抛异常等于让整份记录扫不下去。
+   */
+  function markdownLinkEnd(text: string, open: number): number {
+    let depth = 0;
+    for (let i = open; i < text.length; i += 1) {
+      const ch = text[i];
+      if (ch === "\\") i += 1;
+      else if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth === 0) return i;
+      }
+    }
+    return -1;
+  }
+
+  /**
    * `](…)` 的括号里可能是「目标」也可能是「目标 + 可选标题」，目标还允许用 `<…>` 裹住以容纳空格。
-   * 只取目标：把「带标题的链接」当成不认识的形状跳过，等于给坏链接留了一条静默通道。
+   * 只取目标：把「带标题的链接」当成不认识的形状跳过，同样是给坏链接留通道。
    */
   function linkTarget(inside: string): string {
     const trimmed = inside.trim();
     const angled = /^<([^>]*)>/.exec(trimmed);
     const destination = angled ? (angled[1] ?? "") : (trimmed.split(/\s/)[0] ?? "");
-    return destination.split("#")[0] ?? "";
+    return (destination.split("#")[0] ?? "").replaceAll("\\", "");
   }
 
   /**
@@ -822,8 +842,11 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     for (const state of STATES) {
       const dir = path.join(ROOT_DIR, state);
       for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
-        for (const match of read(path.join(dir, name)).matchAll(/]\(([^)]*)\)/g)) {
-          const target = linkTarget(match[1] ?? "");
+        const text = read(path.join(dir, name));
+        for (let open = text.indexOf("]("); open >= 0; open = text.indexOf("](", open + 2)) {
+          const close = markdownLinkEnd(text, open + 1);
+          if (close < 0) break;
+          const target = linkTarget(text.slice(open + 2, close));
           if (!target.endsWith(".md")) continue;
           if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue;
           if (!fs.existsSync(path.resolve(dir, target)))
