@@ -66,7 +66,8 @@ docs/             DESIGN.md (v1 + engine spec), DESIGN-V2.md (v2 contracts), DES
                   proposed / done / rejected; its README owns the rules), adr/, harness/ (the
                   per-row review record of the upstream composition: README + one file per
                   catalog group + its own AGENTS.md with the upstream-upgrade procedure),
-                  artifacts/ (one-off paid-acceptance records, frozen once written)
+                  artifacts/ (one-off paid-acceptance records: the SHA-256 and usage evidence
+                  of one real run, referenced from nowhere in the tree)
 .github/          workflows/ci.yml (merge gate), smoke.yml (paid; manual or nightly), claude.yml
                   (@claude review); REVIEW.md (the review checklist); pull_request_template.md
 .nvmrc            the Node major CI installs; package.json `engines` pins the same floor

@@ -102,6 +102,11 @@ rule the moment the code stops obeying it」，以及「never as if the code alr
   `e2e/workflow-editor.spec.ts` 也 `page.route` 了 `/api/workflows/<id>/run`，但它 `route.fulfill`
   成 500「不应发起运行」，从不真发起——今天真发起运行的确实只有 `parallel-runs.spec.ts` 与
   `workflow-settings.spec.ts` 两个。
+- ④ 那句主人是**纯描述**，没有写记录里那句「写完即冻结」：Codex 对 #41 的复审指出，那半句会
+  凭空立一条只能靠肉眼守、却在 `.github/REVIEW.md` 里没有对应行的规则，与 AGENTS.md
+  「a rule a reviewer must check by eye has a line in `.github/REVIEW.md`; change the three
+  together」冲突。为它加一行清单反过来又踩本批 `review-md-drop-ci-covered-items` 要消的「永远
+  勾对的行」，所以改成只说这目录里是什么、为什么留着。
 - ⑤ 走「写成 ADR-0010 之后的模型」这一路，并按 CONTEXT.md「只记语义、不记实现」把列名
   （`workflow_nodes.action_id`）留在 AGENTS.md，词条里只说「工作流的节点仍在引用库里的 Action」。
 - ⑥ 走「把自动跟随移到运行页语境」这一路，阶段二其余各项未改写（未逐项复核，不冒充现状）。
