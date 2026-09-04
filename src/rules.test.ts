@@ -951,20 +951,38 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       const next = (lines[index + 1] ?? "").replace(CONTAINER_PREFIX_RE, "");
       targets.push(linkDestination(tail.trim() === "" ? next : tail, 0));
     }
-    // 只切查询串与锚点，**不解码**：解码留给落盘核对那一步，判「是不是外链」必须看原样，
-    // 否则 `notes%3Aold.md` 解出个 `notes:old.md`，会被当成带 scheme 的外链放过去。
-    return targets.map((target) => target.split(/[?#]/)[0] ?? "");
+    // 原样返回，一步都不解：目标要按 Markdown 的顺序处理，切锚点必须排在字符引用之后
+    // （`missing&#46;md` 里的 `#` 属于引用而不是锚点），判外链又必须排在百分号解码之前。
+    return targets;
+  }
+
+  /** 无效码位按 CommonMark 变成替换字符，而不是抛 RangeError 把整条断言炸掉。 */
+  function fromCodePoint(code: number): string {
+    return code > 0 && code <= 0x10_ff_ff ? String.fromCodePoint(code) : "\uFFFD";
   }
 
   /**
-   * 百分号编码要解回来再落盘核对：非 ASCII 文件名（`01-%E9%AA%A8%E6%9E%B6.md`）Markdown
-   * 解析得开，`existsSync` 拿字面量却找不到。编码坏了就按原样，交给存在性检查报出来。
+   * 内联解析这一层：字符引用（`missing&#46;md` / `&#x2e;`）解成字符，结果才是这条链接真正的
+   * URL。`&amp;` 放在数字引用之后解，`&amp;#46;` 才不会被二次解成 `.`。
    */
-  function decodePath(target: string): string {
+  function decodeCharacterReferences(destination: string): string {
+    return destination
+      .replace(/&#[xX]([0-9a-fA-F]{1,6});/g, (_all, hex: string) =>
+        fromCodePoint(Number.parseInt(hex, 16)),
+      )
+      .replace(/&#(\d{1,7});/g, (_all, decimal: string) => fromCodePoint(Number(decimal)))
+      .replace(/&amp;/g, "&");
+  }
+
+  /**
+   * URL 这一层：百分号编码解回来才落盘核对，非 ASCII 文件名（`01-%E9%AA%A8%E6%9E%B6.md`）
+   * Markdown 解析得开、`existsSync` 拿字面量却找不到。编码坏了就按原样，交给存在性检查报出来。
+   */
+  function percentDecode(urlPath: string): string {
     try {
-      return decodeURIComponent(target);
+      return decodeURIComponent(urlPath);
     } catch {
-      return target;
+      return urlPath;
     }
   }
 
@@ -977,10 +995,13 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     for (const state of STATES) {
       const dir = path.join(ROOT_DIR, state);
       for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
-        for (const raw of recordLinkTargets(read(path.join(dir, name)))) {
-          // 外链判定看**原样**，解码后才落盘核对：顺序反过来会被编码的冒号骗成外链
-          if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) continue;
-          const target = decodePath(raw);
+        for (const destination of recordLinkTargets(read(path.join(dir, name)))) {
+          // 顺序照 Markdown 来：先解字符引用得到真正的 URL，再判外链（`&#58;` 解出来就是
+          // 真 scheme），再切查询串与锚点，最后才解百分号编码——把百分号解码提到判外链之前，
+          // `notes%3Aold.md` 会解出个 `notes:old.md` 冒充外链溜过去。
+          const url = decodeCharacterReferences(destination);
+          if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//")) continue;
+          const target = percentDecode(url.split(/[?#]/)[0] ?? "");
           if (!target.endsWith(".md")) continue;
           if (!fs.existsSync(path.resolve(dir, target)))
             problems.push(`${state}/${name}: 链接「${target}」解析不到文件`);
