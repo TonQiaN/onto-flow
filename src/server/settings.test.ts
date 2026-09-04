@@ -1,18 +1,8 @@
 /** 设置写入口的纯校验；先注入内存库，避免模块加载触碰真实 data/ontoflow.db。 */
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { beforeEach, describe, expect, it } from "vitest";
-import * as schema from "../db/schema";
+import { createTestDb, resetTestDb } from "./writers/test-db";
 
-const sqlite = new Database(":memory:");
-sqlite.exec(`
-CREATE TABLE settings (
-  id INTEGER PRIMARY KEY,
-  document TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-`);
-(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
+const { sqlite } = await createTestDb();
 
 const {
   DEFAULT_INSTRUCTIONS,
@@ -24,7 +14,7 @@ const {
 } = await import("./settings");
 
 beforeEach(() => {
-  sqlite.exec("DELETE FROM settings;");
+  resetTestDb(sqlite);
 });
 
 function httpServer(headers: unknown) {

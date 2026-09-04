@@ -5,67 +5,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import * as schema from "../../db/schema";
 import type { ResolvedNode } from "../../lib/graph";
 import type { ResolvedActionDefinition } from "../resolve";
+import { createTestDb, resetTestDb } from "../writers/test-db";
 import type { ActionNodeContext } from "./action";
 
-const sqlite = new Database(":memory:");
-sqlite.exec(`
-CREATE TABLE models (
-  id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, model_id TEXT NOT NULL,
-  display_name TEXT NOT NULL
-);
-CREATE TABLE actions (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
-  prompt TEXT NOT NULL, rule TEXT NOT NULL DEFAULT '', model_id TEXT NOT NULL,
-  reasoning_effort TEXT NOT NULL DEFAULT 'high', max_reentries INTEGER NOT NULL DEFAULT 0,
-  on_exhausted TEXT NOT NULL DEFAULT 'fail', created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-CREATE TABLE object_types (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL
-);
-CREATE TABLE action_ports (
-  id TEXT PRIMARY KEY, action_id TEXT NOT NULL, direction TEXT NOT NULL,
-  name TEXT NOT NULL, object_type_id TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
-  artifact_path TEXT, exit_name TEXT
-);
-CREATE TABLE action_skills (
-  action_id TEXT NOT NULL, skill_id TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE run_nodes (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, snapshot TEXT,
-  input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
-  reasoning_tokens INTEGER NOT NULL DEFAULT 0, cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_write_tokens INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0, session_id TEXT
-);
-CREATE TABLE run_node_rounds (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL, round INTEGER NOT NULL,
-  session_id TEXT, status TEXT NOT NULL, started_at INTEGER NOT NULL, finished_at INTEGER,
-  exit_name TEXT, error TEXT, inputs TEXT, outputs TEXT, snapshot TEXT,
-  UNIQUE(run_id, node_id, round)
-);
-CREATE TABLE run_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT, session_id TEXT,
-  ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
-);
-CREATE TABLE node_usage (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL,
-  session_id TEXT NOT NULL, message_id TEXT NOT NULL,
-  provider_id TEXT NOT NULL DEFAULT '', model_id TEXT NOT NULL DEFAULT '',
-  variant TEXT, input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  cost REAL NOT NULL DEFAULT 0, finish TEXT, ts INTEGER NOT NULL
-);
-`);
-(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, {
-  schema,
-});
+const { sqlite } = await createTestDb();
 
 const { finalizeUnsettledActionUsage, refreshUnsettledActionUsage, runActionNode } =
   await import("./action");
@@ -223,19 +169,12 @@ function context(options?: {
 
 beforeEach(() => {
   finalizeUnsettledActionUsage("run-1");
+  resetTestDb(sqlite);
+  // 真外键下父行先于子行：模型 → Action → 端口，工作流 → 运行 → 运行节点。
   sqlite.exec(`
-    DELETE FROM run_nodes;
-    DELETE FROM run_node_rounds;
-    DELETE FROM node_usage;
-    DELETE FROM run_events;
-    DELETE FROM action_skills;
-    DELETE FROM action_ports;
-    DELETE FROM actions;
-    DELETE FROM object_types;
-    DELETE FROM models;
     INSERT INTO models VALUES ('model-1', 'deepseek-official', 'deepseek-v4-flash', '测试模型');
-    INSERT INTO object_types VALUES ('type-1', '测试报告', 'file');
-    INSERT INTO object_types VALUES ('type-input', 'PDF 输入', 'file');
+    INSERT INTO object_types VALUES ('type-1', '测试报告', 'file', '', NULL, 0, 0, 0);
+    INSERT INTO object_types VALUES ('type-input', 'PDF 输入', 'file', '', NULL, 0, 0, 0);
     INSERT INTO actions VALUES (
       'action-1', '测试 Action', '', '写报告', '', 'model-1', 'high', 0, 'fail', 1, 1
     );
@@ -245,7 +184,10 @@ beforeEach(() => {
     INSERT INTO action_ports VALUES (
       'port-1', 'action-1', 'output', 'result', 'type-1', 0, 'result.md', NULL
     );
-    INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);
+    INSERT INTO workflows (id, name, created_at, updated_at) VALUES ('workflow-1', '测试工作流', 0, 0);
+    INSERT INTO runs (id, workflow_id, status, started_at) VALUES ('run-1', 'workflow-1', 'running', 0);
+    INSERT INTO run_nodes (id, run_id, node_id, label, status)
+      VALUES ('run-node-1', 'run-1', 'node-1', '测试 Action', 'running');
   `);
   clearUnpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1" });
   clearUnpersistedUsageForSession({ runId: "run-1", nodeId: "node-1", sessionId: "node-1#2" });
@@ -453,7 +395,8 @@ describe("Action 执行时边界", () => {
 
     sqlite.exec(
       "DELETE FROM run_nodes; DELETE FROM run_node_rounds;" +
-        " INSERT INTO run_nodes VALUES ('run-node-1', 'run-1', 'node-1', NULL, 0, 0, 0, 0, 0, 0, NULL);",
+        " INSERT INTO run_nodes (id, run_id, node_id, label, status)" +
+        " VALUES ('run-node-1', 'run-1', 'node-1', '测试 Action', 'running');",
     );
     finalizeUnsettledActionUsage("run-1");
     let plain = "";

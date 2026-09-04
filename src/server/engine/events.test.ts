@@ -1,27 +1,9 @@
 /** dsh 事件映射测试：tool/result 只带 callId，工具名必须关联先前的 tool/call。 */
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as schema from "../../db/schema";
+import { createTestDb, resetTestDb } from "../writers/test-db";
 import { usageCostCny } from "../pricing";
 
-const sqlite = new Database(":memory:");
-sqlite.exec(`
-CREATE TABLE run_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, node_id TEXT, session_id TEXT,
-  ts INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT
-);
-CREATE TABLE node_usage (
-  id TEXT PRIMARY KEY, run_id TEXT NOT NULL, node_id TEXT NOT NULL,
-  session_id TEXT NOT NULL, message_id TEXT NOT NULL, provider_id TEXT NOT NULL,
-  model_id TEXT NOT NULL, variant TEXT NOT NULL, input_tokens INTEGER NOT NULL DEFAULT 0,
-  output_tokens INTEGER NOT NULL DEFAULT 0, reasoning_tokens INTEGER NOT NULL DEFAULT 0,
-  cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_write_tokens INTEGER NOT NULL DEFAULT 0,
-  cost REAL NOT NULL DEFAULT 0, finish TEXT, ts INTEGER NOT NULL,
-  UNIQUE(run_id, session_id, message_id)
-);
-`);
-(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
+const { sqlite } = await createTestDb();
 
 const { clearUnpersistedUsageForSession, recordSessionEvent, unpersistedUsageForSession } =
   await import("./events");
@@ -35,7 +17,12 @@ const context = {
 };
 
 beforeEach(() => {
-  sqlite.exec("DELETE FROM node_usage; DELETE FROM run_events;");
+  resetTestDb(sqlite);
+  // run_events / node_usage 都外键指向 runs，runs 又指向 workflows：父行先落，子行才写得进去。
+  sqlite.exec(`
+    INSERT INTO workflows (id, name, created_at, updated_at) VALUES ('workflow-1', '事件映射测试', 0, 0);
+    INSERT INTO runs (id, workflow_id, status, started_at) VALUES ('run-1', 'workflow-1', 'running', 0);
+  `);
   clearUnpersistedUsageForSession(context);
 });
 
