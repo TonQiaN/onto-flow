@@ -237,10 +237,13 @@ describe("AGENTS.md · Conventions · handle()", () => {
         }
       if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
       // `handle` 后面只许跟 `,` 或 `}`：`import { handle as wrapped }` 绑的本地名不是 handle，
-      // route 就能自己声明一个 handle，让每个方法都以 return handle( 起头却绕开真正的错误包装
-      // （Codex 对 #50 的十五轮复审）。
+      // route 就能自己声明一个 handle，让每个方法都以 return handle( 起头却绕开真正的错误包装。
+      // 反过来 `import { jsonError as handle }` 把**别的**导出改名成 handle，同样能骗过
+      // `return handle(` 那条（Codex 对 #50 的十五、十六两轮复审）。
       if (!matchesAsCode(raw, /^[ \t]*import \{[^}]*\bhandle\s*(?:,[^}]*)?\} from "@\/lib\/http"/m))
         out.push("没有从 @/lib/http 原名导入 handle");
+      if (matchesAsCode(raw, /^[ \t]*import \{[^}]*\bas\s+handle\b/m))
+        out.push("把别的导出改名成了 handle");
       return out;
     });
     expect(found).toEqual([]);

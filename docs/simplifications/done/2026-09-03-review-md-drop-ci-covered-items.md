@@ -309,7 +309,32 @@ await if while for switch with as satisfies`），并把取舍写进注释：宁
 | `import * as d from "drizzle-orm";` | 红 | 红「命名空间导入 drizzle-orm」 |
 | 原样 | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十五轮改写对现有 route 与现有
+第十六轮三条，处置分两类：
+
+- **能机械核对的补上**：`import { jsonError as handle } from "@/lib/http"` 把**别的**导出改名成
+  `handle`，一样能骗过「体第一句是 `return handle(`」。加一条「不许 `… as handle`」。
+- **机械核对不了的退回人工**，并把这件事写清楚：
+  - `const rawSql = sql;` 之后 ``rawSql`…` `` ——本地变量别名要跟数据流才看得见。REVIEW.md 第 30 行
+    （本来就保留的那条）再补一句点名这一路。
+  - 新 route 经 helper 间接调用 `restoreRevision`——测试只认字面出现这个名字的 route，调用链上的
+    看不见。**这一条把原第 49 行以收窄形式加回 §4**：「新增的 route 若能到达修订还原（**含经 helper
+    间接调用**）要带 `import "@/server/writers";`；测试只认字面出现 `restoreRevision` 的 route」，
+    §0 的机械核对枚举里同时把 restore 那项去掉，两处不再互相矛盾。
+
+也就是说最终撤的是 **5 条**（`await db.`、`handle()`、`force-dynamic`、客户端边界、skills 双树），
+第 49 条与第 30 条都是**收窄保留**。这不违背本记录的立意——立意是「CI 完全盖住的才撤」，Codex 证明
+restore 那条没被完全盖住，那它就该留在人工位上，只是范围写准。
+
+六十三种写法反向验证过。除前面五十九种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `import { jsonError as handle } from "@/lib/http";` | 红 | 红「把别的导出改名成了 handle」 |
+| `import { handle, jsonError as handle2 } …` | 绿 | 绿 |
+| `import { handle as wrapped } …`（回归） | 红 | 红 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十六轮改写对现有 route 与现有
 客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
@@ -321,7 +346,7 @@ await if while for switch with as satisfies`），并把取舍写进注释：宁
 | `:46` | route 体在 `handle()` 里、唯一例外没被复制 | `:66`、`:82` |
 | `:47` | 每个 route `export const dynamic = "force-dynamic"` | `:49` |
 | `:48` | 客户端边界、没有 `"use server"` | `:154`、`:175` |
-| `:49` | restore route 带 `import "@/server/writers";` | `:279` |
+| `:49` | restore route 带 `import "@/server/writers";` | `:279` | **收窄保留**（见下） |
 | `:109` | `.claude/skills/` ↔ `.codex/skills/` 字节一致 | `:402` |
 
 **验收实际跑了什么：**

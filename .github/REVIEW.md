@@ -12,7 +12,7 @@
 - [ ] 用户可见的改动 → 跑了**对应的那一个** e2e spec 并写明是哪个，不是「跑了全套」也不是没跑（Checks）
 - [ ] 触及 harness 接缝（会话、事件、用量、取消、组合）→ 写明是否跑了付费冒烟（`smoke-harness` / `smoke-engine`）与结论；没跑要说为什么可以不跑（The harness seam）
 - [ ] 新增原生或 server-only 依赖 → `next.config.ts` 的 `serverExternalPackages` 有它；Turbopack `root` 钉住没动（Checks）
-- [ ] CI 的 `check` 作业跑 `src/rules.test.ts`：它机械核对的约定（`force-dynamic`、`handle()` 的唯一例外、`await db.`、客户端与 `@/server` / `@/db` 的边界与 `"use server"`、`globalThis` 的 `ontoflow` 前缀、列表信封的三个导入、raw-SQL 白名单与 `LIKE` 转义、restore route 的 `import "@/server/writers"` 与每种 `EntityKind` 的写入器、`@deepseek-ai` 精确钉版、`.claude/skills/` ↔ `.codex/skills/` 字节一致、`docs/simplifications/` 记录树骨架）评审**不必重复勾**；要看的是**白名单或例外名单变长了没有——变长了就问为什么**（Checks）
+- [ ] CI 的 `check` 作业跑 `src/rules.test.ts`：它机械核对的约定（`force-dynamic`、`handle()` 的唯一例外、`await db.`、客户端与 `@/server` / `@/db` 的边界与 `"use server"`、`globalThis` 的 `ontoflow` 前缀、列表信封的三个导入、raw-SQL 白名单与 `LIKE` 转义、每种 `EntityKind` 都有写入器、`@deepseek-ai` 精确钉版、`.claude/skills/` ↔ `.codex/skills/` 字节一致、`docs/simplifications/` 记录树骨架）评审**不必重复勾**；要看的是**白名单或例外名单变长了没有——变长了就问为什么**（Checks）
 - [ ] `@deepseek-ai/*` 版本精确钉死，没有 `^` / `~`；不是 `latest`；`@deepseek-ai/dsh-*` 直接与传递依赖同时在 `overrides` 里同版（Pin `@deepseek-ai` versions exactly）
 
 ## 1. 立场：不做兼容层（Stance: no compatibility layers）
@@ -27,7 +27,7 @@
 - [ ] 名称冲突交给数据库：writer 没有预查名字，`handle()` 把 `UNIQUE constraint failed` 映射成 409；folders 是唯一例外（根级 parent 为 NULL 无法约束）
 - [ ] 实体体校验在 writer 的 `parse…Payload` 里，route 只窄化自己的非实体参数；仍是手写 `typeof` 窄化，没有引入 schema 库
 - [ ] 每次实体写入在**同一事务**里记一版修订，包含关系；回滚复用同一个 `write<Kind>()`
-- [ ] 白名单文件里**新加**的原生 SQL 确实是查询构建器表达不了的聚合（「只经 `sql` 标签」「只在白名单文件里」「白名单文件今天仍在用」「`LIKE` 配 `escape '\'`」四项 `src/rules.test.ts` 已机械核对）；白名单变长了要问为什么。**另有一路测试看不见**：绕开 `sql` 标签、直接拿 better-sqlite3 句柄跑 SQL（`db.prepare(…)` / `sqlite.exec(…)` 之类），扫描分不清它和 `RegExp.exec`，这一路只能靠人看
+- [ ] 白名单文件里**新加**的原生 SQL 确实是查询构建器表达不了的聚合（「只经 `sql` 标签」「只在白名单文件里」「白名单文件今天仍在用」「`LIKE` 配 `escape '\'`」四项 `src/rules.test.ts` 已机械核对）；白名单变长了要问为什么。**另有一路测试看不见**：绕开 `sql` 标签、直接拿 better-sqlite3 句柄跑 SQL（`db.prepare(…)` / `sqlite.exec(…)` 之类），扫描分不清它和 `RegExp.exec`；以及把标签**赋给本地变量**再用（`const rawSql = sql;` 后 ``rawSql`…` ``），要跟数据流才看得见。这两路只能靠人看
 - [ ] 全局设置仍是单行表里的一份 JSON 文档，整份在 `src/server/settings.ts` 写边界校验；凭据只以环境变量**名**出现，值从 Next 进程环境在 spawn 时取；插件开关是 `toggles` 五键、默认指令是 `defaultInstructions`，没有回到 `webSearchEnabled` 或硬编码指令
 - [ ] 三层归属没有越界（Settings have three tiers）：全局给基线；工作流拥有 `instructions` / `settings.toggles`（只写覆盖键）/ `settings.mcpServers` / 技能集 / Tool 集；Action 只有预载 ⊆ 技能集、可见 Tool ⊆ Tool 集。⊆ 在**工作流保存**（`parseGraphPayload` 400，指名 Action 与技能 / Tool）与**运行受理**（`resolveWorkflow` 抛 `WorkflowResolveError` → 422）两处校验，没有挪到 Action 保存，也没有只留一处
 - [ ] 工作流 PUT 对 `instructions` / `settings` / `skillIds` / `toolIds` 仍是「缺省沿用现值、出现即整体替换」；画布只发图的保存没有清空集合
@@ -43,6 +43,7 @@
 
 ## 4. 路由载荷与页面（Conventions）
 
+- [ ] 新增的 route 若能到达修订还原——**含经 helper 间接调用** `restoreRevision`——带 `import "@/server/writers";`，否则 restore 静默答 501。`src/rules.test.ts` 只认字面出现 `restoreRevision` 的 route，间接到达的它看不见（Conventions）
 - [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`（没有第二处写死 30 / 100）；其它 GET 各自定形
 - [ ] 改了 `/api/runs` 的筛选或汇总 → `summary` 仍按同一组筛选**不分页**算：`runs` 是 distinct 的运行数（零用量的运行也算），token / 费用与每行同源、从按 `run_id` 预聚合的 `run_nodes` 子查询 **left join** 求和（权威汇总，`node_usage` 缺一条明细时不掉账），只有 `byModel` 走 `node_usage`；没有退化成内连接把无用量的运行挤掉；数组消费者一个不剩地改读 `items`（`rg -n '"/api/runs' src e2e scripts`）
 - [ ] 受理来源仍是 `imports.invocation.source` 的**读时投影**：`/api/runs` 用 `json_extract` 推导 `items[].source` 与 `source=` 筛选（无 invocation 的行 coalesce 成 `workflow`），没有为它新增列、没有回填历史行、没有第二份表示（The five library list GETs and `/api/runs`…）
