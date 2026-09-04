@@ -856,12 +856,14 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       // 围栏也能嵌在块引用或列表项里（`> ```markdown`），先剥容器前缀再认，否则栏内的
       // 字面示例会被当成真链接报出来
       const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? "";
-      const indent = (/^[ \t]*/.exec(line)?.[0] ?? "").length;
       const quotes = (prefix.match(/>/g) ?? []).length;
-      const startsItem = /[-*+]|\d{1,9}[.)]/.test(prefix);
+      // 列一律相对**最后一个 `>` 之后**来数：`>` 前面的缩进是可选的，`   > \`\`\`` 与
+      // `> \`\`\`` 是同一层容器，按原始列算会把下一行判成出栏。
+      const inner = prefix.slice(prefix.lastIndexOf(">") + 1);
+      const startsItem = /[-*+]|\d{1,9}[.)]/.test(inner);
       // 这一行的内容列：带列表标记的行从标记那一列算起（它新起一项，不是上一项的续行），
-      // 其余行按容器前缀的宽度算。
-      const column = startsItem ? indent : prefix.length;
+      // 其余行按（引用之后的）容器前缀宽度算。
+      const column = startsItem ? (/^[ \t]*/.exec(inner)?.[0] ?? "").length : inner.length;
       const fence = /^(`{3,}|~{3,})(.*)$/.exec(line.slice(prefix.length));
       const run = fence?.[1] ?? "";
       const info = fence?.[2] ?? "";
@@ -886,11 +888,11 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       // 反引号栏的信息串里不能再有反引号（CommonMark），带反引号的那行根本不是围栏
       if (fence && !(run.startsWith("`") && info.includes("`"))) {
         opener = run;
-        // 出栏列只由**显式的容器标记**（`>` 或列表标记）确立。裸缩进不算：围栏本身就允许
-        // 1–3 格的可选缩进，而更深的缩进要区分「顶层缩进的栏」与「列表项里的栏」得有块解析器。
-        // 代价是「列表续行里开的栏又忘了收栏」会一直抹到显式收栏为止——那要先有一份忘写收栏的
-        // 记录才碰得上，而按裸缩进出栏会让合法的缩进围栏被当正文扫，是天天碰得上的误报。
-        openerColumn = quotes > 0 || startsItem ? prefix.length : 0;
+        // 出栏列只由**列表标记**确立（引用层数单独记在 openerQuotes 里）。裸缩进不算：围栏本身
+        // 就允许 1–3 格的可选缩进，而更深的缩进要区分「顶层缩进的栏」与「列表续行里的栏」得有
+        // 块解析器。代价是「列表续行里开的栏又忘了收栏」会一直抹到显式收栏为止——那要先有一份
+        // 忘写收栏的记录才碰得上，而按裸缩进出栏会让合法的缩进围栏被当正文扫，是天天碰得上的误报。
+        openerColumn = startsItem ? inner.length : 0;
         openerQuotes = quotes;
         kept.push("");
       } else kept.push(line);
