@@ -106,25 +106,36 @@ REVIEW.md 与 AGENTS.md 的两处声明必须同一个 commit 改。
 `return` 走同一条判断；声明写法超出扫描能力（例如写了带 `{` 的返回类型注解）时报「定位不到函数体」
 而不是悄悄放行。
 
-第四轮又点出扫描没有**停在本条语句**：`const raw = async () => …; export const GET = raw;`
-这种别名，扫描会越过分号一路吃到下一个方法的 `{`，把别人的体当成自己的。补成：整段初始化只是
-一个名字就当别名回去解析它（带成环保护），分号结束了却既不是函数字面量也不是别名就返回
-「定位不到函数体」；换行处不停（`const GET =` 换行再写初始化是合法的）。
+第四轮点出扫描没有停在本条语句上（`export const GET = raw;` 会一路吃到下一个方法的 `{`），
+第五轮点出多声明符 `export const helper = 1, POST = async () => …` 又绕过一次。
 
-七种写法反向验证过（临时加进一个 route，跑完随即还原，`git diff` 干净）：
+五轮下来的结论是**做法本身要反过来**：文本扫描永远追不上 TypeScript 的全部合法写法，每补一种就
+还有下一种。断言改成**只认「导出的函数声明」这一种写法，别的一律记违规**——仓库今天 56 个方法
+导出全是 `export async function`（唯一的 `export const` 是 `dynamic = "force-dynamic"`），所以这
+不是新规矩，是把已经在遵守的写法钉住。具体三条：
+`export async function GET(…)` 的体第一句必须是 `return handle(`；
+`export const / let / var` 的整条语句（按括号配平找分号，多声明符一起看）里出现方法名就是违规；
+`export { … }` 导出方法名、以及 route 里出现 `export *`，都是违规。未知写法一律朝红的一边倒。
+
+连带把 AGENTS.md 的 Conventions 那句补成「an HTTP method is an exported function declaration whose
+first statement is `return handle(` — never a `const`, an alias, or a re-export」，理由写在同一句里
+（这一种写法才让 `rules.test.ts` 能靠读文件判定）。
+
+八种写法反向验证过（临时加进一个 route，跑完随即还原，`git diff` 干净）：
 
 | 写法 | 期望 | 实际 |
 |---|---|---|
-| 方法体内先 `return new Response(…)` 再 `return handle(…)` | 红 | 红「POST 的方法体第一句不是 return handle(」 |
-| `export const PUT = async () => new Response(…)` | 红 | 红 |
-| `const post = …; export { post as DELETE };` | 红 | 红 |
-| `const raw = async () => new Response(…); export const POST = raw;` | 红 | 红 |
-| 别名成环（`POST = alpha; alpha = beta; beta = alpha`） | 红 | 红「定位不到函数体」 |
-| `const wrapped = async () => handle(…); export const POST = wrapped;` | 绿 | 绿 |
-| `export const PATCH =` 换行后 `async () => handle(…)` | 绿 | 绿 |
+| 体内先 `return new Response(…)` 再 `return handle(…)` | 红 | 红「POST 的方法体第一句不是 return handle(」 |
+| `export const PUT = async () => new Response(…)` | 红 | 红「PUT 写成了 export const / let / var」 |
+| `const post = …; export { post as DELETE };` | 红 | 红「DELETE 走了 export { … } 再导出」 |
+| `const raw = …; export const POST = raw;` | 红 | 红「POST 写成了 export const / let / var」 |
+| `export const helper = 1, POST = async () => …` | 红 | 红，同上 |
+| `const wrapped = async () => handle(…); export const POST = wrapped;` | 红 | 红，同上（合规实现走 const 也不许） |
+| `export * from "./elsewhere";` | 红 | 红「route 里有 export *，可能带出方法」 |
+| `export async function POST() { return handle(…) }` | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 return handle(」，所以这次改写不改变任何现有 route
-的判定。
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，五轮改写对现有 route 的判定一次
+都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
 

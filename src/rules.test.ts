@@ -61,62 +61,37 @@ describe("AGENTS.md · Conventions · handle()", () => {
    * api/runs/[id]/events returns a raw SSE Response — do not copy it.」
    */
   const EXEMPT = ["src/app/api/runs/[id]/events/route.ts"];
-  const METHOD_NAME_RE = /^(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)$/;
-  // Next 认的是**对外**的导出名，三种写法都要认：函数声明、`export const GET = …`、
-  // `export { post as POST }`（后者要回去找 post 的声明）。
-  const EXPORTED_DECL_RE =
-    /^export\s+(?:(?:async\s+)?function|const|let|var)\s+([A-Za-z_$][\w$]*)/gm;
+  const METHODS = "GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS";
+  const FUNCTION_METHOD_RE = new RegExp(
+    String.raw`^export\s+(?:async\s+)?function\s+(${METHODS})\b`,
+    "gm",
+  );
+  const VAR_EXPORT_RE = /^export\s+(?:const|let|var)\b/gm;
   const EXPORT_CLAUSE_RE = /^export\s*\{([^}]*)\}/gm;
+  const STAR_EXPORT_RE = /^export\s*\*/gm;
   const LEADING_TRIVIA_RE = /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
 
-  /** 对外方法名 → 声明它的本地名 */
-  const exportedMethods = (content: string): Map<string, string> => {
-    const out = new Map<string, string>();
-    for (const match of content.matchAll(EXPORTED_DECL_RE))
-      if (METHOD_NAME_RE.test(match[1])) out.set(match[1], match[1]);
-    for (const clause of content.matchAll(EXPORT_CLAUSE_RE))
-      for (const spec of clause[1].split(",")) {
-        const parts = spec.split(/\bas\b/).map((part) => part.trim());
-        const local = parts[0];
-        const exported = parts.length > 1 ? parts[parts.length - 1] : local;
-        if (local && exported && METHOD_NAME_RE.test(exported)) out.set(exported, local);
-      }
-    return out;
+  /** 本条语句的结尾：括号全配平后的第一个 `;`。多声明符的 `const a = 1, POST = …` 要整条一起看 */
+  const statementEnd = (content: string, from: number): number => {
+    let depth = 0;
+    for (let i = from; i < content.length; i += 1) {
+      const ch = content[i];
+      if (ch === "(" || ch === "[" || ch === "{") depth += 1;
+      else if (ch === ")" || ch === "]" || ch === "}") depth -= 1;
+      else if (ch === ";" && depth === 0) return i;
+    }
+    return content.length;
   };
 
-  /**
-   * 从声明处扫到函数体开头，返回体内第一段有效代码；箭头的表达式体补一个 return 以便同一条断言。
-   * 扫描**不越过本条语句**：`export const GET = raw;` 这种别名要回去解析 raw，越过分号一路扫到
-   * 下一个方法的 `{`，就会把别人的体当成自己的（Codex 对 #50 的四轮复审）。
-   * 只按圆 / 方括号配平找体外的第一个 `{` 或 `=>`；定位不到就返回 null，断言报「定位不到函数体」
-   * 而不是悄悄放行。
-   */
-  const bodyOf = (content: string, local: string, seen = new Set<string>()): string | null => {
-    if (seen.has(local)) return null; // 别名成环
-    seen.add(local);
-    const decl = new RegExp(
-      String.raw`^(?:export\s+)?(?:(?:async\s+)?function\s+${local}\b|(?:const|let|var)\s+${local}\s*=)`,
-      "m",
-    ).exec(content);
-    if (!decl) return null;
-    const init = decl.index + decl[0].length;
+  /** 函数声明的体内第一段有效代码；定位不到返回 null，断言报错而不是悄悄放行 */
+  const functionBody = (content: string, from: number): string | null => {
     let depth = 0;
-    for (let i = init; i < content.length; i += 1) {
+    for (let i = from; i < content.length; i += 1) {
       const ch = content[i];
       if (ch === "(" || ch === "[") depth += 1;
       else if (ch === ")" || ch === "]") depth -= 1;
-      else if (depth !== 0) continue;
-      else if (ch === "{") return content.slice(i + 1);
-      else if (ch === "=" && content[i + 1] === ">") {
-        const rest = content.slice(i + 2).replace(LEADING_TRIVIA_RE, "");
-        return rest.startsWith("{") ? rest.slice(1) : `return ${rest}`;
-      } else if (ch === ";" || ch === "\n") {
-        // 到这里还没见到函数字面量：整段初始化只是一个名字就是别名，回去解析它
-        const alias = content.slice(init, i).trim();
-        if (/^[A-Za-z_$][\w$]*$/.test(alias)) return bodyOf(content, alias, seen);
-        // 分号结束了却既不是函数字面量也不是别名；换行则可能只是初始化还没写完，继续扫
-        if (ch === ";") return null;
-      }
+      else if (depth === 0 && ch === "{")
+        return content.slice(i + 1).replace(LEADING_TRIVIA_RE, "");
     }
     return null;
   };
@@ -125,19 +100,32 @@ describe("AGENTS.md · Conventions · handle()", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));
     const found = violations(files, (content) => {
       const out: string[] = [];
-      const methods = exportedMethods(content);
-      if (methods.size === 0) out.push("没有导出任何 HTTP 方法");
-      // 逐个方法看体的**第一句**，不是全文件数 return handle( 的个数：数个数的话，一个方法里
-      // 「先 return new Response(…) 再 return handle(…)」两条分支能把计数配平（Codex 对 #50 的三轮复审）。
-      for (const [exported, local] of methods) {
-        const body = bodyOf(content, local);
-        if (body === null) {
-          out.push(`${exported} 定位不到函数体（声明写法超出扫描能力）`);
-          continue;
-        }
-        if (!body.replace(LEADING_TRIVIA_RE, "").startsWith("return handle("))
-          out.push(`${exported} 的方法体第一句不是 return handle(`);
+      let methods = 0;
+      for (const match of content.matchAll(FUNCTION_METHOD_RE)) {
+        methods += 1;
+        const body = functionBody(content, match.index + match[0].length);
+        if (body === null) out.push(`${match[1]} 定位不到函数体`);
+        else if (!body.startsWith("return handle("))
+          out.push(`${match[1]} 的方法体第一句不是 return handle(`);
       }
+      // 方法只认「导出的函数声明」这一种写法，别的一律记违规而不是想办法看懂它：文本扫描追不上
+      // TypeScript 的全部合法写法（`export const POST = raw`、`export { post as POST }`、
+      // `export const a = 1, POST = …` 各绕过一次），把面收成仓库今天实际用的那一种，未知写法就朝
+      // 红的一边倒（Codex 对 #50 的五轮复审）。
+      for (const match of content.matchAll(VAR_EXPORT_RE)) {
+        const stmt = content.slice(match.index, statementEnd(content, match.index));
+        for (const decl of stmt.matchAll(new RegExp(String.raw`\b(${METHODS})\s*=`, "g")))
+          out.push(`${decl[1]} 写成了 export const / let / var，只能是导出的函数声明`);
+      }
+      for (const clause of content.matchAll(EXPORT_CLAUSE_RE))
+        for (const spec of clause[1].split(",")) {
+          const parts = spec.split(/\bas\b/).map((part) => part.trim());
+          const exported = parts[parts.length - 1];
+          if (new RegExp(`^(?:${METHODS})$`).test(exported))
+            out.push(`${exported} 走了 export { … } 再导出，只能是导出的函数声明`);
+        }
+      if (STAR_EXPORT_RE.test(content)) out.push("route 里有 export *，可能带出方法");
+      if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
       if (!/import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/.test(content))
         out.push("没有从 @/lib/http 导入 handle");
       return out;
