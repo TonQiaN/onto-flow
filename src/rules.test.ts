@@ -803,6 +803,17 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   });
 
   /**
+   * `](…)` 的括号里可能是「目标」也可能是「目标 + 可选标题」，目标还允许用 `<…>` 裹住以容纳空格。
+   * 只取目标：把「带标题的链接」当成不认识的形状跳过，等于给坏链接留了一条静默通道。
+   */
+  function linkTarget(inside: string): string {
+    const trimmed = inside.trim();
+    const angled = /^<([^>]*)>/.exec(trimmed);
+    const destination = angled ? (angled[1] ?? "") : (trimmed.split(/\s/)[0] ?? "");
+    return destination.split("#")[0] ?? "";
+  }
+
+  /**
    * 记录之间互相引用；一份记录从 proposed/ 搬到 done/ 时，指向它的相对链接必须跟着改，
    * 否则链接静默指向不存在的路径。归档只移动文件、不改链接是这里咬住的那个疏漏。
    */
@@ -811,14 +822,12 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
     for (const state of STATES) {
       const dir = path.join(ROOT_DIR, state);
       for (const name of fs.readdirSync(dir).filter((n) => n.endsWith(".md"))) {
-        for (const match of read(path.join(dir, name)).matchAll(/]\(([^)\s]+)\)/g)) {
-          const link = match[1] ?? "";
-          if (/^[a-z][a-z0-9+.-]*:/i.test(link) || link.startsWith("#") || link.startsWith("//"))
-            continue;
-          const target = link.split("#")[0] ?? "";
+        for (const match of read(path.join(dir, name)).matchAll(/]\(([^)]*)\)/g)) {
+          const target = linkTarget(match[1] ?? "");
           if (!target.endsWith(".md")) continue;
+          if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) continue;
           if (!fs.existsSync(path.resolve(dir, target)))
-            problems.push(`${state}/${name}: 链接「${link}」解析不到文件`);
+            problems.push(`${state}/${name}: 链接「${target}」解析不到文件`);
         }
       }
     }
