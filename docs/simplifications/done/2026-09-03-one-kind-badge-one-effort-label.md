@@ -72,7 +72,7 @@ src/components/canvas/node-model.ts:18  export const EFFORT_LABEL
 
 ## 落地
 
-PR 待开。与 [四段库页原语归位](2026-09-03-library-page-primitives-to-shared.md) 合成同一个 PR 落地——
+[PR #38](https://github.com/TonQiaN/onto-flow/pull/38)。与 [四段库页原语归位](2026-09-03-library-page-primitives-to-shared.md) 合成同一个 PR 落地——
 两条共用新文件 `src/components/library/entity-card.tsx`，提议里就写了「两条合并实施更省事」。
 
 与提议的差异：

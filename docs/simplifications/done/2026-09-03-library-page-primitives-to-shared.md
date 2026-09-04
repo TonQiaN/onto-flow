@@ -76,7 +76,7 @@ page grows its own **tree, toolbar, folder picker, or revision panel**」。四�
 
 ## 落地
 
-PR 待开。与 [Kind / EFFORT_LABEL 各只留一份](2026-09-03-one-kind-badge-one-effort-label.md) 合成同一个 PR
+[PR #38](https://github.com/TonQiaN/onto-flow/pull/38)。与 [Kind / EFFORT_LABEL 各只留一份](2026-09-03-one-kind-badge-one-effort-label.md) 合成同一个 PR
 落地——两条共用 `src/components/library/entity-card.tsx`，提议里就写了「两条一起实施更省事」。
 
 与提议的差异：
