@@ -134,6 +134,13 @@ npx playwright test e2e/tools.spec.ts e2e/skills.spec.ts          ✅ 7 passed
 `npm run knip` 的「Unused exports」从 56 降到 49，本 PR 没有新增任何一条：搬进 `src/lib/` 后只剩
 本模块自己用的三个常量（`SKILL_FILE_PATH_MAX_LENGTH`、保留名清单、`mcp__` 前缀）都改成不导出。
 
+按 Codex 对 #47 的复审补的一条：`src/rules.test.ts` 新增
+「四组规则各自只在它那个 `src/lib` 模块里声明一次」与「两侧消费者都从 `@/lib/<模块>` 取」两条断言——
+「只有一处定义」本身就是可机械核对的约定，按 AGENTS.md「A convention that can be checked mechanically is
+a test, not prose」应当是断言而不是散文；AGENTS.md 的 Checks 那句清单与 REVIEW.md 的三行同改。
+反向验证过：在 `src/components/library/types.ts` 里再写一遍 `export const DEFAULT_PAGE_SIZE = 30;`，
+断言确实红并点名两处。
+
 不碰的四处高代价接缝已核对：`tool-schema.ts` 的 `assertObjectJsonSchema` 调用一行没动，
 `rg '@deepseek-ai' src/lib` 为空（`tool-names.ts` 里只有 `toolCodeProblem` 拿它当**字符串**比对），
 `src/lib/` 也没有 `@/db` / `@/server` 的 import。未跑付费冒烟。
