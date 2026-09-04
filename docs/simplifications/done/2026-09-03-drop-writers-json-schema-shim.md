@@ -62,7 +62,7 @@ compatibility layers」，为「调用方不变」而留的转出层正是这一
 
 ## 落地
 
-PR 待开。
+PR [#39](https://github.com/TonQiaN/onto-flow/pull/39)。
 
 与提议的差异：无。三条全做：删 `src/server/writers/json-schema.ts` 整文件（5 行）、
 `src/server/writers/tool.ts` 的 import 改成 `from "@/server/harness/tool-schema"`（唯一一个生产消费者，
@@ -79,4 +79,12 @@ objectSchemaProblem" src/rules.test.ts` 也无命中——这条约定没有机�
 `proposed/`（`src/lib/json-schema-shape.ts` 尚不存在），所以本条的 import 终点就是提议里写的
 `@/server/harness/tool-schema`；那份将来落地时只改 `tool-schema.ts` 内部，本条的终点不用再动。
 
-验收实际跑了什么：见 PR 描述。
+验收实际跑了什么：
+
+- `npm run check` 全绿（46 个测试文件，387 passed / 1 skipped）。
+- `npx vitest run src/server/writers/tool.test.ts` 23 passed（含 `parameters` / `output` 两处 schema
+  子集拒绝的用例）。
+- `rg -n "writers/json-schema" src` 无结果。
+- `npm run build`：不适用，改动没碰 `src/app/`、`next.config.ts`、`tsconfig.json` 与依赖。
+- e2e：不适用，纯服务端 import 重定向 + 一处文档事实订正，判据与错误文案零变化。
+- 付费冒烟：不适用，`tool-schema.ts` 本身一字未改，不触及会话 / 事件 / 用量 / 取消 / 组合。
