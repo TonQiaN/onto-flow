@@ -84,7 +84,7 @@ finishedAt 无条件改写」。连带：`runner.test.ts:1728` 那条用例的 m
 
 ## 落地
 
-PR 待开（分支 `cleanup/5-settle-round-keeps-exit-name`，[DESIGN-V3 第 5 批](../../DESIGN-V3.md)）。
+PR：https://github.com/TonQiaN/onto-flow/pull/33（分支 `cleanup/5-settle-round-keeps-exit-name`，[DESIGN-V3 第 5 批](../../DESIGN-V3.md)）。
 
 与提议的差异：
 
