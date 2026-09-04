@@ -152,51 +152,53 @@ async function main(): Promise<void> {
       },
     ],
     // 边 id 显式给定：回边判定按 id 排序遍历，固定 id 让判定结果可复现。
+    // 带 graph-smoke- 前缀是因为 workflow_edges.id 是全表主键：裸 e1…e7 会与本机上
+    // 任何一张同样用短 id 的图撞主键，冒烟还没开始就先失败。
     edges: [
       {
-        id: "e1",
+        id: "graph-smoke-e1",
         sourceNodeId: N_IN,
         sourcePort: "value",
         targetNodeId: N_DRAFT,
         targetPort: "需求",
       },
       {
-        id: "e2",
+        id: "graph-smoke-e2",
         sourceNodeId: N_DRAFT,
         sourcePort: "草稿",
         targetNodeId: N_CRITIC_A,
         targetPort: "草稿",
       },
       {
-        id: "e3",
+        id: "graph-smoke-e3",
         sourceNodeId: N_DRAFT,
         sourcePort: "草稿",
         targetNodeId: N_CRITIC_B,
         targetPort: "草稿",
       },
       {
-        id: "e4",
+        id: "graph-smoke-e4",
         sourceNodeId: N_CRITIC_A,
         sourcePort: "评语",
         targetNodeId: N_JUDGE,
         targetPort: "评语",
       },
       {
-        id: "e5",
+        id: "graph-smoke-e5",
         sourceNodeId: N_CRITIC_B,
         sourcePort: "评语",
         targetNodeId: N_JUDGE,
         targetPort: "评语",
       },
       {
-        id: "e6",
+        id: "graph-smoke-e6",
         sourceNodeId: N_JUDGE,
         sourcePort: "意见",
         targetNodeId: N_DRAFT,
         targetPort: "意见",
       },
       {
-        id: "e7",
+        id: "graph-smoke-e7",
         sourceNodeId: N_JUDGE,
         sourcePort: "裁决书",
         targetNodeId: N_OUT,

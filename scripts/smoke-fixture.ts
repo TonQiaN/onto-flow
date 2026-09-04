@@ -35,6 +35,7 @@ import {
   workflows,
 } from "../src/db";
 import { DATA_DIR } from "../src/server/fs-safety";
+import { materializeSkill, skillSlug, SKILL_LIBRARY_DIR } from "../src/server/skill-library";
 import {
   createAction,
   loadActionDto,
@@ -42,7 +43,13 @@ import {
   type ActionPayload,
   type PortPayload,
 } from "../src/server/writers/action";
-import { createSkill, loadSkillDto, writeSkill, type SkillDto } from "../src/server/writers/skill";
+import {
+  createSkill,
+  loadSkillDto,
+  loadSkillFiles,
+  writeSkill,
+  type SkillDto,
+} from "../src/server/writers/skill";
 import { createTool, writeTool, type ToolPayload, type ToolRow } from "../src/server/writers/tool";
 import {
   createObjectType,
@@ -243,6 +250,13 @@ export function upsertSkill(input: SkillFixture): SkillDto {
   };
   if (!sameDefinition(current, { ...input, files: [] }) || !hasRevision("skill", existing.id)) {
     return unwrap(writeSkill(existing.id, desired));
+  }
+  // 定义没变也要确认磁盘投影还在：受理时读的是 data/skills/<slug>，而冒烟脚本不经 Next 的
+  // 启动重建钩子（src/instrumentation.ts），投影被删过就再也补不回来。补的是目录，不是修订。
+  const projected = path.join(SKILL_LIBRARY_DIR, skillSlug(dto), "SKILL.md");
+  if (!fs.existsSync(projected)) {
+    materializeSkill(dto, loadSkillFiles(dto.id));
+    console.log(`技能投影缺失，已按库里的定义重建：${projected}`);
   }
   return dto;
 }

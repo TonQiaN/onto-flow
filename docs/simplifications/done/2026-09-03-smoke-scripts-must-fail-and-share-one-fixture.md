@@ -175,3 +175,17 @@ e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。
    落一条 idle，两者与模型措辞无关；`reasoning` / `text` 看模型当轮心情，刻意不要求。
    重跑：engine 退出 0（`事件 17 条：reasoning×3 tool×12 session.idle×2`）、graph 退出 0
    （`事件 197 条：… tool×146 session.idle×8`）。
+
+**Codex 五轮复审的两条（都成立，已改并重跑）**
+
+6. **图冒烟的裸边 id `e1`…`e7` 会撞主键**：`workflow_edges.id` 是全表主键，本机上任何一张同样用
+   短 id 的图都会让 `writeWorkflow` 插入失败，冒烟还没开始就先红。改成 `graph-smoke-e1`…`e7`，
+   相对顺序不变，回边判定的可复现性照旧（这批边 id 是改造前就有的老写法，其余三个脚本本来就带前缀）。
+7. **投影自愈**：`upsertSkill` 的 no-op 分支跳过 `materializeSkill`，而冒烟脚本不经
+   `src/instrumentation.ts` 的启动重建钩子——投影被删过就再也补不回来，受理时要么拒绝要么读到旧版本。
+   no-op 分支现在检查 `data/skills/<slug>/SKILL.md` 是否还在，缺了就按库里的定义重建（补目录，不记修订）。
+   实测：手工 `rm -rf data/skills/<slug>` 后跑能力冒烟，打印「技能投影缺失，已按库里的定义重建」，
+   退出码 0。
+
+**最终一轮付费复跑（全部按最终代码）**：`smoke-harness` 0、`smoke-engine` 0、`smoke-graph` 0、
+`smoke-capabilities` 0、`smoke-parallel 2` 0；两次人为失败仍是 1。全程真实模型花销合计 CNY 0.9545。
