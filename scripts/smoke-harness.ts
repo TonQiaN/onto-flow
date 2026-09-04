@@ -51,7 +51,9 @@ async function main(): Promise<void> {
     required: ["artifact", "line_count"],
   };
 
-  let disposal: { code: number | null; expected: boolean } | undefined;
+  let disposal:
+    | { code: number | null; signal: NodeJS.Signals | null; expected: boolean }
+    | undefined;
   try {
     await proc.runTurn(
       "node-1",
@@ -88,9 +90,10 @@ async function main(): Promise<void> {
     assertSmoke(proc.eventCountOf("node-1") > 0, "会话一条事件都没有，事件通道没有打通");
   } finally {
     const exit = await proc.dispose();
-    disposal = { code: exit.code, expected: exit.expected };
+    disposal = { code: exit.code, signal: exit.signal, expected: exit.expected };
     console.log(
-      `[${el()}] 子进程收束：code=${String(exit.code)} expected=${String(exit.expected)}`,
+      `[${el()}] 子进程收束：code=${String(exit.code)} signal=${String(exit.signal)}` +
+        ` expected=${String(exit.expected)}`,
     );
     if (keep) {
       console.log(`[${el()}] 运行目录保留：${ws.runDir}`);
@@ -100,7 +103,13 @@ async function main(): Promise<void> {
     }
   }
   // 收束判定放在 finally 之外：在 finally 里抛会顶掉 try 里真正的首个错误。
-  assertSmoke(disposal?.expected === true, `子进程不是预期收束：code=${String(disposal?.code)}`);
+  // 只看 expected 不够：它只说明退出发生在 dispose 请求之后，shutdown 挂死后被
+  // SIGTERM / SIGKILL 打掉的子进程同样是 expected。干净收束要求 code 0 且没有信号。
+  assertSmoke(
+    disposal?.expected === true && disposal.code === 0 && disposal.signal === null,
+    `子进程不是干净收束：code=${String(disposal?.code)} signal=${String(disposal?.signal)}` +
+      ` expected=${String(disposal?.expected)}`,
+  );
   console.log(`[${el()}] harness 冒烟通过。`);
 }
 

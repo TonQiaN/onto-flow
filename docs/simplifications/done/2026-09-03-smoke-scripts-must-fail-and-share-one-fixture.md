@@ -149,3 +149,10 @@ e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。
 2. **Skill / Tool 的写是无条件的**，与夹具自己立的「定义没变就不写」纪律相悖，每跑一次就多两版
    相同修订并重新物化技能。改成 `upsertSkill` / `upsertTool` 进夹具，与其余三个 upsert 同一套
    比对。重跑一次能力冒烟核对：`revisions` 里 skill / tool 各仍为 1 行，退出码 0。
+
+**Codex 二轮复审的一条（成立，已改并重跑）**
+
+3. **`exit.expected` 证明不了「干净收束」**：`RunProcess.#performDispose()` 一进门就把
+   `#disposeRequested` 置真，所以 shutdown 挂死之后被 SIGTERM / SIGKILL 打掉的子进程同样是
+   `expected: true`。`smoke-harness` 的收束断言改成 `expected && code === 0 && signal === null`，
+   打印也带上 signal。重跑：`code=0 signal=null expected=true`，退出码 0。
