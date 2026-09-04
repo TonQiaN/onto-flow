@@ -61,7 +61,10 @@ describe("AGENTS.md · Conventions · handle()", () => {
    * api/runs/[id]/events returns a raw SSE Response — do not copy it.」
    */
   const EXEMPT = ["src/app/api/runs/[id]/events/route.ts"];
-  const METHOD_RE = /^export (?:async )?function (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/gm;
+  // 函数声明与 `export const GET = …` 都要数：只认函数声明的话，同一文件里一个走 handle() 的
+  // 函数声明就能把计数配平，旁边那个箭头函数导出的方法整条断言都看不见（Codex 对 #50 的复审）。
+  const METHOD_RE =
+    /^export (?:(?:async )?function|const|let|var) (?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/gm;
 
   it("唯一例外之外的每个 route，每个导出方法体都以 return handle( 起头并从 @/lib/http 导入 handle", () => {
     const files = apiRoutes.filter((file) => !EXEMPT.includes(rel(file)));

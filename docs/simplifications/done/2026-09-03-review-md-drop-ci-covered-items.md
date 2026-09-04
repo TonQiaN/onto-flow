@@ -92,6 +92,14 @@ REVIEW.md 与 AGENTS.md 的两处声明必须同一个 commit 改。
 记录里说**不删**的三条（信封、模块级 `const map = new Map()`、`@deepseek-ai` 传递依赖钉版）
 逐条复核后原样保留。
 
+还有一处是撤这 6 条的**前提补齐**：Codex 对 #50 的复审指出，`handle()` 那条其实没被完全覆盖——
+`METHOD_RE` 只认 `export function GET` 这种函数声明，一个 `export const POST = async … =>` 绕过
+它不算方法，同一文件里另有一个走 `handle()` 的函数声明就把两边计数配平了，断言看不见。撤掉人工
+那条之前必须先把测试补齐，否则「完全依赖 CI」这个前提不成立。已把 `METHOD_RE` 扩到
+`function` / `const` / `let` / `var` 四种导出形式，并反向验证过（临时给一个 route 加一行
+`export const POST = async () => …`，断言如期变红「导出 2 个方法，只有 1 处 return handle(」）。
+今天仓库里没有 const 形式的方法导出，所以这次扩容不改变任何现有 route 的判定。
+
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
 
 | REVIEW.md 原行 | 条目 | 覆盖它的断言 |
