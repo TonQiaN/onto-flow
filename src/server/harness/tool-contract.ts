@@ -60,7 +60,14 @@ export interface ToolContext {
   run(command: string, options?: ToolRunOptions): Promise<ToolRunResult>;
 }
 
-/** execute 模块的默认导出形状。 */
+/**
+ * execute 模块的默认导出形状。
+ *
+ * @public 仓库内没有引用点：作者的 execute 模块是库里的一行 `code`，不是本仓的 TypeScript，
+ * 所以这个类型的消费者在数据库里而不在源码里。ADR-0017 把它连同 `ToolContext` 一族定为 Tool
+ * 作者看到的稳定公开面——有主人的公开面不是死代码，上面这个标记是 `knip.json` 的 tags 配置
+ * 认的豁免，归零靠它而不是靠删字段。
+ */
 export type ToolExecute = (args: unknown, ctx: ToolContext) => Promise<unknown>;
 
 /** 库里一个 Tool 的契约字段：与 tools 表一一对应，摘要与包装都只看这些。 */

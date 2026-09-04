@@ -6,7 +6,8 @@
 
 ## 0. 门槛先看（PR 描述「跑了哪些命令」一节）
 
-- [ ] 写明跑过 `npm run check`（typecheck + lint + fmt:check + vitest）。仓库没有 CI 之外的任何钩子，命令就是全部门槛（Checks）
+- [ ] 写明跑过 `npm run check`（typecheck + lint + fmt:check + knip + vitest）。仓库没有 CI 之外的任何钩子，命令就是全部门槛（Checks）
+- [ ] `npm run knip` 是门禁（在 `check` 里，CI 同步跑）：输出必须为空。新增的豁免只有两种合法形状——`knip.json` 里带理由的条目，或给「有主人但仓库内没有引用点的公开面」打 `@public` 标记；两者都要问「这是公开面还是没人用的死代码」，能删就删而不是豁免（Checks）
 - [ ] 关掉一条 lint 规则只在 `.oxlintrc.json` 里带理由地关，行内 `oxlint-disable-next-line` 必须带 `-- 理由`；没有整文件关闭（Checks / ADR-0019）
 - [ ] diff 触及 `src/app/`、`next.config.ts` 或 `tsconfig.json` → 写明跑过 `npm run build`；`build` 抓得到 `typecheck` 抓不到的路由与配置破损（Checks）
 - [ ] 用户可见的改动 → 跑了**对应的那一个** e2e spec 并写明是哪个，不是「跑了全套」也不是没跑（Checks）

@@ -30,17 +30,6 @@ import type {
 import { DATA_DIR, resolveWithinData } from "@/server/fs-safety";
 import { RUN_SESSIONS_SUBDIR } from "./workspace";
 
-// 展示 DTO 的形状归 @/lib/trajectory-view（运行页抽屉手抄不出第二份）；
-// 这里连带导出，投影实现与它的调用方仍只认这一个模块。
-export type {
-  AgentTrajectoryResponse,
-  TrajectoryDetail,
-  TrajectoryRecord,
-  TrajectorySession,
-  TrajectorySessionStatus,
-  TrajectoryUsage,
-};
-
 export interface ReadAgentTrajectoryOptions {
   /** runs.run_dir 原值；它相对仓库根，而不是相对 DATA_DIR。 */
   runDir: string | null;

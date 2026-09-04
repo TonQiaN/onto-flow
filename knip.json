@@ -8,5 +8,7 @@
   ],
   "project": ["src/**/*.{ts,tsx,css}", "scripts/**/*.ts", "e2e/**/*.ts"],
   "ignoreDependencies": ["@deepseek-ai/*"],
-  "ignoreBinaries": ["mkfifo", "pdfinfo"]
+  "ignoreBinaries": ["mkfifo", "pdfinfo"],
+  "ignoreExportsUsedInFile": true,
+  "tags": ["-@public"]
 }
