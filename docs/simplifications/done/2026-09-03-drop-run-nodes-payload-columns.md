@@ -98,7 +98,7 @@ insert 要同步改。
 
 ## 落地
 
-PR 待开。
+PR [#52](https://github.com/TonQiaN/onto-flow/pull/52)。
 
 与提议的差异：多了三处记录没点名的读者，其中一处是**记录之外揭出来的既有 bug**。
 
