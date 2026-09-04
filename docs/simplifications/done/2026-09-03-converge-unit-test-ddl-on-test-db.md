@@ -104,7 +104,7 @@ database onto `globalThis.ontoflowDb` and creates every directory it needs itsel
 
 ## 落地
 
-PR [#42](https://github.com/TonQiaN/onto-flow/pull/42)，已合并进 main。
+PR [#42](https://github.com/TonQiaN/onto-flow/pull/42)。
 
 与提议的差异：无（用户已逐条拍板采纳）。两处提议里没写到、实施时才发现必须做的补齐：
 
