@@ -1,6 +1,6 @@
 # 简化：删掉 writers/json-schema.ts 这层纯转出垫片
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -36,7 +36,7 @@ compatibility layers」，为「调用方不变」而留的转出层正是这一
 - `AGENTS.md:169` 的「in `src/server/writers/json-schema.ts`」改成 `src/server/harness/tool-schema.ts`，
   保留它旁边那句「(mirrored client-side in `src/app/tools/tool-form.ts`)」。
 - `rg -n "json-schema" .github/REVIEW.md` 若有命中同改。
-- **与 [把纯常量与纯校验搬进 src/lib/](2026-09-03-share-pure-validators-in-lib.md) 的关系**：那份提议把
+- **与 [把纯常量与纯校验搬进 src/lib/](../proposed/2026-09-03-share-pure-validators-in-lib.md) 的关系**：那份提议把
   `objectSchemaProblem` 的**形状半边**搬进 `src/lib/json-schema-shape.ts`，由 `harness/tool-schema.ts`
   调它再加上游 `assertObjectJsonSchema`。两份都落地时，本条的 import 终点是
   `@/server/harness/tool-schema`（writer 侧仍要上游断言那半边），`AGENTS.md:169` 的点名一次改到位；
@@ -59,3 +59,34 @@ compatibility layers」，为「调用方不变」而留的转出层正是这一
 极低。唯一的公开面变化是 writer 侧多一次跨目录 import，`npm run check` 是完整的门。
 
 预估净删 5 行（整文件）+ 1 行 import 改写 + 1 处 AGENTS.md 事实订正；风险等级：低。
+
+## 落地
+
+PR [#39](https://github.com/TonQiaN/onto-flow/pull/39)。
+
+与提议的差异：无。三条全做：删 `src/server/writers/json-schema.ts` 整文件（5 行）、
+`src/server/writers/tool.ts` 的 import 改成 `from "@/server/harness/tool-schema"`（唯一一个生产消费者，
+`rg -n 'writers/json-schema|from "\./json-schema"' src scripts e2e` 改前只有它一行）、`AGENTS.md` 那句
+点名的文件从 `src/server/writers/json-schema.ts` 订正为 `src/server/harness/tool-schema.ts`，旁边
+「(mirrored client-side in `src/app/tools/tool-form.ts`)」原样保留。
+
+`rg -n "json-schema" .github/REVIEW.md` 无命中，无需同改：REVIEW.md 第 6 节那条只点 `objectSchemaProblem`
+这个名字与客户端 `tool-form.ts`，不点服务端文件路径，订正后依然说得对。`rg -n "json-schema|tool-schema|
+objectSchemaProblem" src/rules.test.ts` 也无命中——这条约定没有机械断言，本来就只靠 AGENTS.md 那句话，
+而那句话在订正前是错的。
+
+与 [把纯常量与纯校验搬进 src/lib/](../proposed/2026-09-03-share-pure-validators-in-lib.md) 的先后：落地时那份还在
+`proposed/`（`src/lib/json-schema-shape.ts` 尚不存在），所以本条的 import 终点就是提议里写的
+`@/server/harness/tool-schema`；那份将来落地时只改 `tool-schema.ts` 内部，本条的终点不用再动。
+两份记录的互链按目录写全（本文写 `../proposed/…`，那份写 `../done/…`）；那份记录移进 `done/` 时，
+它那条互链要跟着改回同目录的裸文件名。
+
+验收实际跑了什么：
+
+- `npm run check` 全绿（46 个测试文件，387 passed / 1 skipped）。
+- `npx vitest run src/server/writers/tool.test.ts` 23 passed（含 `parameters` / `output` 两处 schema
+  子集拒绝的用例）。
+- `rg -n "writers/json-schema" src` 无结果。
+- `npm run build`：不适用，改动没碰 `src/app/`、`next.config.ts`、`tsconfig.json` 与依赖。
+- e2e：不适用，纯服务端 import 重定向 + 一处文档事实订正，判据与错误文案零变化。
+- 付费冒烟：不适用，`tool-schema.ts` 本身一字未改，不触及会话 / 事件 / 用量 / 取消 / 组合。
