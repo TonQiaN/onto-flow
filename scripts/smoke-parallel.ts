@@ -15,6 +15,7 @@ import { cancelRun, isRunExecutionActive, startRun } from "../src/server/engine/
 import { abortRunBatch, admitWholeBatch } from "./batch-runs";
 import { checkParallelMarker } from "./parallel-marker";
 import {
+  assertEvents,
   assertSmoke,
   awaitTerminals,
   requireCredential,
@@ -170,6 +171,9 @@ async function main(): Promise<void> {
     );
     if (row.status !== "success") failed += 1;
   });
+
+  // 事件也要逐个运行查：并发写 run_events 失败时用量与产物都还在，只有事件没了。
+  for (const row of rows) assertEvents(row.id);
 
   // 并行是这个冒烟唯一验的东西：全部成功但被引擎串行跑掉，同样不算通过。判据是「最晚开始的
   // Action 早于最早结束的 Action」——每个 Action 都是一个真在飞的 harness 子进程，一次运行要

@@ -316,6 +316,23 @@ export function upsertWorkflow(input: WorkflowFixture): WorkflowRow {
   };
   let wf = db.select().from(workflows).where(eq(workflows.name, input.name)).get();
   if (!wf) {
+    // 按名字找不到就按节点 id 认领：`workflow_nodes.id` 是全表主键，冒烟的节点 id 是固定值，
+    // 工作流一旦在网页上被改名，「按名字新建一份」就会拿这些 id 撞主键，冒烟还没花钱就先红。
+    // 认领回来之后名字由下面的整体替换改回去（Codex 对本 PR 的十一轮复审）。
+    const anchor = input.nodes[0];
+    const owner = anchor
+      ? db
+          .select({ workflowId: workflowNodes.workflowId })
+          .from(workflowNodes)
+          .where(eq(workflowNodes.id, anchor.id))
+          .get()
+      : undefined;
+    if (owner) {
+      wf = db.select().from(workflows).where(eq(workflows.id, owner.workflowId)).get();
+      if (wf) console.log(`按节点 id 认领了改过名的工作流：「${wf.name}」→「${input.name}」`);
+    }
+  }
+  if (!wf) {
     wf = unwrap(
       createWorkflow({
         name: input.name,
