@@ -5,6 +5,7 @@
  * 内置类型不可改（列表页不给编辑入口），此处只处理自定义类型。
  */
 import { useCallback, useState } from "react";
+import type { PortKind } from "@/components/canvas/node-model";
 import {
   FolderPicker,
   type FolderRef,
@@ -14,33 +15,15 @@ import {
   RevisionPanel,
 } from "@/components/library";
 
-export type Kind = "text" | "file" | "json";
-
 export interface ObjectTypeRow {
   id: string;
   name: string;
-  kind: Kind;
+  kind: PortKind;
   description: string;
   jsonSchema: string | null;
   builtin: boolean;
   createdAt: string;
   updatedAt: string;
-}
-
-export const KIND_STYLE: Record<Kind, string> = {
-  text: "border-sky-200 bg-sky-50 text-sky-700",
-  file: "border-amber-200 bg-amber-50 text-amber-700",
-  json: "border-violet-200 bg-violet-50 text-violet-700",
-};
-
-export function KindBadge({ kind }: { kind: Kind }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-xs ${KIND_STYLE[kind]}`}
-    >
-      {kind}
-    </span>
-  );
 }
 
 type TabKey = "basic" | "refs" | "revisions";
@@ -67,7 +50,7 @@ export function ObjectTypeEditor({
 }) {
   const [tab, setTab] = useState<TabKey>("basic");
   const [name, setName] = useState(initial?.name ?? "");
-  const [kind, setKind] = useState<Kind>(initial?.kind ?? "text");
+  const [kind, setKind] = useState<PortKind>(initial?.kind ?? "text");
   const [description, setDescription] = useState(initial?.description ?? "");
   const [jsonSchema, setJsonSchema] = useState(initial?.jsonSchema ?? "");
   const [folder, setFolder] = useState<FolderRef | null>(initialFolder);
@@ -196,7 +179,7 @@ export function ObjectTypeEditor({
                 <span className="mb-1 block text-sm font-medium text-zinc-700">基础形态</span>
                 <select
                   value={kind}
-                  onChange={(e) => setKind(e.target.value as Kind)}
+                  onChange={(e) => setKind(e.target.value as PortKind)}
                   className="w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm focus:border-zinc-500 focus:outline-none"
                 >
                   <option value="text">text（文本）</option>

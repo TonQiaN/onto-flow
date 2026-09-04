@@ -20,9 +20,11 @@
  * 会按子集关系拒绝越界项。预载的正文整段进入会话首条消息，token 估算摆在开关旁边。
  */
 import { useCallback, useState } from "react";
+import type { PortKind, ReasoningEffort } from "@/components/canvas/node-model";
 import {
   FolderPicker,
   type FolderRef,
+  KindBadge,
   notifyFoldersChanged,
   readError,
   ReferencesPanel,
@@ -32,11 +34,8 @@ import { MAX_REENTRIES } from "@/lib/graph";
 import { estimateTokens } from "@/lib/workflow-settings";
 import {
   type ActionDto,
-  type Kind,
-  KindBadge,
   type ModelRow,
   type ObjectTypeRow,
-  type ReasoningEffort,
   type SkillRow,
   type ToolRow,
 } from "./shared";
@@ -922,7 +921,7 @@ function PortListEditor({
         <div className="space-y-2">
           {ports.map((p) => {
             const selected = typeById.get(p.objectTypeId);
-            const kind: Kind | null = selected ? selected.kind : null;
+            const kind: PortKind | null = selected ? selected.kind : null;
             return (
               <div key={p.key} className="space-y-1.5">
                 <div className="flex items-center gap-2">

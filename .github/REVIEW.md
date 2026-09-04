@@ -50,7 +50,7 @@
 - [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`（没有第二处写死 30 / 100）；其它 GET 各自定形
 - [ ] 改了 `/api/runs` 的筛选或汇总 → `summary` 仍按同一组筛选**不分页**算：`runs` 是 distinct 的运行数（零用量的运行也算），token / 费用与每行同源、从按 `run_id` 预聚合的 `run_nodes` 子查询 **left join** 求和（权威汇总，`node_usage` 缺一条明细时不掉账），只有 `byModel` 走 `node_usage`；没有退化成内连接把无用量的运行挤掉；数组消费者一个不剩地改读 `items`（`rg -n '"/api/runs' src e2e scripts`）
 - [ ] 受理来源仍是 `imports.invocation.source` 的**读时投影**：`/api/runs` 用 `json_extract` 推导 `items[].source` 与 `source=` 筛选（无 invocation 的行 coalesce 成 `workflow`），没有为它新增列、没有回填历史行、没有第二份表示（The five library list GETs and `/api/runs`…）
-- [ ] 五个库页复用 `src/components/library/`，没有长出自己的树、工具栏、文件夹选择器或修订面板；筛选状态在 URL（`use-library-query`）不在组件 state
+- [ ] 五个库页复用 `src/components/library/`，没有长出自己的列表 / 文件夹 / 引用 / 修订 UI——按面而不是按四个组件名核对（曾有四份逐字相同的文件夹徽章与 409 文案从枚举的缝里过了评审）；筛选状态在 URL（`use-library-query`）不在组件 state
 - [ ] 不可信路径过 `@/server/fs-safety`：请求边界 `isWithinData`，使用处 `resolveWithinData` / `safeBasename`
 
 ## 5. 进程级状态与运行隔离（Conventions / The harness seam）

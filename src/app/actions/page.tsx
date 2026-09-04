@@ -6,27 +6,29 @@
  * 编辑器需要的对象类型 / Skill / Tool 全量清单按页翻完（信封 pageSize 上限 100）。
  */
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { EFFORT_LABEL } from "@/components/canvas/node-model";
 import {
   DEFAULT_PAGE_SIZE,
   DND_ENTITY_MIME,
+  FolderBadge,
   type FolderDto,
-  type FolderRef,
+  folderRefFrom,
   FOLDERS_CHANGED_EVENT,
   FolderTree,
   formatTime,
+  formatUsedBy,
+  KIND_STYLE,
   LibraryLayout,
   LibraryToolbar,
   type ListEnvelope,
   readError,
+  RefCount,
   useLibraryQuery,
   type WithLibraryMeta,
 } from "@/components/library";
 import { ActionEditor } from "./action-editor";
 import {
   type ActionDto,
-  EFFORT_LABEL,
-  formatUsedBy,
-  KIND_STYLE,
   type ModelRow,
   type ObjectTypeRow,
   type SkillRow,
@@ -48,23 +50,6 @@ async function fetchAllItems<T>(path: string): Promise<T[]> {
     if (envelope.items.length === 0 || out.length >= envelope.total) break;
   }
   return out;
-}
-
-/** 从扁平文件夹清单还原带完整路径的 FolderRef（新建默认归属用）；拿不到时返回 null */
-function folderRefFrom(folders: FolderDto[], id: string | null): FolderRef | null {
-  if (!id) return null;
-  const byId = new Map(folders.map((f) => [f.id, f]));
-  const target = byId.get(id);
-  if (!target) return null;
-  const names: string[] = [];
-  for (
-    let cur: FolderDto | undefined = target;
-    cur;
-    cur = cur.parentId ? byId.get(cur.parentId) : undefined
-  ) {
-    names.unshift(cur.name);
-  }
-  return { id: target.id, name: target.name, path: names.join("/") };
 }
 
 export default function ActionsPage() {
@@ -423,45 +408,5 @@ function ActionsLibrary() {
         />
       )}
     </>
-  );
-}
-
-/** 文件夹徽章，点击即进入该文件夹（列表改按其子树过滤）；未归类不显示 */
-function FolderBadge({
-  folder,
-  onEnter,
-}: {
-  folder: FolderRef | null;
-  onEnter: (id: string) => void;
-}) {
-  if (!folder) return null;
-  return (
-    <button
-      type="button"
-      title={`进入文件夹「${folder.path}」`}
-      onClick={() => onEnter(folder.id)}
-      className="inline-flex items-center gap-1 rounded-full border border-zinc-200 px-2 py-0.5 text-[11px] text-zinc-600 hover:border-zinc-400 hover:text-zinc-900"
-    >
-      <svg
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        className="h-3 w-3 shrink-0 text-zinc-400"
-        aria-hidden
-      >
-        <path d="M1.75 4.25c0-.83.67-1.5 1.5-1.5h2.9c.4 0 .78.16 1.06.44l.86.86h4.68c.83 0 1.5.67 1.5 1.5v6.2c0 .83-.67 1.5-1.5 1.5H3.25c-.83 0-1.5-.67-1.5-1.5v-7.5Z" />
-      </svg>
-      {folder.path}
-    </button>
-  );
-}
-
-/** 引用计数：0 时弱化显示 */
-function RefCount({ count }: { count: number }) {
-  return count > 0 ? (
-    <span className="text-zinc-500">{count} 处引用</span>
-  ) : (
-    <span className="text-zinc-300">未被引用</span>
   );
 }
