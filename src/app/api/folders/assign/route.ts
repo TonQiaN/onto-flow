@@ -1,6 +1,6 @@
-import { NextResponse } from "next/server";
 import { handle, jsonError } from "@/lib/http";
 import { assignEntityFolder, isFolderEntityKind } from "@/server/folders";
+import { respond } from "@/server/writers/types";
 
 export const dynamic = "force-dynamic";
 
@@ -22,8 +22,6 @@ export async function POST(request: Request) {
     if (body.folderId !== null && typeof body.folderId !== "string")
       return jsonError(400, "folderId 必须是字符串或 null");
 
-    const result = assignEntityFolder(body.entityKind, body.entityId, body.folderId);
-    if (!result.ok) return jsonError(result.status, result.error);
-    return NextResponse.json(result.data);
+    return respond(assignEntityFolder(body.entityKind, body.entityId, body.folderId));
   });
 }

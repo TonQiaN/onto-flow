@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { handle, jsonError } from "@/lib/http";
 import { getRevision, patchRevision } from "@/server/revisions";
+import { respond } from "@/server/writers/types";
 
 export const dynamic = "force-dynamic";
 
@@ -24,11 +25,11 @@ export async function PATCH(request: Request, { params }: Params) {
     if (typeof raw !== "object" || raw === null || Array.isArray(raw))
       return jsonError(400, "请求体必须是 JSON 对象");
     const body = raw as Record<string, unknown>;
-    const result = patchRevision(revId, {
-      pinned: body.pinned,
-      note: body.note,
-    });
-    if (!result.ok) return jsonError(result.status, result.error);
-    return NextResponse.json(result.data);
+    return respond(
+      patchRevision(revId, {
+        pinned: body.pinned,
+        note: body.note,
+      }),
+    );
   });
 }
