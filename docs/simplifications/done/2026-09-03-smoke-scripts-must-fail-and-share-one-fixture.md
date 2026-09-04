@@ -274,4 +274,12 @@ e2e：不适用（只改 `scripts/` 与三份文档，不碰 `src/`）。
     文件名必须恰是 `critic-a.md` 与 `critic-b.md` 各一份。
     重跑：engine 0、parallel 2 → 0、graph 0。
 
-**全部付费花销合计 CNY 1.9350**（含十四轮复审期间的反复重跑与两次人为失败演练）。
+**合并 main 时的一处适配**（#52「删掉 run_nodes 的 inputs / outputs / snapshot 三列」先合了）：
+`printNodes` 与 `assertDeclaredArtifacts` 原来读 `run_nodes.outputs`，那三列已经不在——改读
+`readLatestSuccessfulOutputs(runId, nodeId)`（`src/server/run-rounds.ts`，#52 为同一目的引入的
+读法），产物路径仍是「那一轮真实生效的」。`AGENTS.md` 的冲突两边意图各取：main 那两句（REVIEW.md
+的定位、`rules.test.ts` 的清单）照收，`smoke.yml` 那句保留本 PR 加的「失败即非零退出，红步骤就是结论」。
+合并后 `npm run check`（46 文件 391 通过 1 跳过）、`npm run build` 全绿，并在工作树自己的 data/ 上
+重跑 `npx tsx scripts/smoke-engine.ts` **退出码 0**（新读法下产物、事件、断言都对）。
+
+**全部付费花销合计约 CNY 2.0**（十四轮复审期间的反复重跑、两次人为失败演练、清库后的整轮复跑都算在内）。
