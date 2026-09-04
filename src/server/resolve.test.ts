@@ -1,98 +1,36 @@
 /** 工作流解析必须一次冻结图、Action 与三层能力；付费受理后不再被共享库改写换版。 */
-import Database from "better-sqlite3";
-import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import * as schema from "../db/schema";
+import { createTestDb, resetTestDb } from "./writers/test-db";
 
-const sqlite = new Database(":memory:");
-sqlite.exec(`
-CREATE TABLE workflows (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
-  instructions TEXT NOT NULL DEFAULT '', settings TEXT NOT NULL DEFAULT '{"toggles":{},"mcpServers":[]}',
-  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-);
-CREATE TABLE workflow_nodes (
-  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, kind TEXT NOT NULL,
-  action_id TEXT, object_type_id TEXT, label TEXT NOT NULL, x REAL NOT NULL, y REAL NOT NULL
-);
-CREATE TABLE workflow_edges (
-  id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, source_node_id TEXT NOT NULL,
-  source_port TEXT NOT NULL, target_node_id TEXT NOT NULL, target_port TEXT NOT NULL
-);
-CREATE TABLE workflow_skills (
-  workflow_id TEXT NOT NULL, skill_id TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (workflow_id, skill_id)
-);
-CREATE TABLE workflow_tools (
-  workflow_id TEXT NOT NULL, tool_id TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (workflow_id, tool_id)
-);
-CREATE TABLE object_types (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, description TEXT NOT NULL,
-  json_schema TEXT, builtin INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-);
-CREATE TABLE models (
-  id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, model_id TEXT NOT NULL, display_name TEXT NOT NULL
-);
-CREATE TABLE actions (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, prompt TEXT NOT NULL,
-  rule TEXT NOT NULL, model_id TEXT NOT NULL, reasoning_effort TEXT NOT NULL,
-  max_reentries INTEGER NOT NULL, on_exhausted TEXT NOT NULL,
-  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-);
-CREATE TABLE action_ports (
-  id TEXT PRIMARY KEY, action_id TEXT NOT NULL, direction TEXT NOT NULL, name TEXT NOT NULL,
-  object_type_id TEXT NOT NULL, position INTEGER NOT NULL, artifact_path TEXT, exit_name TEXT
-);
-CREATE TABLE skills (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, content TEXT NOT NULL,
-  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-);
-CREATE TABLE action_preloads (
-  action_id TEXT NOT NULL, skill_id TEXT NOT NULL, position INTEGER NOT NULL,
-  PRIMARY KEY (action_id, skill_id)
-);
-CREATE TABLE tools (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, public_name TEXT NOT NULL UNIQUE,
-  description TEXT NOT NULL, parameters TEXT NOT NULL, output TEXT, timeout_ms INTEGER,
-  code TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
-);
-CREATE TABLE action_tools (
-  action_id TEXT NOT NULL, tool_id TEXT NOT NULL,
-  PRIMARY KEY (action_id, tool_id)
-);
-`);
-(globalThis as unknown as { ontoflowDb?: unknown }).ontoflowDb = drizzle(sqlite, { schema });
+const { sqlite } = await createTestDb();
 
 const { resolveWorkflow, WorkflowResolveError } = await import("./resolve");
 const { skillSlug } = await import("./skill-library");
 
 function seed(): void {
+  resetTestDb(sqlite);
+  // 真外键下父行先于子行：模型 → Action → 端口 → 技能 / Tool → 工作流 → 画布节点与集合。
   sqlite.exec(`
-    DELETE FROM workflows; DELETE FROM workflow_nodes; DELETE FROM workflow_edges;
-    DELETE FROM workflow_skills; DELETE FROM workflow_tools; DELETE FROM object_types;
-    DELETE FROM models; DELETE FROM actions; DELETE FROM action_ports; DELETE FROM skills;
-    DELETE FROM action_preloads; DELETE FROM tools; DELETE FROM action_tools;
-    INSERT INTO workflows VALUES (
-      'workflow-1', '快照测试', '', '# 共同指令', '{"toggles":{"webSearch":true,"todo":"no"},"mcpServers":["docs"]}', 0, 0
-    );
-    INSERT INTO workflow_nodes VALUES ('node-1', 'workflow-1', 'action', 'action-1', NULL, '', 0, 0);
-    INSERT INTO object_types VALUES ('type-1', '报告', 'file', '', NULL, 0, 0, 0);
     INSERT INTO models VALUES ('model-1', 'deepseek-official', 'model-v1', '模型 V1');
+    INSERT INTO object_types VALUES ('type-1', '报告', 'file', '', NULL, 0, 0, 0);
     INSERT INTO actions VALUES ('action-1', '汇总', '', '原始任务', '原始规则', 'model-1', 'high', 0, 'fail', 0, 0);
     INSERT INTO action_ports VALUES ('port-1', 'action-1', 'output', '结果', 'type-1', 0, 'result.md', NULL);
     INSERT INTO skills VALUES ('skill-1', '核对', '', '原始技能', 0, 0);
     INSERT INTO skills VALUES ('skill-2', '范本', '', '范本正文', 0, 0);
     INSERT INTO skills VALUES ('skill-3', '外部技能', '', '不在集合里', 0, 0);
-    INSERT INTO workflow_skills VALUES ('workflow-1', 'skill-2', 1);
-    INSERT INTO workflow_skills VALUES ('workflow-1', 'skill-1', 0);
     INSERT INTO action_preloads VALUES ('action-1', 'skill-1', 0);
     INSERT INTO tools VALUES ('tool-1', '校验结果', 'validate_result', '', '{"type":"object"}', NULL, NULL, 'original tool code', 0, 0);
     INSERT INTO tools VALUES ('tool-2', '盖章', 'stamp_result', '', '{"type":"object"}', NULL, 5000, 'stamp code', 0, 0);
     INSERT INTO tools VALUES ('tool-3', '外部工具', 'outside_tool', '', '{"type":"object"}', NULL, NULL, 'outside', 0, 0);
+    INSERT INTO action_tools VALUES ('action-1', 'tool-1');
+    INSERT INTO workflows VALUES (
+      'workflow-1', '快照测试', '', '# 共同指令', '{"toggles":{"webSearch":true,"todo":"no"},"mcpServers":["docs"]}', 0, 0
+    );
+    INSERT INTO workflow_nodes VALUES ('node-1', 'workflow-1', 'action', 'action-1', NULL, '', 0, 0);
+    INSERT INTO workflow_skills VALUES ('workflow-1', 'skill-2', 1);
+    INSERT INTO workflow_skills VALUES ('workflow-1', 'skill-1', 0);
     INSERT INTO workflow_tools VALUES ('workflow-1', 'tool-1', 0);
     INSERT INTO workflow_tools VALUES ('workflow-1', 'tool-2', 1);
-    INSERT INTO action_tools VALUES ('action-1', 'tool-1');
   `);
 }
 

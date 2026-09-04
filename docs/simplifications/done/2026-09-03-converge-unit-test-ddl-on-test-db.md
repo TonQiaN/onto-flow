@@ -1,6 +1,6 @@
 # 简化：八份手写 DDL 收敛到 test-db.ts 的 schema 生成
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -101,3 +101,34 @@ database onto `globalThis.ontoflowDb` and creates every directory it needs itsel
 并修。
 
 预估净删约 220 行（−296 删除，+75 父行夹具与断言）；风险等级：中。
+
+## 落地
+
+PR 待开。
+
+与提议的差异：无（用户已逐条拍板采纳）。两处提议里没写到、实施时才发现必须做的补齐：
+
+- `runner.test.ts` 的夹具用了六个工作流 id（`workflow-1` / `workflow-materialization` /
+  `workflow-loop` / `workflow-passthrough` / `workflow-nested-loop` / `workflow-fanout-loop`），
+  不是记录里说的一个——真外键打开后六个父行都要种，否则 `startResolvedRun` 的 `insert into runs`
+  撞外键、被那句「工作流不存在（可能刚被删除）」的兜底吃掉，14 条用例一起红。
+- `cleanup.test.ts` 的裸表夹具漏的不止外键：`run_events.type`、`run_nodes.node_id` / `label` /
+  `status`、`run_node_rounds.status`、`node_usage` 的 `id` / `node_id` / `session_id` / `message_id` /
+  `ts` 在真表上都是 NOT NULL，`node_usage` 还带 `(run_id, session_id, message_id)` 唯一键——原来那句
+  `INSERT INTO node_usage (run_id) VALUES ('run-b'), ('run-b'), ('run-b')` 在真表上是三行撞同一个键。
+  这正是记录里说的「手写子集 DDL 已经失真」的第四份证据，同一 PR 补齐。
+- `folders.test.ts` 的自引用外键：`resetTestDb` 按依赖顺序删表，但 `folders.parent_id` 指向自己，
+  父子行的删除顺序保证不了，所以保留原来那条注释、把 `PRAGMA foreign_keys = OFF/ON` 挪到
+  `resetTestDb` 两侧（`resetTestDb` 本身不动，别的用它的测试不受影响）。
+
+验收实际跑了：
+
+- `npx vitest run src/server/resolve.test.ts src/server/folders.test.ts src/server/settings.test.ts`、
+  `src/server/engine/events.test.ts`、`src/app/api/runs/route.test.ts`、`src/server/engine/action.test.ts`、
+  `src/server/engine/runner.test.ts`（31 条）、`src/server/monitor/cleanup.test.ts`（8 条）逐个绿。
+- `npm run check` 全绿（46 个测试文件、388 通过 1 跳过）；`npm run build` 通过（改到了
+  `src/app/api/runs/route.test.ts`）。
+- `cleanup.ts` 一行生产代码没改；`expect(deleted.detail).toBe(preview.detail)` 原样保留并重跑，
+  新增的级联断言（删 run 后 `run_nodes` / `run_events` / `node_usage` 都只剩活动运行）同批通过。
+- 新的机械断言先造了一份带 `CREATE TABLE` 的临时测试文件验证它真的会红，再删掉。
+- 无付费冒烟：本条只动测试基建与文档，不碰运行时。

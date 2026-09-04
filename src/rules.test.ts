@@ -99,6 +99,21 @@ describe("AGENTS.md · Conventions · better-sqlite3 is synchronous", () => {
   });
 });
 
+describe("AGENTS.md · Checks · 单元测试的内存库", () => {
+  it("「内存库一律经 createTestDb() 从 schema.ts 生成，不手写 CREATE TABLE」——src 下的测试里没有 CREATE TABLE", () => {
+    // 手写子集 DDL 会在 schema 变化时悄悄失真：漏掉的外键让级联不发生、漏掉的唯一键让
+    // 重复行静默落库，测试照样绿。白名单为空——出现例外就是要修，不是要加进来。
+    const testFiles = sourceFiles.filter(isTest);
+    expect(testFiles.length).toBeGreaterThan(0);
+    const found = violations(testFiles, (content) =>
+      [...content.matchAll(/CREATE\s+TABLE/gi)].map(
+        (match) => `第 ${content.slice(0, match.index).split("\n").length} 行手写了建表语句`,
+      ),
+    );
+    expect(found).toEqual([]);
+  });
+});
+
 describe("AGENTS.md · Conventions · client / server boundary", () => {
   /**
    * 「Client code imports no runtime value from @/server or @/db. import type from
