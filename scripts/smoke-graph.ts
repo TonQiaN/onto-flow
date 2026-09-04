@@ -233,6 +233,17 @@ async function main(): Promise<void> {
   assertSmoke(exits.includes("通过"), `裁决从未报出「通过」出口（实际：${exits.join(" → ")}）`);
   assertSmoke(draftRounds >= 2, `起草只有 ${draftRounds} 轮，回边重入没有真的发生`);
 
+  // 汇总：裁决的每一轮都必须同时拿到两位评委的评语。「一条入线满足就开跑」的回归只看产物看不
+  // 出来——两份评语在运行结束后反正都在盘上；证据在那一轮自己的 inputs 里（Codex 十三轮复审）。
+  for (const round of rounds.filter((r) => r.nodeId === N_JUDGE && r.status === "success")) {
+    const notes = (round.inputs as { 评语?: unknown } | null)?.评语;
+    assertSmoke(
+      Array.isArray(notes) && notes.length === 2,
+      `裁决第 ${round.round} 轮只收到 ${Array.isArray(notes) ? notes.length : 0} 份评语：` +
+        `汇总没有等齐两位评委`,
+    );
+  }
+
   // 扇出的两份评语、最后一轮的草稿，以及「通过」出口的裁决书都必须在；「打回」出口的
   // 意见不点名——最后一轮走的是「通过」，那个出口的产物本来就不该存在。
   assertDeclaredArtifacts(started.runId, [
