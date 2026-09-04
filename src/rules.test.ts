@@ -850,34 +850,30 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
   function outsideFences(text: string): string {
     const kept: string[] = [];
     let opener: string | null = null;
-    let openerIndent = 0;
+    let openerColumn = 0;
     let openerQuotes = 0;
-    let openerItems = 0;
     for (const line of text.split("\n")) {
       // 围栏也能嵌在块引用或列表项里（`> ```markdown`），先剥容器前缀再认，否则栏内的
       // 字面示例会被当成真链接报出来
       const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? "";
       const indent = (/^[ \t]*/.exec(line)?.[0] ?? "").length;
       const quotes = (prefix.match(/>/g) ?? []).length;
-      const items = (prefix.match(/[-*+]|\d{1,9}[.)]/g) ?? []).length;
+      const startsItem = /[-*+]|\d{1,9}[.)]/.test(prefix);
+      // 这一行的内容列：带列表标记的行从标记那一列算起（它新起一项，不是上一项的续行），
+      // 其余行按容器前缀的宽度算。
+      const column = startsItem ? indent : prefix.length;
       const fence = /^(`{3,}|~{3,})(.*)$/.exec(line.slice(prefix.length));
       const run = fence?.[1] ?? "";
       const info = fence?.[2] ?? "";
       if (opener !== null) {
-        // 容器结束，没写收栏的栏也跟着结束：块引用退回顶层、列表项换下一条，那一行已经不在
-        // 栏内了。这一判要排在收栏判之前：块引用里未收栏、后面跟一条顶层 ```，那行按 Markdown
-        // 是**新开**一栏而不是收上一栏，先判收栏会把它吃掉、把新栏的内容当正文扫。
-        const dedented = indent < openerIndent || quotes < openerQuotes;
-        // 同级的新列表项结束上一项，块引用的 `>` 则是续行、不结束。只在**开栏本身就在列表或
-        // 缩进容器里**时才用这一条：顶层栏里以 `*` / `-` 开头的行是代码内容（JSDoc 续行、
-        // YAML、diff），拿它出栏会把真代码块当正文扫。
-        const sibling =
-          (openerItems > 0 || openerIndent > 0) &&
-          items > 0 &&
-          indent <= openerIndent &&
-          quotes <= openerQuotes;
+        // 容器结束，没写收栏的栏也跟着结束：块引用退回顶层、列表项换下一条或退回顶层，那一行
+        // 已经不在栏内了。判据只有一条——内容列比开栏那一行浅（或块引用少了一层）就是离开了
+        // 容器。栏内的列表标记一律是代码内容（顶层栏的内容列是 0，永远不会提前出栏；列表续行
+        // 里开的栏，同缩进的 `- 示例` 也仍在栏内）。
+        // 这一判要排在收栏判之前：块引用里未收栏、后面跟一条顶层 ```，那行按 Markdown 是**新开**
+        // 一栏而不是收上一栏，先判收栏会把它吃掉、把新栏的内容当正文扫。
         const hasContent = line.slice(prefix.length).trim() !== "";
-        if (hasContent && (dedented || sibling)) opener = null;
+        if (hasContent && (column < openerColumn || quotes < openerQuotes)) opener = null;
         else {
           // 收栏只认「同字符、不短于开栏、后面没有别的内容」；栏内的 ```not-close 不是收栏，
           // 把它当收栏会让真正的收栏重新开栏，之后整份记录的链接就被静默抹掉
@@ -890,9 +886,8 @@ describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录
       // 反引号栏的信息串里不能再有反引号（CommonMark），带反引号的那行根本不是围栏
       if (fence && !(run.startsWith("`") && info.includes("`"))) {
         opener = run;
-        openerIndent = indent;
+        openerColumn = prefix.length;
         openerQuotes = quotes;
-        openerItems = items;
         kept.push("");
       } else kept.push(line);
     }
