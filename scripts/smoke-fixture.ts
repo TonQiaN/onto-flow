@@ -26,6 +26,7 @@ import {
   objectTypes,
   revisions,
   runEvents,
+  runNodeRounds,
   runNodes,
   runs,
   skills,
@@ -35,7 +36,7 @@ import {
   workflows,
 } from "../src/db";
 import { DATA_DIR } from "../src/server/fs-safety";
-import { materializeSkill, skillSlug, SKILL_LIBRARY_DIR } from "../src/server/skill-library";
+import { materializeSkill } from "../src/server/skill-library";
 import {
   createAction,
   loadActionDto,
@@ -252,33 +253,12 @@ export function upsertSkill(input: SkillFixture): SkillDto {
   if (!sameDefinition(current, { ...input, files: [] }) || !hasRevision("skill", existing.id)) {
     return unwrap(writeSkill(existing.id, desired));
   }
-  // 定义没变也要确认磁盘投影对得上：受理时读的是 data/skills/<slug>，而冒烟脚本不经 Next 的
-  // 启动重建钩子（src/instrumentation.ts）。缺文件要补，**内容不对也要补**——写入器的事务提交
-  // 之后、换链接之前如果 materializeSkill 抛了，库里已是新定义而盘上还是旧 SKILL.md。
-  // 补的是目录，不是修订。
-  const slug = skillSlug(dto);
-  const projected = path.join(SKILL_LIBRARY_DIR, slug, "SKILL.md");
-  const stale = ((): string | null => {
-    let text: string;
-    try {
-      text = fs.readFileSync(projected, "utf8");
-    } catch {
-      return "投影缺失或读不出来";
-    }
-    // 不复刻 frontmatter 的排版（那是 skill-library 的事），只查必须出现的事实：目录名（slug）、
-    // 模型据以选技能的中文名与描述、以及 SKILL.md 正文本身。
-    if (!text.includes(slug)) return "frontmatter 里的 name 与目录名对不上";
-    if (!text.includes(dto.name)) return "描述里的库名不是当前的名字";
-    // 描述是模型据以发现技能的那句话，只改描述的一次写入同样会留下陈旧投影；
-    // 空描述时上游拿库名兜底，与 materializeSkill 的 `description || name` 同源。
-    if (!text.includes(dto.description || dto.name)) return "描述与库里的定义不一致";
-    if (!text.includes(dto.content)) return "正文与库里的定义不一致";
-    return null;
-  })();
-  if (stale !== null) {
-    materializeSkill(dto, loadSkillFiles(dto.id));
-    console.log(`技能投影异常（${stale}），已按库里的定义重建：${projected}`);
-  }
+  // 定义没变也**照样重投一次**磁盘投影：受理时读的是 data/skills/<slug>，而冒烟脚本不经
+  // Next 的启动重建钩子（src/instrumentation.ts）。写入器提交事务之后、换链接之前
+  // materializeSkill 抛了的话，库里已是新定义而盘上还是旧 SKILL.md——任何「投影是不是旧的」
+  // 判据都只能猜（正文被改短时旧文件仍包含新正文，子串比对就漏了），而重投一次是确定的：
+  // 库里的行是唯一事实源，重投只换目录、不记修订，代价是一个新版本目录立即顶掉旧的。
+  materializeSkill(dto, loadSkillFiles(dto.id));
   return dto;
 }
 
@@ -517,14 +497,17 @@ export function assertDeclaredArtifacts(
 }
 
 /**
- * 事件按类型分档打印，并要求 `required` 里的每一档都非空。
+ * 事件按类型分档打印，并要求**每个开过会话的轮次**都落齐 `required` 里的档。
  *
  * 不能只打印：会话事件的落库回调抛异常时 `RunProcess.#onNotification` 会吞掉它
  *（`runtime.ts` 那里的注释说明了为什么——权威副本在运行目录的 jsonl 里），于是节点照样成功、
  * 产物照样齐全，只有 `run_events` 空了；不断言就等于 `smoke-engine` 声称验的「事件落库」
- * 永远为真（Codex 对本 PR 的四轮复审）。默认要 `tool` 与 `session.idle` 两档：结构化输出本身
- * 就是一次工具调用、每个回合结束都会落一条 idle，两者与模型措辞无关；`reasoning` / `text`
- * 看模型当轮心情，刻意不要求。
+ * 永远为真（Codex 对本 PR 的四轮复审）。也不能只按整次运行汇总：多 Action 的图里一个会话丢光
+ * 事件、另一个会话补上同样的档，整体汇总照样通过（八轮复审），所以逐会话查——会话 id 从
+ * `run_node_rounds` 取，回边重入的第二轮是另一个会话，同样要落齐。
+ *
+ * 默认要 `tool` 与 `session.idle` 两档：结构化输出本身就是一次工具调用、每个回合结束都会落一条
+ * idle，两者与模型措辞无关；`reasoning` / `text` 看模型当轮心情，刻意不要求。
  */
 export function assertEvents(
   runId: string,
@@ -534,10 +517,21 @@ export function assertEvents(
   const byType = new Map<string, number>();
   for (const e of events) byType.set(e.type, (byType.get(e.type) ?? 0) + 1);
   console.log(`\n事件 ${events.length} 条：${[...byType].map(([t, c]) => `${t}×${c}`).join(" ")}`);
-  for (const type of required) {
-    assertSmoke(
-      (byType.get(type) ?? 0) > 0,
-      `run_events 里没有一条 ${type} 事件：事件没有实时落库`,
-    );
+
+  const sessions = db
+    .select()
+    .from(runNodeRounds)
+    .where(eq(runNodeRounds.runId, runId))
+    .all()
+    .filter((round) => round.sessionId !== null && round.status === "success");
+  assertSmoke(sessions.length > 0, "这次运行没有一个成功的 Action 轮次，事件断言无从谈起");
+  for (const round of sessions) {
+    const mine = events.filter((e) => e.sessionId === round.sessionId);
+    for (const type of required) {
+      assertSmoke(
+        mine.some((e) => e.type === type),
+        `会话 ${round.sessionId}（节点 ${round.nodeId} 第 ${round.round} 轮）没有一条 ${type} 事件：事件没有实时落库`,
+      );
+    }
   }
 }
