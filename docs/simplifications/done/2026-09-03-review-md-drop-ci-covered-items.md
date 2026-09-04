@@ -350,7 +350,19 @@ restore 那条没被完全盖住，那它就该留在人工位上，只是范围
 | ``await import(`../../server/monitor/cleanup`)``（回归） | 红 | 红 |
 | 原样 | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十七轮改写对现有 route 与现有
+第十八轮：TS 的 import 赋值 `import type Server = require("../../server/x")` 既没有 `from` 也没有
+`import(`，三条正则都抓不到，类型形式还会被擦掉。补第四条正则（含 `export import X = require(…)`）。
+
+七十二种写法反向验证过。除前面六十八种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `import type Server = require("../../server/monitor/cleanup");` | 红 | 红「import 赋值 ../../server/monitor/cleanup」 |
+| `import Server = require("@/server/monitor/cleanup");` | 红 | 红 |
+| `import Ok = require("./lib");` | 绿 | 绿 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十八轮改写对现有 route 与现有
 客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：
