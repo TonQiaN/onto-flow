@@ -1,6 +1,6 @@
 # 简化：删掉 writers/json-schema.ts 这层纯转出垫片
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -59,3 +59,24 @@ compatibility layers」，为「调用方不变」而留的转出层正是这一
 极低。唯一的公开面变化是 writer 侧多一次跨目录 import，`npm run check` 是完整的门。
 
 预估净删 5 行（整文件）+ 1 行 import 改写 + 1 处 AGENTS.md 事实订正；风险等级：低。
+
+## 落地
+
+PR 待开。
+
+与提议的差异：无。三条全做：删 `src/server/writers/json-schema.ts` 整文件（5 行）、
+`src/server/writers/tool.ts` 的 import 改成 `from "@/server/harness/tool-schema"`（唯一一个生产消费者，
+`rg -n 'writers/json-schema|from "\./json-schema"' src scripts e2e` 改前只有它一行）、`AGENTS.md` 那句
+点名的文件从 `src/server/writers/json-schema.ts` 订正为 `src/server/harness/tool-schema.ts`，旁边
+「(mirrored client-side in `src/app/tools/tool-form.ts`)」原样保留。
+
+`rg -n "json-schema" .github/REVIEW.md` 无命中，无需同改：REVIEW.md 第 6 节那条只点 `objectSchemaProblem`
+这个名字与客户端 `tool-form.ts`，不点服务端文件路径，订正后依然说得对。`rg -n "json-schema|tool-schema|
+objectSchemaProblem" src/rules.test.ts` 也无命中——这条约定没有机械断言，本来就只靠 AGENTS.md 那句话，
+而那句话在订正前是错的。
+
+与 [把纯常量与纯校验搬进 src/lib/](2026-09-03-share-pure-validators-in-lib.md) 的先后：落地时那份还在
+`proposed/`（`src/lib/json-schema-shape.ts` 尚不存在），所以本条的 import 终点就是提议里写的
+`@/server/harness/tool-schema`；那份将来落地时只改 `tool-schema.ts` 内部，本条的终点不用再动。
+
+验收实际跑了什么：见 PR 描述。
