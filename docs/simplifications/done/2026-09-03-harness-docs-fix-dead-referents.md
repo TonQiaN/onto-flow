@@ -91,7 +91,7 @@ src/app/tools/tool-form.ts:146-147     ← 只剩给 Tool 作者的模板注释
 
 ## 落地
 
-PR 待开。
+PR: https://github.com/TonQiaN/onto-flow/pull/40
 
 **与提议的差异：** 无，四处照提议改。具体措辞：
 
