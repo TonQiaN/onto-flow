@@ -197,7 +197,27 @@ first statement is `return handle(` — never a `const`, an alias, or a re-expor
 `await db.` 与客户端边界 / `"use server"` 三条仍看原文，理由是失败方向：注释与字符串只能**多出**
 文本、不能藏起真实代码，被它们欺骗的方向是误报（红）而不是漏放（绿）。撤掉人工检查怕的是漏放。
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，八轮改写对现有 route 的判定一次
+第九轮两条：`const marker = /export const dynamic = "…";/` 用**正则字面量**藏代码（`stripCode`
+不认正则，那段像代码的文本原样留在视图里），以及 `export { post as "POST" }` 用**带引号的导出名**
+绕过子句扫描（引号内容被抹白了）。第二条说明「逐种枚举导出写法」这条路还没走到头，于是把它换成
+**导出形状白名单**：route 顶层只许两种形状——方法用的函数声明、`export const <标识符> = …`
+（`dynamic` 与 uploads 的字节上限就是这一种），别的一律记违规。`export { … }`（含带引号的名字）、
+`export const { POST } = …`、`export *`、`export default` 被这一条一次性全部拦下，`EXPORT_CLAUSE_RE`
+与 `STAR_EXPORT_RE` 两段随之删掉。正则字面量用「前一个有效字符决定除号还是正则」这条常规启发式
+识别，判错只会多抹白一段，方向是误报不是漏放。
+
+二十六种写法反向验证过。除前面十九种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `const marker = /export const dynamic = "force-dynamic";/;` 顶替真导出 | 红 | 红 |
+| `export { post as "POST" };` | 红 | 红「第 13 行的 export 形状不认识」 |
+| `export const { POST } = handlers;`（回归） | 红 | 红（两条都报） |
+| `export * from "./x";`（回归） | 红 | 红 |
+| `export default function foo() {}` | 红 | 红（这一轮新拦下的） |
+| `export async function POST() { return handle(…) }`、`export const MAX_X = 1;` | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，九轮改写对现有 route 的判定一次
 都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：

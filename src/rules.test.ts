@@ -26,6 +26,10 @@ function walk(dir: string, out: string[] = []): string[] {
 const rel = (file: string): string => path.relative(ROOT, file).split(path.sep).join("/");
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isSource = (file: string): boolean => /\.tsx?$/.test(file);
+/** `/` 前面是这些就当正则字面量的开头，否则当除号（判错只会多抹白，不会漏放） */
+const REGEX_START_RE =
+  /(?:^|[=(,:[!&|?{};+\-*%^~])\s*$|\b(?:return|typeof|case|in|of|do|else|void|delete|new|yield|await)\s*$/;
+
 /**
  * 抹掉注释；`literals` 为真时连字符串 / 模板串的**内容**一起抹成空白（换行与长度都保留）。
  * 只扫文本的断言都该先过它：注释掉的代码在原文里字还在，`// export const dynamic = "force-dynamic";`
@@ -52,6 +56,27 @@ function stripCode(content: string, literals = false): string {
       out += content.slice(i, stop).replace(/[^\n]/g, " ");
       i = stop - 1;
       continue;
+    }
+    // 正则字面量：不认的话 `const marker = /export const dynamic = "…";/` 里那段像代码的文本会
+    // 原样留在视图里，冒充真代码（Codex 对 #50 的九轮复审）。用「前一个有效字符决定除号还是正则」
+    // 这条常规启发式；判错只会让某段被多抹白，方向是误报（红）不是漏放（绿）。
+    if (ch === "/" && REGEX_START_RE.test(out)) {
+      const start = i;
+      let inClass = false;
+      for (i += 1; i < content.length; i += 1) {
+        const c = content[i];
+        if (c === "\\") i += 1;
+        else if (c === "[") inClass = true;
+        else if (c === "]") inClass = false;
+        else if (c === "\n") break;
+        else if (c === "/" && !inClass) break;
+      }
+      if (i < content.length && content[i] === "/") {
+        const literal = content.slice(start, i + 1);
+        out += literals ? literal.replace(/[^\n]/g, " ") : literal;
+        continue;
+      }
+      i = start; // 判错了，当普通除号
     }
     out += ch;
   }
@@ -122,8 +147,13 @@ describe("AGENTS.md · Conventions · handle()", () => {
     "gm",
   );
   const VAR_EXPORT_RE = /^export\s+(?:const|let|var)\b/gm;
-  const EXPORT_CLAUSE_RE = /^export\s*\{([^}]*)\}/gm;
-  const STAR_EXPORT_RE = /^export\s*\*/gm;
+  const EXPORT_AT_RE = /^export\b/gm;
+  // route 顶层只许两种导出形状：方法用的函数声明，和 `export const <标识符> = …`（`dynamic`、
+  // uploads 的字节上限）。别的一律记违规，不再逐种枚举——`export { post as "POST" }`、
+  // `export const { POST } = handlers`、`export *`、`export default` 都被这一条一次性拦下
+  // （Codex 对 #50 的九轮复审）。
+  const ALLOWED_EXPORT_RE =
+    /^export\s+(?:(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=)/;
   const LEADING_TRIVIA_RE = /^(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)+/;
 
   /** 本条语句的结尾：括号全配平后的第一个 `;`。多声明符的 `const a = 1, POST = …` 要整条一起看 */
@@ -180,14 +210,11 @@ describe("AGENTS.md · Conventions · handle()", () => {
         for (const decl of stmt.matchAll(new RegExp(String.raw`\b(${METHODS})\b`, "g")))
           out.push(`${decl[1]} 出现在 export const / let / var 里，只能是导出的函数声明`);
       }
-      for (const clause of content.matchAll(EXPORT_CLAUSE_RE))
-        for (const spec of clause[1].split(",")) {
-          const parts = spec.split(/\bas\b/).map((part) => part.trim());
-          const exported = parts[parts.length - 1];
-          if (new RegExp(`^(?:${METHODS})$`).test(exported))
-            out.push(`${exported} 走了 export { … } 再导出，只能是导出的函数声明`);
+      for (const match of content.matchAll(EXPORT_AT_RE))
+        if (!ALLOWED_EXPORT_RE.test(content.slice(match.index))) {
+          const line = content.slice(0, match.index).split("\n").length;
+          out.push(`第 ${line} 行的 export 形状不认识，只允许函数声明或 export const <标识符> = …`);
         }
-      if (STAR_EXPORT_RE.test(content)) out.push("route 里有 export *，可能带出方法");
       if (methods === 0 && out.length === 0) out.push("没有导出任何 HTTP 方法");
       if (!matchesAsCode(raw, /import \{[^}]*\bhandle\b[^}]*\} from "@\/lib\/http"/))
         out.push("没有从 @/lib/http 导入 handle");
