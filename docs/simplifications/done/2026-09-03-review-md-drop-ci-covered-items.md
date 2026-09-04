@@ -252,7 +252,20 @@ first statement is `return handle(` — never a `const`, an alias, or a re-expor
 | `await import("../../db")` | 红 | 红 |
 | `import type { X } from "./lib"`（同目录） | 绿 | 绿 |
 
-今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十一轮改写对现有 route 与现有
+第十二轮两条小口子：正则识别的前缀集合漏了 `=>`（`const marker = () => /…/;`），动态 `import()`
+的说明符只收引号串、漏了无插值模板串（`await import(\`../../server/x\`)`）。两处各补一个字符类。
+静态 `import` 的说明符按语法只能是引号串，不受影响。
+
+四十种写法反向验证过。除前面三十六种外新增：
+
+| 写法 | 期望 | 实际 |
+|---|---|---|
+| `const marker = () => /export const dynamic = "force-dynamic";/;` | 红 | 红 |
+| ``await import(`../../server/monitor/cleanup`)`` | 红 | 红「动态导入 ../../server/monitor/cleanup」 |
+| `const marker = /export const dynamic = …/;`（裸正则，回归） | 红 | 红 |
+| 原样 | 绿 | 绿 |
+
+今天仓库里 route 全是「函数声明 + 体第一句 `return handle(`」，十二轮改写对现有 route 与现有
 客户端模块的判定一次都没变过。
 
 **REVIEW 行 ↔ rules.test.ts 断言逐条对照**（行号取本 PR 分叉点 `95de9f9`）：

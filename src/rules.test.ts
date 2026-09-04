@@ -28,7 +28,7 @@ const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isSource = (file: string): boolean => /\.tsx?$/.test(file);
 /** `/` 前面是这些就当正则字面量的开头，否则当除号（判错只会多抹白，不会漏放） */
 const REGEX_START_RE =
-  /(?:^|[=(,:[!&|?{};+\-*%^~])\s*$|\b(?:return|typeof|case|in|of|do|else|void|delete|new|yield|await)\s*$/;
+  /(?:^|[=(,:[!&|?{};+\-*%^~<>])\s*$|\b(?:return|typeof|case|in|of|do|else|void|delete|new|yield|await)\s*$/;
 
 /**
  * 抹掉注释；`literals` 为真时连字符串 / 模板串的**内容**一起抹成空白（换行与长度都保留）。
@@ -309,7 +309,9 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
   // `[^;]*?` 把匹配限制在同一条语句里：`export type { X };` 没有 from，不能吞到下一条 import 的 from。
   const IMPORT_FROM_RE = /^(?:import|export)\s+(type\s+)?[^;]*?\s+from\s+["']([^"']+)["']/gm;
   const SIDE_EFFECT_IMPORT_RE = /^import\s+["']([^"']+)["']/gm;
-  const DYNAMIC_IMPORT_RE = /\bimport\(\s*["']([^"']+)["']/g;
+  // 反引号也要收：`await import(\`../../server/x\`)` 是合法的无插值模板串说明符（Codex 对 #50 的
+  // 十二轮复审）。静态 import 的说明符按语法只能是引号串，所以上面两条不用管反引号。
+  const DYNAMIC_IMPORT_RE = /\bimport\(\s*["'`]([^"'`]+)["'`]/g;
 
   it('含 "use client" 的文件与 src/app、src/components 下的共享模块不从 @/server 或 @/db 导入任何东西（含 import type）', () => {
     expect(clientFiles.length).toBeGreaterThan(0);
