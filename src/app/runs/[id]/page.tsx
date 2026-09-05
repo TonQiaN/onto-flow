@@ -283,6 +283,7 @@ export default function RunDetailPage() {
             <NodeDrawer
               key={selectedNodeId}
               runId={run.id}
+              runStatus={run.status}
               nodeId={selectedNodeId}
               label={selectedLabel}
               status={visuals.nodes[selectedNodeId]?.status ?? "pending"}

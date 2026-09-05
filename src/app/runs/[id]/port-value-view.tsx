@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { asPortValue } from "../lib";
 
 const PRE_CLS =
@@ -46,19 +46,32 @@ function FileValue({
   runId,
   file,
   previewLabel,
+  refreshKey,
 }: {
   runId: string;
   file: { path: string; name: string; mime: string };
   previewLabel: string;
+  refreshKey?: string;
 }) {
   const [preview, setPreview] = useState<FilePreviewState>({ status: "idle" });
+  const requested = useRef(false);
+  const requestVersion = useRef(0);
+  const requestController = useRef<AbortController | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    requested.current = true;
+    const version = ++requestVersion.current;
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
     setPreview({ status: "loading" });
     try {
       const res = await fetch(
         `/api/runs/${encodeURIComponent(runId)}/files?path=${encodeURIComponent(file.path)}`,
-        { cache: "no-store" },
+        {
+          cache: "no-store",
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+        },
       );
       const body = (await res.json()) as {
         content?: string;
@@ -66,6 +79,7 @@ function FileValue({
         size?: number;
         error?: string;
       };
+      if (version !== requestVersion.current) return;
       if (!res.ok) {
         setPreview({ status: "error", error: body?.error ?? "读取失败" });
         return;
@@ -77,9 +91,22 @@ function FileValue({
         size: body.size,
       });
     } catch {
-      setPreview({ status: "error", error: "网络错误，读取失败" });
+      if (version === requestVersion.current)
+        setPreview({ status: "error", error: "网络错误，读取失败" });
     }
-  };
+  }, [file.path, runId]);
+
+  // 用户已展开的文件在运行收束或手动刷新后重读，包括运行中曾被 409 拒绝的预览。
+  useEffect(() => {
+    if (requested.current) void load();
+  }, [refreshKey, load]);
+  useEffect(
+    () => () => {
+      requestVersion.current++;
+      requestController.current?.abort();
+    },
+    [],
+  );
 
   return (
     <div>
@@ -104,7 +131,12 @@ function FileValue({
         {preview.status === "loaded" && (
           <button
             type="button"
-            onClick={() => setPreview({ status: "idle" })}
+            onClick={() => {
+              requested.current = false;
+              requestVersion.current++;
+              requestController.current?.abort();
+              setPreview({ status: "idle" });
+            }}
             className="text-xs text-zinc-500 underline transition-colors hover:text-zinc-900"
           >
             收起
@@ -131,10 +163,12 @@ export function PortValueView({
   value,
   runId,
   previewLabel = "查看内容",
+  refreshKey,
 }: {
   value: unknown;
   runId?: string;
   previewLabel?: string;
+  refreshKey?: string;
 }) {
   // 输入端口的值恒是 PortValue[]（一个口可接多条入线的汇总），逐项渲染，
   // 否则数组落到 JSON dump、文件值的预览入口在输入区永远不出现。
@@ -145,7 +179,13 @@ export function PortValueView({
     return (
       <div className="space-y-2">
         {value.map((item, index) => (
-          <PortValueView key={index} value={item} runId={runId} previewLabel={previewLabel} />
+          <PortValueView
+            key={index}
+            value={item}
+            runId={runId}
+            previewLabel={previewLabel}
+            refreshKey={refreshKey}
+          />
         ))}
       </div>
     );
@@ -163,6 +203,7 @@ export function PortValueView({
         runId={runId}
         file={pv.file}
         previewLabel={previewLabel}
+        refreshKey={refreshKey}
       />
     );
   }

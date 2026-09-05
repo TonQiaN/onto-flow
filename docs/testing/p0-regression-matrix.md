@@ -4,8 +4,8 @@
 
 | 层 | 分支 | 行为边界 |
 | --- | --- | --- |
-| 1 / F03 | `codex/p0-1-graph-connections` → `main` | 共享候选连线规则、实际拖线汇总与回边、添加连线按钮、拒绝原因及回边提示 |
-| 2 / F04 | `codex/p0-2-artifact-contracts` → 第 1 层 | JSON 产物契约、失败证据、校验入口与对应文档 |
+| 1 / F03 · [#59](https://github.com/TonQiaN/onto-flow/pull/59) | `codex/p0-1-graph-connections` → `main` | 共享候选连线规则、实际拖线汇总与回边、添加连线按钮、拒绝原因及回边提示 |
+| 2 / F04 · [#60](https://github.com/TonQiaN/onto-flow/pull/60) | `codex/p0-2-artifact-contracts` → 第 1 层 | JSON 产物契约、失败证据、校验入口与对应文档 |
 | 3 / F05 | `codex/p0-3-live-results` → 第 2 层 | 开着抽屉时自动更新、刷新按钮、明确读取状态与切轮隔离 |
 
 ## 必须覆盖的矩阵
@@ -54,4 +54,14 @@
 - 手动视觉验证：1100 px 对象类型抽屉的样例反馈；真实失败运行的验收卡、原文和下游跳过状态。截图：[样例](p0-evidence/f04-sample.jpg)、[失败验收](p0-evidence/f04-failure.jpg)。
 - 有意范围：Schema 是 Harness 已执行的子集（ADR-0020），不支持关键字会拒绝；业务质量未验收。CI 不跑模型，真实模型夹具和运行历史在本机 `data/`。
 
-第 3 层尚在开发；整体尚未完成。
+第 3 层已验证：
+
+- 原版 `f3ac6dd`：抽屉始终打开的成功、失败两条用例都红；终态头部已更新但载荷停留在初始空值。修复后两条通过。
+- `npm run check`：424 项通过、1 项按预期跳过；包括真实清理写入标记、dryRun 不伪造清理事实的断言。
+- `npm run build`：通过。
+- `npx playwright test e2e/live-results.spec.ts e2e/runs.spec.ts e2e/artifact-contracts.spec.ts`：18 项通过。
+- `live-results.spec.ts` 的 7 项回归：成功 / 失败自动更新、终态早于旧响应、503 后手动恢复与清理状态、执行中后写载荷与文件预览 409 恢复、切轮迟到请求与终态缓存、切节点迟到请求。清理用自己合成行模拟；409 明确模拟执行器的活跃进程闸门。所有 CI 夹具均不启动真实模型。
+- 真实两 Action 工作流 `体验-复用与评审`：运行 `080a6b49-d2f8-40e8-8690-306869c4142e`，DeepSeek V4 Flash / high，4 个节点全部成功，耗时 77.095 秒，费用 ¥0.0541485。自第一 Action 执行中打开输入输出页签后，未切页、未重开、未点刷新：产物自动出现，先前因整条运行活跃而 409 的文件预览在整条运行结束后自动显示正文。
+- 手动视觉验证：1100 px 下「刷新结果」、自动更新说明、尚未产出提示、最终契约卡与正文均可读。截图：[执行中](p0-evidence/f05-running.jpg)、[自动完成](p0-evidence/f05-completed.jpg)。
+
+矩阵的功能通过标准已逐项落实。三层按顺序合并；各 PR 当前 head 的 CI 与云端审查状态以 GitHub Checks / Review 为准。本次真实模型验收三次合计 ¥0.0734884，运行与日志只保留在本机 `data/p0-validation/` 和对应运行目录，截图与矩阵随 PR 提交。

@@ -176,7 +176,8 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
       )
     `);
     db.run(sql`
-      update run_node_rounds set inputs = null, outputs = null, snapshot = null, artifact_validation = null
+      update run_node_rounds set inputs = null, outputs = null, snapshot = null, artifact_validation = null,
+        payload_cleared_at = ${Date.now()}
       where run_id in (${eligibleRuns})
         and (inputs is not null or outputs is not null or snapshot is not null or artifact_validation is not null)
     `);

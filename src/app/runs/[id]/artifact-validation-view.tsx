@@ -8,9 +8,11 @@ const LEVEL = { file: "文件存在", json: "JSON 语法", schema: "JSON 契约"
 export function ArtifactValidationView({
   validation,
   runId,
+  refreshKey,
 }: {
   validation: ArtifactValidation;
   runId: string;
+  refreshKey?: string;
 }) {
   const failed = validation.artifacts.some((artifact) => artifact.issues.length > 0);
   return (
@@ -39,7 +41,12 @@ export function ArtifactValidationView({
             </details>
           )}
           {artifact.issues.length > 0 && artifact.file && (
-            <PortValueView value={artifact.file} runId={runId} previewLabel="查看失败文件" />
+            <PortValueView
+              value={artifact.file}
+              runId={runId}
+              previewLabel="查看失败文件"
+              refreshKey={refreshKey}
+            />
           )}
         </div>
       ))}

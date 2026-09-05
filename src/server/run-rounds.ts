@@ -22,14 +22,16 @@ const SKELETON_COLUMNS = {
   finishedAt: runNodeRounds.finishedAt,
   exitName: runNodeRounds.exitName,
   error: runNodeRounds.error,
+  payloadClearedAt: runNodeRounds.payloadClearedAt,
 };
 
-/** 一轮的重载荷；被事件清理置空的列是 null，与「这一轮本就没有」同一形状 */
+/** 一轮的重载荷与清理事实；空载荷不能反推出清理 */
 export interface RoundPayload {
   inputs: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
   artifactValidation: ArtifactValidation | null;
+  payloadClearedAt: Date | null;
 }
 
 /**
@@ -67,6 +69,7 @@ export function readRoundPayload(
       outputs: runNodeRounds.outputs,
       snapshot: runNodeRounds.snapshot,
       artifactValidation: runNodeRounds.artifactValidation,
+      payloadClearedAt: runNodeRounds.payloadClearedAt,
     })
     .from(runNodeRounds)
     .where(
@@ -83,6 +86,7 @@ export function readRoundPayload(
     outputs: row.outputs ?? null,
     snapshot: row.snapshot ?? null,
     artifactValidation: row.artifactValidation ?? null,
+    payloadClearedAt: row.payloadClearedAt,
   };
 }
 

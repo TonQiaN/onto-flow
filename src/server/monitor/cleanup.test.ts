@@ -310,12 +310,23 @@ describe("运行工作区清理", () => {
 
     const preview = runCleanup({ target: "events", beforeDays: 1, dryRun: true });
     expect(preview.detail).toContain("事件明细 1 条，另清空 2 行轮次的输入输出与快照");
+    expect(sqlite.prepare("SELECT payload_cleared_at FROM run_node_rounds").all()).toEqual([
+      { payload_cleared_at: null },
+      { payload_cleared_at: null },
+    ]);
 
     const deleted = runCleanup({ target: "events", beforeDays: 1, dryRun: false });
     // 预览与真做共用同一份统计：真做只在末尾多一句 VACUUM 结果，前面必须逐字相同。
     expect(deleted.detail.startsWith(preview.detail)).toBe(true);
     expect(deleted.affected).toEqual(preview.affected);
     expect(sqlite.prepare("select count(*) as count from run_events").get()).toEqual({ count: 0 });
+    const cleared = sqlite
+      .prepare("SELECT id, payload_cleared_at FROM run_node_rounds ORDER BY id")
+      .all();
+    expect(cleared).toEqual([
+      { id: "e1", payload_cleared_at: expect.any(Number) },
+      { id: "e2", payload_cleared_at: expect.any(Number) },
+    ]);
     // 骨架行数不变，只有重载荷列被置空——回放退化到轮次级仍有依据。
     expect(
       sqlite
@@ -341,5 +352,8 @@ describe("运行工作区清理", () => {
     expect(runCleanup({ target: "events", beforeDays: 1, dryRun: true }).detail).toContain(
       "事件明细 0 条，另清空 0 行轮次",
     );
+    expect(
+      sqlite.prepare("SELECT id, payload_cleared_at FROM run_node_rounds ORDER BY id").all(),
+    ).toEqual(cleared);
   });
 });
