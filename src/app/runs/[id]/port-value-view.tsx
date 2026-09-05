@@ -35,6 +35,7 @@ interface FilePreviewState {
   truncated?: boolean;
   size?: number;
   error?: string;
+  retrying?: boolean;
 }
 
 /**
@@ -57,44 +58,56 @@ function FileValue({
   const requested = useRef(false);
   const requestVersion = useRef(0);
   const requestController = useRef<AbortController | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const load = useCallback(async () => {
-    requested.current = true;
-    const version = ++requestVersion.current;
-    requestController.current?.abort();
-    const controller = new AbortController();
-    requestController.current = controller;
-    setPreview({ status: "loading" });
-    try {
-      const res = await fetch(
-        `/api/runs/${encodeURIComponent(runId)}/files?path=${encodeURIComponent(file.path)}`,
-        {
-          cache: "no-store",
-          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
-        },
-      );
-      const body = (await res.json()) as {
-        content?: string;
-        truncated?: boolean;
-        size?: number;
-        error?: string;
-      };
-      if (version !== requestVersion.current) return;
-      if (!res.ok) {
-        setPreview({ status: "error", error: body?.error ?? "读取失败" });
-        return;
+  const load = useCallback(
+    async function readFile() {
+      requested.current = true;
+      clearTimeout(retryTimer.current);
+      const version = ++requestVersion.current;
+      requestController.current?.abort();
+      const controller = new AbortController();
+      requestController.current = controller;
+      setPreview({ status: "loading" });
+      try {
+        const res = await fetch(
+          `/api/runs/${encodeURIComponent(runId)}/files?path=${encodeURIComponent(file.path)}`,
+          {
+            cache: "no-store",
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+          },
+        );
+        const body = (await res.json()) as {
+          content?: string;
+          truncated?: boolean;
+          size?: number;
+          error?: string;
+        };
+        if (version !== requestVersion.current) return;
+        if (!res.ok) {
+          setPreview({
+            status: "error",
+            error: body?.error ?? "读取失败",
+            retrying: res.status === 409,
+          });
+          // 终态可以早于 activeRuns 释放（取消或用量结算）；释放本身没有 SSE 帧。
+          // 只对活跃执行器的 409 继续串行重试，文件不存在/无权限不自动循环。
+          if (res.status === 409) retryTimer.current = setTimeout(() => void readFile(), 2000);
+          return;
+        }
+        setPreview({
+          status: "loaded",
+          content: body.content ?? "",
+          truncated: body.truncated === true,
+          size: body.size,
+        });
+      } catch {
+        if (version === requestVersion.current)
+          setPreview({ status: "error", error: "网络错误，读取失败" });
       }
-      setPreview({
-        status: "loaded",
-        content: body.content ?? "",
-        truncated: body.truncated === true,
-        size: body.size,
-      });
-    } catch {
-      if (version === requestVersion.current)
-        setPreview({ status: "error", error: "网络错误，读取失败" });
-    }
-  }, [file.path, runId]);
+    },
+    [file.path, runId],
+  );
 
   // 用户已展开的文件在运行收束或手动刷新后重读，包括运行中曾被 409 拒绝的预览。
   useEffect(() => {
@@ -102,6 +115,8 @@ function FileValue({
   }, [refreshKey, load]);
   useEffect(
     () => () => {
+      requested.current = false;
+      clearTimeout(retryTimer.current);
       requestVersion.current++;
       requestController.current?.abort();
     },
@@ -128,11 +143,12 @@ function FileValue({
             {preview.status === "loading" ? "读取中…" : previewLabel}
           </button>
         )}
-        {preview.status === "loaded" && (
+        {preview.status !== "idle" && (
           <button
             type="button"
             onClick={() => {
               requested.current = false;
+              clearTimeout(retryTimer.current);
               requestVersion.current++;
               requestController.current?.abort();
               setPreview({ status: "idle" });
@@ -144,6 +160,11 @@ function FileValue({
         )}
       </div>
       {preview.status === "error" && <p className="mt-1 text-xs text-red-700">{preview.error}</p>}
+      {preview.retrying && (
+        <p className="mt-1 text-xs text-zinc-500">
+          每 2 秒自动重试，文件可读取后会直接显示；收起可停止等待。
+        </p>
+      )}
       {preview.status === "loaded" && (
         <div className="mt-2">
           <CollapsibleText text={preview.content ?? ""} />

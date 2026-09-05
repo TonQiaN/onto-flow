@@ -250,8 +250,10 @@ test("执行中后写入的载荷自动更新，打开过的文件在运行结�
   const f = await fixture(request);
   // 合成运行没有真实子进程，明确模拟 activeRuns 文件预览闸门的 409。
   let active = true;
+  let blockedRequests = 0;
   await page.route(`**/api/runs/${f.runId}/files?*`, async (route) => {
     if (!active) return route.continue();
+    blockedRequests++;
     await route.fulfill({
       status: 409,
       contentType: "application/json",
@@ -273,8 +275,11 @@ test("执行中后写入的载荷自动更新，打开过的文件在运行结�
   await expect(drawer).toContainText("最终输出.md");
   await drawer.getByRole("button", { name: "查看内容" }).click();
   await expect(drawer).toContainText("运行执行期间暂不支持文件预览");
-  active = false;
   finish(f);
+  await expect(drawer).toContainText("成功");
+  // 终态先到，执行器仍占用；释放占用不再触发任何 SSE 或状态变化。
+  await expect.poll(() => blockedRequests).toBeGreaterThan(1);
+  active = false;
   await expect(drawer.locator("pre")).toContainText("P0 自动刷新完成正文");
 });
 
@@ -388,4 +393,30 @@ test("切节点后迟到的旧载荷不能进入另一节点抽屉", async ({ pa
   } finally {
     release.resolve();
   }
+});
+
+test("收起等待中的文件会停止活跃执行器的 409 自动重试", async ({ page, request }) => {
+  await page.setViewportSize({ width: 1100, height: 850 });
+  const f = await fixture(request);
+  finish(f);
+  let requests = 0;
+  await page.route(`**/api/runs/${f.runId}/files?*`, async (route) => {
+    requests++;
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "执行器尚未释放" }),
+    });
+  });
+  const drawer = await openDrawer(page, f);
+  await drawer.getByTestId("run-drawer-tab-io").click();
+  await drawer.getByRole("button", { name: "查看内容" }).click();
+  await expect(drawer).toContainText("每 2 秒自动重试");
+  await page.screenshot({ path: test.info().outputPath("file-preview-wait.png") });
+  await drawer.getByRole("button", { name: "收起", exact: true }).click();
+  const before = requests;
+  // 必须跨过一次 2 秒计时周期，才能证明收起取消了自动请求。
+  await page.waitForTimeout(2300);
+  expect(requests).toBe(before);
+  await expect(drawer).not.toContainText("自动重试");
 });
