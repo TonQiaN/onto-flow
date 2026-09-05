@@ -38,8 +38,8 @@
 - [ ] 没有新增第五种删除保护。四种是：四个可被引用库经 `usedByNames()` 答 409；workflow DELETE 的运行中守卫；folder DELETE 的重名守卫；run DELETE 经 `monitor/cleanup.ts` 的 `deleteRun` 拒绝运行中
 - [ ] 没有手写引用 join：`src/server/references.ts` 是唯一 join 引用关系的模块；Skill / Tool 的引用方是**工作流**（`workflow_skills` / `workflow_tools`，detail「技能集」/「Tool 集」，href 指向工作流设置页），Action 的预载与可见 Tool 不是引用、不进删除保护
 - [ ] 破坏性路径仍只在 `src/server/monitor/cleanup.ts`；没有第二处删 `run_events` / `runs` / `data/runs/<id>`
-- [ ] 轮次行与节点行的线上形态没变（A round row has a skeleton and a payload）：`/api/runs/[id]` 与 SSE `snapshot` 帧的 `nodes` 与 `rounds` 都只有骨架，且是 `listNodeSkeletons` / `listRoundSkeletons`（`src/server/run-rounds.ts`）在 `select` 时就不取重载荷，不是取回来再删（`run_nodes` 表上根本没有这三列，重载荷只有轮次行这一份）；`src/app/runs/lib.ts` 的 `RunNodeRow` 是对应的骨架类型；`inputs` / `outputs` / `snapshot` 只经 `/api/runs/[id]/nodes/[nodeId]/rounds/[round]` 按轮出去，抽屉在页签打开或换轮时取一轮并缓存，停在轨迹页签一条都不发；骨架列（`exitName` / `error` 也在其中）只在传了才改写——`settleRound` / `settleRoundIfRunning` 的可选列一律不传即保持，只有终态与 `finishedAt` 无条件改写，随后落下的取消不会把这一轮真走过的出口清成 null（`runner.test.ts` 的反向次序用例咬住这一点）
-- [ ] 清理的保留分层没变（A round row has a skeleton and a payload）：events 目标删 `run_events` 并把 `run_node_rounds` 的 `inputs` / `outputs` / `snapshot` 置空，**不删行**；置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不是「该运行有够龄事件行」——免费的输入→输出运行与首个事件前就失败的 Action 没有事件行，同样要被置空并计进预览；runs 目标与 `deleteRun` 才随 `runs` 级联删掉整行；预览与真做用同一份统计（被置空的轮次行数，以及级联的轮次行数）
+- [ ] 轮次行与节点行的线上形态没变（A round row has a skeleton and a payload）：`/api/runs/[id]` 与 SSE `snapshot` 帧的 `nodes` 与 `rounds` 都只有骨架，且是 `listNodeSkeletons` / `listRoundSkeletons`（`src/server/run-rounds.ts`）在 `select` 时就不取重载荷，不是取回来再删（`run_nodes` 表上根本没有这些重载荷列，重载荷只有轮次行这一份）；`src/app/runs/lib.ts` 的 `RunNodeRow` 是对应的骨架类型；`inputs` / `outputs` / `snapshot` / `artifactValidation` 只经 `/api/runs/[id]/nodes/[nodeId]/rounds/[round]` 按轮出去，抽屉在页签打开或换轮时取一轮并缓存，停在轨迹页签一条都不发；骨架列（`exitName` / `error` 也在其中）只在传了才改写——`settleRound` / `settleRoundIfRunning` 的可选列一律不传即保持，只有终态与 `finishedAt` 无条件改写，随后落下的取消不会把这一轮真走过的出口清成 null（`runner.test.ts` 的反向次序用例咬住这一点）
+- [ ] 清理的保留分层没变（A round row has a skeleton and a payload）：events 目标删 `run_events` 并把 `run_node_rounds` 的 `inputs` / `outputs` / `snapshot` / `artifactValidation` 置空，**不删行**；置空的资格按**运行**算（已终态且 `finished_at` 早于截止），不是「该运行有够龄事件行」——免费的输入→输出运行与首个事件前就失败的 Action 没有事件行，同样要被置空并计进预览；runs 目标与 `deleteRun` 才随 `runs` 级联删掉整行；预览与真做用同一份统计（被置空的轮次行数，以及级联的轮次行数）
 - [ ] 文件夹路径一律用 `isFolderEntityKind` 守门；工作流没有进文件夹（ADR-0005）
 
 ## 4. 路由载荷与页面（Conventions）
@@ -67,7 +67,7 @@
 - [ ] 会话事件到达即写 `run_events`（运行页那条 SSE 端点轮询 SQLite，没有进程内 pubsub）；没有把事件攒到节点结束再写；每条新写入的行都带 `session_id`（`events.ts` 的通用落库写入，它是 `run_events` 唯一的写入者）
 - [ ] 用量按 chunk 求和、`outputTokens` 已含推理，没有把推理另算一桶；费用在写入时按到达时刻定价，未知模型为 0 而不是猜价
 - [ ] 每运行组合没有 stdout logger（stdout 属于协议）；`dshHome` / `agentsHome` 钉在运行目录内；节点步数上限仍在
-- [ ] 声明的产物必须真在盘上；模型说写了不算证据（ADR-0008）
+- [ ] 仅所选出口的产物在会话关闭后验收；JSON 语法与受理时冻结的契约通过后才标成功，失败文件、字段诊断与费用保留但不向下游交付；文本和文件不被强行解析 JSON。契约通过没有写成业务质量通过（A declared artifact must pass its delivery contract / ADR-0020）
 - [ ] 压缩摘要的用量仍经 `compaction/summary` 记成 `node_usage` 行 `compaction:<seq>`、进 `run_nodes.cost`；提交阶段失败那次无法计费是已知例外（Compaction summary usage arrives on `compaction/summary`）
 - [ ] 搜索三件套只在生效的 `toggles.webSearch` 为真时挂、全局默认关；改了别的开关行也只挂目录标了那个键的行（DeepSeek search is off by default）
 - [ ] `TMPDIR=<run>/tmp` 与 spill root `<run>/home/spill` 仍钉在运行目录内；`spill-policy.maxInlineBytes`、`tool-todo.allowParallelInProgress`、`tool-fs-search.sampleOverCapGlobResults` 三个隐性必填键没被删（`TMPDIR` is pinned / Every composition row is decided in three places）

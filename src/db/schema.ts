@@ -11,6 +11,7 @@ import {
 } from "drizzle-orm/sqlite-core";
 // 相对路径而非 @/ 别名：drizzle-kit 打包 schema.ts 时不认 tsconfig 的路径映射。
 import { EMPTY_RUN_GRAPH, type RunGraph } from "../lib/run-graph";
+import type { ArtifactValidation } from "../lib/artifact-contract";
 
 const id = () =>
   text("id")
@@ -465,11 +466,15 @@ export const runNodeRounds = sqliteTable(
     /**
      * 这一轮自己的 PortValue 映射（`{ [portName]: PortValue }`）与运行快照——快照是该节点
      * 本轮实际使用的完整配置（prompt、rule、各 Skill 与 Tool 全文、模型、思考强度、端口
-     * 定义），不随实体后续修改而改变。抽屉按光标所在轮读这一行；事件清理只置空这三列。
+     * 定义），不随实体后续修改而改变。抽屉按光标所在轮读这一行；事件清理只置空重载荷列。
      */
     inputs: text("inputs", { mode: "json" }).$type<Record<string, unknown> | null>(),
     outputs: text("outputs", { mode: "json" }).$type<Record<string, unknown> | null>(),
     snapshot: text("snapshot", { mode: "json" }).$type<Record<string, unknown> | null>(),
+    /** 产物契约证据随轮次按需读取，事件清理与其他重载荷一起置空。 */
+    artifactValidation: text("artifact_validation", {
+      mode: "json",
+    }).$type<ArtifactValidation | null>(),
   },
   (t) => [uniqueIndex("run_node_rounds_unique").on(t.runId, t.nodeId, t.round)],
 );

@@ -4,9 +4,9 @@
  *
  * - 实质内容一律走工作区文件。连线不搬运内容，只在提示里生成「去读哪个文件」。
  * - 数据面 schema 由输出端口生成：每个输出端口一个字段，值是该端口产物的实际路径。
- * - 产物没写出来是唯一的机械兜底：文件不存在即节点失败，不管模型说了什么。
+ * - 产物必须存在；JSON 产物须可解析且符合受理时的契约，失败证据按轮保存。
  * - Action、模型、端口与能力关系在运行受理时已经冻结；Skill 正文按活链接契约
- *   在会话启动前读取工作区投影，并与实际渲染的提示一起写进 run_nodes.snapshot。
+ *   在会话启动前读取工作区投影，并与实际渲染的提示一起写进 run_node_rounds.snapshot。
  * - 预载技能零改造复用上游手势：提示正文前每个预载技能各一行 `/<slug>`，上游
  *   tool-skill 的 agent/pre-step 在同一步里把 `<skill_content>` 以 skill-invocation
  *   来源注入——等同于人在 CLI 里敲斜杠命令（ADR-0016）。
@@ -17,7 +17,6 @@ import { and, eq, sql } from "drizzle-orm";
 import { db, nodeUsage, runNodes } from "@/db";
 import { exitsOf, hasNamedExits, type ResolvedNode, type ResolvedPort } from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
-import { DATA_DIR } from "@/server/fs-safety";
 import type { NodeToolFilter } from "@/server/harness/rpc/types";
 import type { RunProcess } from "@/server/harness/runtime";
 import { WORKSPACE_SKILLS_SUBDIR, type RunWorkspace } from "@/server/harness/workspace";
@@ -32,7 +31,13 @@ import {
   unpersistedUsageForSession,
   type EventSinkContext,
 } from "./events";
-import { attachRoundSnapshot, beginRound, settleRoundIfRunning } from "./rounds";
+import {
+  attachArtifactValidation,
+  attachRoundSnapshot,
+  beginRound,
+  settleRoundIfRunning,
+} from "./rounds";
+import { inspectArtifacts } from "./artifacts";
 // 循环依赖（runner → action → runner）在 ESM 下安全：isRunCancelled 是函数声明，
 // 且只在 runActionNode 执行期调用，那时 runner 模块体早已求值完毕。
 import { isRunCancelled } from "./runner";
@@ -74,6 +79,7 @@ export interface RunSnapshotPort {
   name: string;
   objectTypeName: string;
   kind: "text" | "file" | "json";
+  jsonSchema?: string | null;
   /** 输出端口的产物路径（相对工作区，含本轮的 rounds/ 前缀） */
   artifactPath?: string;
   /** 输出端口所属的具名出口 */
@@ -282,9 +288,21 @@ export async function runActionNode(ctx: ActionNodeContext): Promise<ActionNodeR
 
   const selectedExit = pickExit(action.name, exits, branching, captured.value);
   const produced = exits.find((e) => e.name === selectedExit)?.ports ?? [];
-  const outputs = collectArtifacts(action.name, produced, ctx.workspace);
   // 会话用完即关：同一子进程里后续节点各自开自己的会话，互不可见。
   await ctx.proc.closeSession(sessionId);
+  assertNotCancelled(ctx.runId);
+  const validation = inspectArtifacts(produced, ctx.workspace.workspaceDir);
+  attachArtifactValidation({ runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round }, validation);
+  const invalid = validation.artifacts.find((artifact) => artifact.issues.length > 0);
+  if (invalid) {
+    const issue = invalid.issues[0];
+    throw new Error(
+      `Action「${action.name}」产物契约校验失败：端口「${invalid.port}」 · ${invalid.artifactPath}\n字段：${issue.path}\n期望：${issue.expected}\n实际：${issue.actual}`,
+    );
+  }
+  const outputs = Object.fromEntries(
+    validation.artifacts.map((artifact) => [artifact.port, artifact.file!]),
+  ) as Record<string, PortValue>;
   // 这一轮到此为止：收口轮次行，记下本轮真正走出的出口与产物。失败路径的收口在
   // runner.ts 的 catch 里（超时、缺结构化输出、产物不在盘上、会话关不掉都从这里抛出去）。
   // 只在这一行仍是 running 时写：取消可能在上面那两次 await 之间到达并先写下 cancelled，
@@ -368,6 +386,7 @@ function toSnapshotPort(port: {
   name: string;
   objectTypeName: string;
   kind: "text" | "file" | "json";
+  jsonSchema?: string | null;
   artifactPath?: string | null;
   exitName?: string | null;
 }): RunSnapshotPort {
@@ -375,6 +394,7 @@ function toSnapshotPort(port: {
     name: port.name,
     objectTypeName: port.objectTypeName,
     kind: port.kind,
+    ...(port.kind === "json" ? { jsonSchema: port.jsonSchema ?? null } : {}),
     ...(port.artifactPath ? { artifactPath: port.artifactPath } : {}),
     ...(port.exitName ? { exitName: port.exitName } : {}),
   };
@@ -454,6 +474,17 @@ function buildPrompt(
       `不要把长文本塞进 structured_output——下游只需要工作区里的产物路径。`,
   );
 
+  const jsonContracts = ports.outputs
+    .filter((port) => port.kind === "json")
+    .map(
+      (port) =>
+        `- ${port.name}（${String(port.artifactPath)}）：${port.jsonSchema ?? "必须是可解析的 JSON"}`,
+    );
+  if (jsonContracts.length > 0)
+    sections.push(
+      `## JSON 产物契约\n\n所选出口的 JSON 文件须满足以下契约，否则节点会失败；文件路径仍填进 structured_output。\n\n${jsonContracts.join("\n")}`,
+    );
+
   if (rule.trim()) sections.push(`## 执行规则\n\n${rule.trim()}`);
   return sections.join("\n\n");
 }
@@ -532,42 +563,6 @@ function buildOutputSchema(exits: NodeExit[], branching: boolean): Record<string
     }
   }
   return { type: "object", additionalProperties: false, properties, required };
-}
-
-/**
- * 校验声明的产物真的落盘，并转成下游可读的 PortValue。
- * 模型说写了不算数，文件在不在才算——这是双通道结果唯一的机械兜底。
- */
-function collectArtifacts(
-  actionName: string,
-  outputPorts: readonly ResolvedPort[],
-  workspace: RunWorkspace,
-): Record<string, PortValue> {
-  const outputs: Record<string, PortValue> = {};
-  for (const port of outputPorts) {
-    const artifactPath = port.artifactPath!;
-    const abs = path.join(workspace.workspaceDir, artifactPath);
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
-      throw new Error(`Action「${actionName}」声明的产物没有写出来：${artifactPath}`);
-    }
-    outputs[port.name] = {
-      kind: "file",
-      file: {
-        path: path.relative(DATA_DIR, abs),
-        name: path.basename(artifactPath),
-        mime: guessMime(artifactPath),
-      },
-    };
-  }
-  return outputs;
-}
-
-function guessMime(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".md") return "text/markdown";
-  if (ext === ".json") return "application/json";
-  if (ext === ".txt") return "text/plain";
-  return "application/octet-stream";
 }
 
 function usageRollupKey(runId: string, sessionId: string): string {

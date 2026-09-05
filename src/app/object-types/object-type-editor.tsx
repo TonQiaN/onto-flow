@@ -6,6 +6,7 @@
  */
 import { useCallback, useState } from "react";
 import type { PortKind } from "@/components/canvas/node-model";
+import { ContractSample } from "./contract-sample";
 import {
   FolderPicker,
   type FolderRef,
@@ -204,19 +205,27 @@ export function ObjectTypeEditor({
                 )}
               </div>
               {kind === "json" && (
-                <label className="block">
-                  <span className="mb-1 block text-sm font-medium text-zinc-700">
-                    JSON Schema（可选，同时用作结构化输出 schema）
-                  </span>
-                  <textarea
-                    value={jsonSchema}
-                    onChange={(e) => setJsonSchema(e.target.value)}
-                    rows={14}
-                    spellCheck={false}
-                    placeholder='{"type":"object","properties":{...},"required":[...]}'
-                    className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
-                  />
-                </label>
+                <>
+                  <label className="block">
+                    <span className="mb-1 block text-sm font-medium text-zinc-700">
+                      JSON 产物契约（可选）
+                    </span>
+                    <textarea
+                      value={jsonSchema}
+                      onChange={(e) => setJsonSchema(e.target.value)}
+                      rows={8}
+                      spellCheck={false}
+                      placeholder='{"type":"object","properties":{...},"required":[...]}'
+                      className="w-full rounded-md border border-zinc-300 px-3 py-2 font-mono text-xs leading-5 focus:border-zinc-500 focus:outline-none"
+                    />
+                  </label>
+                  <p className="text-xs leading-5 text-zinc-500">
+                    节点成功前会校验 JSON 文件内容。支持
+                    type、properties、required、additionalProperties、items、enum、const、oneOf；其他校验关键字会在保存时被拒绝。不填契约时仍须通过
+                    JSON 语法检查。
+                  </p>
+                  <ContractSample jsonSchema={jsonSchema} />
+                </>
               )}
             </>
           )}

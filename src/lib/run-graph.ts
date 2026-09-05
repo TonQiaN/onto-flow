@@ -95,6 +95,7 @@ function normalizePort(port: ResolvedPort): ResolvedPort {
     kind: port.kind,
     exitName: port.exitName ?? null,
     artifactPath: port.artifactPath ?? null,
+    jsonSchema: port.jsonSchema ?? null,
   };
 }
 
@@ -135,6 +136,7 @@ function parsePort(value: unknown, where: string): ResolvedPort {
     kind: kind as ResolvedPort["kind"],
     exitName: asNullableString(port.exitName, `${where}.exitName`),
     artifactPath: asNullableString(port.artifactPath, `${where}.artifactPath`),
+    jsonSchema: asNullableString(port.jsonSchema, `${where}.jsonSchema`),
   };
 }
 

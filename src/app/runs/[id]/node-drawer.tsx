@@ -22,6 +22,7 @@ import { StatusBadge } from "../status-badge";
 import { AgentTrajectory } from "./agent-trajectory";
 import { PortValueView } from "./port-value-view";
 import { SnapshotView } from "./snapshot-view";
+import { ArtifactValidationView } from "./artifact-validation-view";
 
 type Tab = "trajectory" | "io" | "snapshot";
 
@@ -60,7 +61,9 @@ function PortSection({
 /** 这一轮是否留下了端口值：被清理置空与「本就没有」都落在同一句文案上 */
 function hasPortValues(payload: RunNodeRoundPayload): boolean {
   return (
-    Object.keys(payload.inputs ?? {}).length > 0 || Object.keys(payload.outputs ?? {}).length > 0
+    payload.artifactValidation != null ||
+    Object.keys(payload.inputs ?? {}).length > 0 ||
+    Object.keys(payload.outputs ?? {}).length > 0
   );
 }
 
@@ -257,6 +260,12 @@ export function NodeDrawer({
             (entry?.status === "ready" && hasPortValues(entry.payload) ? (
               // 换一轮就换一份产物：不重挂载的话，文件预览会留在上一轮那份内容上
               <div key={round.id} className="space-y-4">
+                {entry.payload.artifactValidation && (
+                  <ArtifactValidationView
+                    validation={entry.payload.artifactValidation}
+                    runId={runId}
+                  />
+                )}
                 <PortSection
                   title="输入"
                   entries={Object.entries(entry.payload.inputs ?? {})}

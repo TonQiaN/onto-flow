@@ -202,6 +202,65 @@ afterAll(() => {
 });
 
 describe("Action 执行时边界", () => {
+  it.each([
+    ["缺少必填项", "{}"],
+    ["额外字段", '{"items":[],"wrong":true}'],
+    ["类型错误", '{"items":"wrong"}'],
+    ["无效 JSON", "{broken"],
+  ])("JSON 产物%s不能成功，失败文件与费用证据保留", async (_name, content) => {
+    const definition = admittedDefinition();
+    definition.ports.outputs[0].kind = "json";
+    definition.ports.outputs[0].jsonSchema = JSON.stringify({
+      type: "object",
+      properties: { items: { type: "array" } },
+      required: ["items"],
+      additionalProperties: false,
+    });
+    const ctx = context({
+      definition,
+      usage: { outputTokens: 12, cost: 0.001 },
+      runTurn: async () => {
+        fs.writeFileSync(path.join(workspaceRoot, "result.md"), content);
+      },
+    });
+    await expect(runActionNode(ctx)).rejects.toThrow("产物契约校验失败");
+    expect(fs.readFileSync(path.join(workspaceRoot, "result.md"), "utf8")).toBe(content);
+    const row = sqlite
+      .prepare("select status, artifact_validation from run_node_rounds where node_id='node-1'")
+      .get() as { status: string; artifact_validation: string };
+    expect(row.status).not.toBe("success");
+    const receipt = JSON.parse(row.artifact_validation);
+    expect(receipt.execution).toBe("completed");
+    expect(receipt.artifacts[0].issues.length).toBeGreaterThan(0);
+    expect(receipt.artifacts[0].sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(sqlite.prepare("select cost from run_nodes where node_id='node-1'").get()).toMatchObject(
+      { cost: 0.001 },
+    );
+  });
+
+  it("JSON 契约通过后才返回成功；使用受理时冻结的契约而不是当前库定义", async () => {
+    const definition = admittedDefinition();
+    definition.ports.outputs[0].kind = "json";
+    definition.ports.outputs[0].jsonSchema =
+      '{"type":"object","properties":{"items":{"type":"array"}},"required":["items"]}';
+    // 库里的新契约故意与已受理的版本矛盾。
+    sqlite
+      .prepare("update object_types set json_schema=? where id='type-1'")
+      .run('{"type":"array"}');
+    const ctx = context({
+      definition,
+      runTurn: async () => {
+        fs.writeFileSync(path.join(workspaceRoot, "result.md"), '{"items":[]}');
+      },
+    });
+    await expect(runActionNode(ctx)).resolves.toMatchObject({ selectedExit: null });
+    const row = sqlite
+      .prepare("select status, artifact_validation from run_node_rounds where node_id='node-1'")
+      .get() as { status: string; artifact_validation: string };
+    expect(row.status).toBe("success");
+    expect(JSON.parse(row.artifact_validation).artifacts[0].issues).toEqual([]);
+  });
+
   it("一进门就开出本轮的骨架行：会话还没开就失败也在时间轴上占一段", async () => {
     const definition = admittedDefinition();
     // 输出端口没有产物路径会在渲染提示之前抛，骨架行必须已经在库里（ADR-0018）。

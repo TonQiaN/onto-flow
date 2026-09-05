@@ -115,6 +115,7 @@ describe("buildRunGraph", () => {
       kind: "text",
       exitName: null,
       artifactPath: null,
+      jsonSchema: null,
     });
 
     // 图里没有对应节点行的节点仍然进图，只是没有坐标可画。
@@ -125,6 +126,17 @@ describe("buildRunGraph", () => {
   it("构造出的图能原样通过校验，且往返 JSON 不变形", () => {
     const graph = buildRunGraph(resolved());
     expect(parseRunGraph(JSON.parse(JSON.stringify(graph)))).toEqual(graph);
+  });
+
+  it("JSON 契约跟随受理端口冻结，往返持久化后不丢失", () => {
+    const workflow = resolved();
+    const port = workflow.nodes[1].outputs[0];
+    port.kind = "json";
+    port.jsonSchema = '{"type":"object","required":["items"]}';
+    const graph = buildRunGraph(workflow);
+    port.jsonSchema = '{"type":"array"}';
+    const restored = parseRunGraph(JSON.parse(JSON.stringify(graph)));
+    expect(restored.nodes[1].outputs[0].jsonSchema).toBe('{"type":"object","required":["items"]}');
   });
 });
 
@@ -193,7 +205,7 @@ describe("parseRunGraph", () => {
     expect(() => parseRunGraph(value)).toThrow();
   });
 
-  it("端口的出口与产物路径缺席时补 null", () => {
+  it("端口的出口、产物路径与 JSON 契约缺席时补 null", () => {
     const parsed: RunGraph = parseRunGraph({
       version: 1,
       nodes: [
@@ -218,6 +230,7 @@ describe("parseRunGraph", () => {
       kind: "text",
       exitName: null,
       artifactPath: null,
+      jsonSchema: null,
     });
   });
 });

@@ -487,6 +487,7 @@ export interface RunFixtureRound {
   inputs?: unknown;
   outputs?: unknown;
   snapshot?: unknown;
+  artifactValidation?: unknown;
 }
 
 export interface SyntheticRunInput {
@@ -558,7 +559,7 @@ export function insertSyntheticRun(input: SyntheticRunInput): string {
       }
 
       const insertRound = database.prepare(
-        "insert into run_node_rounds (id, run_id, node_id, round, session_id, status, started_at, finished_at, exit_name, error, inputs, outputs, snapshot) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "insert into run_node_rounds (id, run_id, node_id, round, session_id, status, started_at, finished_at, exit_name, error, inputs, outputs, snapshot, artifact_validation) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
       for (const round of input.rounds ?? []) {
         insertRound.run(
@@ -575,6 +576,7 @@ export function insertSyntheticRun(input: SyntheticRunInput): string {
           round.inputs == null ? null : JSON.stringify(round.inputs),
           round.outputs == null ? null : JSON.stringify(round.outputs),
           round.snapshot == null ? null : JSON.stringify(round.snapshot),
+          round.artifactValidation == null ? null : JSON.stringify(round.artifactValidation),
         );
       }
     })();

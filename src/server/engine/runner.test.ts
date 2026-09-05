@@ -1064,6 +1064,29 @@ describe("三层设置受理", () => {
 });
 
 describe("运行输入物化", () => {
+  it("JSON 输入不满足受理契约时返回字段错误，不创建运行或启动模型", async () => {
+    sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
+    const graph = materializationWorkflow();
+    graph.nodes.find((node) => node.id === "json-input")!.outputs[0].jsonSchema =
+      '{"type":"object","properties":{"items":{"type":"array"}},"required":["items"]}';
+    const result = await startResolvedRun(
+      graph,
+      {
+        "text-input": { kind: "text", text: "正文" },
+        "json-input": { kind: "json", json: { wrong: true } },
+      },
+      testSettings(),
+      { source: "workflow" },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      status: 422,
+      issues: [{ nodeId: "json-input", message: expect.stringContaining("$.items") }],
+    });
+    expect(sqlite.prepare("SELECT count(*) AS n FROM runs").get()).toEqual({ n: 0 });
+    expect(controls.launchRun).not.toHaveBeenCalled();
+  });
+
   it("Skill 投影缺失时在受理前返回 422，不创建运行或付费节点", async () => {
     sqlite.exec("DELETE FROM run_nodes; DELETE FROM runs;");
     const graph = resolvedWorkflow();

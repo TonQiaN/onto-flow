@@ -45,6 +45,7 @@ import { releaseSkillProjections, retainSkillProjections } from "@/server/skill-
 import { readSettings, type SettingsDocument } from "@/server/settings";
 import { finalizeUnsettledActionUsage, refreshUnsettledActionUsage, runActionNode } from "./action";
 import { collectCapabilities, materializeToolPlugins, toolFilterForAction } from "./capabilities";
+import { validateJsonArtifact } from "@/server/harness/artifact-schema";
 import { recordSessionEvent, type EventSinkContext } from "./events";
 import { closeRunningRounds, recordSkippedRounds, settleRound } from "./rounds";
 
@@ -368,6 +369,17 @@ export async function startResolvedRun(
         message: `输入节点「${node.label}」的内容超过 32 MiB`,
       });
       continue;
+    }
+    if (serializedJson !== null) {
+      const violations = validateJsonArtifact(serializedJson, port.jsonSchema ?? null);
+      if (violations.length > 0) {
+        const violation = violations[0];
+        issues.push({
+          nodeId: node.id,
+          message: `输入节点「${node.label}」不符合 JSON 契约：${violation.path}；期望 ${violation.expected}；实际 ${violation.actual}`,
+        });
+        continue;
+      }
     }
     runInputs[node.id] = value;
   }

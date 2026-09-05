@@ -28,6 +28,7 @@ export interface ResolvedActionPort {
   objectTypeId: string;
   objectTypeName: string;
   kind: "text" | "file" | "json";
+  jsonSchema?: string | null;
   artifactPath: string | null;
   exitName: string | null;
 }
@@ -281,6 +282,7 @@ export async function resolveWorkflow(
       objectTypeId: row.objectTypeId,
       objectTypeName: type?.name ?? "未知类型",
       kind: type?.kind ?? "text",
+      jsonSchema: type?.jsonSchema ?? null,
       artifactPath: row.artifactPath ?? null,
       exitName: row.exitName ?? null,
     };
@@ -293,6 +295,7 @@ export async function resolveWorkflow(
       objectTypeId: resolved.objectTypeId,
       objectTypeName: resolved.objectTypeName,
       kind: resolved.kind,
+      jsonSchema: resolved.jsonSchema ?? null,
       artifactPath: resolved.artifactPath ?? null,
       exitName: resolved.exitName ?? null,
     };
@@ -338,6 +341,7 @@ export async function resolveWorkflow(
       objectTypeId: row.objectTypeId ?? "",
       objectTypeName: type?.name ?? "未知类型",
       kind: type?.kind ?? "text",
+      jsonSchema: type?.jsonSchema ?? null,
     };
     const label =
       row.label ||

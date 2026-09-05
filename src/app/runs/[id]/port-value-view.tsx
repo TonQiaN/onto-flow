@@ -45,9 +45,11 @@ interface FilePreviewState {
 function FileValue({
   runId,
   file,
+  previewLabel,
 }: {
   runId: string;
   file: { path: string; name: string; mime: string };
+  previewLabel: string;
 }) {
   const [preview, setPreview] = useState<FilePreviewState>({ status: "idle" });
 
@@ -96,7 +98,7 @@ function FileValue({
             disabled={preview.status === "loading"}
             className="text-xs text-zinc-500 underline transition-colors hover:text-zinc-900 disabled:opacity-50"
           >
-            {preview.status === "loading" ? "读取中…" : "查看内容"}
+            {preview.status === "loading" ? "读取中…" : previewLabel}
           </button>
         )}
         {preview.status === "loaded" && (
@@ -125,7 +127,15 @@ function FileValue({
 }
 
 /** PortValue 展示：ADR-0012 后只接受文件引用，不保留旧内联值的兼容渲染。 */
-export function PortValueView({ value, runId }: { value: unknown; runId?: string }) {
+export function PortValueView({
+  value,
+  runId,
+  previewLabel = "查看内容",
+}: {
+  value: unknown;
+  runId?: string;
+  previewLabel?: string;
+}) {
   // 输入端口的值恒是 PortValue[]（一个口可接多条入线的汇总），逐项渲染，
   // 否则数组落到 JSON dump、文件值的预览入口在输入区永远不出现。
   if (Array.isArray(value)) {
@@ -135,7 +145,7 @@ export function PortValueView({ value, runId }: { value: unknown; runId?: string
     return (
       <div className="space-y-2">
         {value.map((item, index) => (
-          <PortValueView key={index} value={item} runId={runId} />
+          <PortValueView key={index} value={item} runId={runId} previewLabel={previewLabel} />
         ))}
       </div>
     );
@@ -147,7 +157,14 @@ export function PortValueView({ value, runId }: { value: unknown; runId?: string
   // 回边进入下一轮时同一端口会换成新的产物路径；key 随路径变化可同时清空
   // 已加载的旧正文并让旧的在途请求失去挂载目标，徽章与预览不会跨轮串线。
   if (runId) {
-    return <FileValue key={`${runId}:${pv.file.path}`} runId={runId} file={pv.file} />;
+    return (
+      <FileValue
+        key={`${runId}:${pv.file.path}`}
+        runId={runId}
+        file={pv.file}
+        previewLabel={previewLabel}
+      />
+    );
   }
   return (
     <div className="flex flex-wrap items-center gap-2">

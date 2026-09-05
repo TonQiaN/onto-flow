@@ -292,7 +292,7 @@ describe("运行工作区清理", () => {
     ]);
   });
 
-  it("事件清理只清空轮次行的三个重载荷列，骨架保留，dryRun 与真做一致", () => {
+  it("事件清理只清空轮次行的重载荷列，骨架保留，dryRun 与真做一致", () => {
     sqlite
       .prepare(
         "insert into runs (id, workflow_id, status, run_dir, started_at, finished_at) values (?, 'workflow-events', 'success', NULL, ?, ?)",
@@ -303,24 +303,29 @@ describe("运行工作区清理", () => {
       INSERT INTO run_node_rounds (id, run_id, node_id, round, status, started_at, inputs, outputs, snapshot)
         VALUES ('e1', 'run-events', 'n1', 0, 'success', ${old}, '{"a":1}', '{"b":2}', '{"c":3}'),
                ('e2', 'run-events', 'n1', 1, 'success', ${old}, NULL, NULL, NULL);
+      UPDATE run_node_rounds SET artifact_validation = '{"artifacts":[]}' WHERE id = 'e2';
       INSERT INTO run_nodes (id, run_id, node_id, label, status, started_at)
         VALUES ('ne1', 'run-events', 'n1', '甲', 'success', ${old});
     `);
 
     const preview = runCleanup({ target: "events", beforeDays: 1, dryRun: true });
-    expect(preview.detail).toContain("事件明细 1 条，另清空 1 行轮次的输入输出与快照");
+    expect(preview.detail).toContain("事件明细 1 条，另清空 2 行轮次的输入输出与快照");
 
     const deleted = runCleanup({ target: "events", beforeDays: 1, dryRun: false });
     // 预览与真做共用同一份统计：真做只在末尾多一句 VACUUM 结果，前面必须逐字相同。
     expect(deleted.detail.startsWith(preview.detail)).toBe(true);
     expect(deleted.affected).toEqual(preview.affected);
     expect(sqlite.prepare("select count(*) as count from run_events").get()).toEqual({ count: 0 });
-    // 骨架行数不变，只有三个重载荷列被置空——回放退化到轮次级仍有依据。
+    // 骨架行数不变，只有重载荷列被置空——回放退化到轮次级仍有依据。
     expect(
-      sqlite.prepare("select id, inputs, outputs, snapshot from run_node_rounds order by id").all(),
+      sqlite
+        .prepare(
+          "select id, inputs, outputs, snapshot, artifact_validation from run_node_rounds order by id",
+        )
+        .all(),
     ).toEqual([
-      { id: "e1", inputs: null, outputs: null, snapshot: null },
-      { id: "e2", inputs: null, outputs: null, snapshot: null },
+      { id: "e1", inputs: null, outputs: null, snapshot: null, artifact_validation: null },
+      { id: "e2", inputs: null, outputs: null, snapshot: null, artifact_validation: null },
     ]);
     // 重载荷只有轮次行这一份：置空即全部置空，run_nodes 上没有第二处副本会漏网。
     expect(
