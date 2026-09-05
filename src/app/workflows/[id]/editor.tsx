@@ -6,7 +6,7 @@ import { fetchAllPages } from "@/components/library/fetch-all-pages";
  *
  * - 单一自定义 nodeType（flow-node.tsx 内部按 data.kind 分发）
  * - isValidConnection 用 store.getState() 取最新图（防 stale 闭包）：
- *   同 objectTypeId + 目标输入端口无入线 + getOutgoers DFS 防环
+ *   与服务端共用候选连线规则，允许汇总与有重入上限的回边
  * - 拖线时把源端口信息放进 CanvasStateProvider，节点据此高亮可接端口、淡化其余端口
  * - 双击 Action 节点 → ActionInspector 编辑**共享 Action**（ADR-0004），
  *   保存后就地刷新画布上引用它的全部节点，不动视口；检查器的预载 / 可见 Tool 候选
@@ -29,7 +29,6 @@ import {
   ReactFlowProvider,
   ViewportPortal,
   addEdge,
-  getOutgoers,
   useEdgesState,
   useNodesState,
   useReactFlow,
@@ -40,6 +39,7 @@ import {
   type IsValidConnection,
   type NodeChange,
   type OnConnectStart,
+  type OnConnectEnd,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -50,7 +50,12 @@ import {
   type SkillRow,
   type ToolRow,
 } from "@/components/library";
-import type { ValidationIssue } from "@/lib/graph";
+import {
+  classifyEdges,
+  connectionProblem,
+  type GraphEdge,
+  type ValidationIssue,
+} from "@/lib/graph";
 import type { PortValue } from "@/lib/values";
 import { CanvasStateProvider, type ConnectingState } from "@/components/canvas/canvas-state";
 import { FlowEdgeView } from "@/components/canvas/flow-edge";
@@ -59,6 +64,7 @@ import type { FlowNode } from "@/components/canvas/node-model";
 import { ActionInspector, type InspectorTarget } from "./action-inspector";
 import { ACTION_DRAG_MIME, NodePanel } from "./node-panel";
 import { RunDialog, type RunInputSpec } from "./run-dialog";
+import { ConnectionDialog } from "./connection-dialog";
 import {
   actionMeta,
   actionPortSnapshots,
@@ -66,6 +72,7 @@ import {
   buildFlowEdges,
   buildFlowNodes,
   pruneEdges,
+  resolveCanvasNodes,
   toEdgeDto,
   toNodeDto,
   type ActionItem,
@@ -131,6 +138,8 @@ function EditorInner({ workflowId }: { workflowId: string }) {
 
   // 画布交互态
   const [connecting, setConnecting] = useState<ConnectingState | null>(null);
+  const [connectionDialog, setConnectionDialog] = useState(false);
+  const connectionId = useRef("");
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
   const [inspector, setInspector] = useState<InspectorTarget | null>(null);
   const [snap, setSnap] = useState(false);
@@ -259,79 +268,136 @@ function EditorInner({ workflowId }: { workflowId: string }) {
   );
 
   // ---------- 连线 ----------
-  const isValidConnection: IsValidConnection<Edge> = useCallback(
-    (conn) => {
-      // 用 store 最新状态，绝不依赖渲染期闭包（Dify 模式）
-      const { nodes: liveNodes, edges: liveEdges } = storeApi.getState();
-      const source = liveNodes.find((n) => n.id === conn.source);
-      const target = liveNodes.find((n) => n.id === conn.target);
-      if (!source || !target || source.id === target.id) return false;
+  const candidateEdge = useCallback(
+    (conn: Connection | Edge): GraphEdge => ({
+      id: connectionId.current,
+      sourceNodeId: conn.source,
+      sourcePort: conn.sourceHandle ?? "value",
+      targetNodeId: conn.target,
+      targetPort: conn.targetHandle ?? "value",
+    }),
+    [],
+  );
 
-      const sourcePort = source.data.outputs.find((p) => p.name === (conn.sourceHandle ?? "value"));
-      const targetPort = target.data.inputs.find((p) => p.name === (conn.targetHandle ?? "value"));
-      if (!sourcePort || !targetPort) return false;
-      // 严格 nominal 类型：Object Type id 相等才能连
-      if (sourcePort.objectTypeId !== targetPort.objectTypeId) return false;
-      // 目标输入端口最多一条入线
-      if (
-        liveEdges.some(
-          (e) =>
-            e.target === conn.target &&
-            (e.targetHandle ?? "value") === (conn.targetHandle ?? "value"),
-        )
-      )
-        return false;
-      // getOutgoers DFS 防环：从 target 出发若能回到 source 则成环
-      const hasCycle = (node: FlowNode, seen = new Set<string>()): boolean => {
-        if (seen.has(node.id)) return false;
-        seen.add(node.id);
-        return getOutgoers(node, liveNodes, liveEdges).some(
-          (o) => o.id === conn.source || hasCycle(o, seen),
-        );
-      };
-      return !hasCycle(target);
+  const checkConnection = useCallback(
+    (candidate: GraphEdge) => {
+      const live = storeApi.getState();
+      return connectionProblem(
+        resolveCanvasNodes(live.nodes, actionById),
+        live.edges.map(toEdgeDto),
+        candidate,
+      );
     },
-    [storeApi],
+    [storeApi, actionById],
+  );
+
+  const isValidConnection: IsValidConnection<Edge> = useCallback(
+    (conn) => !checkConnection(candidateEdge(conn)),
+    [checkConnection, candidateEdge],
   );
 
   /** 拖线开始：记住源端口类型，让所有节点自己算「接不接得上」 */
   const onConnectStart: OnConnectStart = useCallback(
     (_event, params) => {
       const { nodes: liveNodes, edges: liveEdges } = storeApi.getState();
+      connectionId.current = crypto.randomUUID();
+      setBanner(null);
       const node = liveNodes.find((n) => n.id === params.nodeId);
       if (!node || !params.handleType) return;
       const portName = params.handleId ?? "value";
       const ports = params.handleType === "source" ? node.data.outputs : node.data.inputs;
       const port = ports.find((p) => p.name === portName);
       if (!port) return;
-      const occupied = new Set(liveEdges.map((e) => `${e.target}:${e.targetHandle ?? "value"}`));
+      const validHandles = new Set<string>();
+      const resolved = resolveCanvasNodes(liveNodes, actionById);
+      const edgeDtos = liveEdges.map(toEdgeDto);
+      const side = params.handleType === "source" ? "target" : "source";
+      for (const other of liveNodes) {
+        for (const otherPort of side === "target" ? other.data.inputs : other.data.outputs) {
+          const forward = params.handleType === "source";
+          const candidate = {
+            id: connectionId.current,
+            sourceNodeId: forward ? node.id : other.id,
+            sourcePort: forward ? portName : otherPort.name,
+            targetNodeId: forward ? other.id : node.id,
+            targetPort: forward ? otherPort.name : portName,
+          };
+          if (!connectionProblem(resolved, edgeDtos, candidate))
+            validHandles.add(`${other.id}:${side}:${otherPort.name}`);
+        }
+      }
       setConnecting({
         nodeId: node.id,
         handleId: portName,
         handleType: params.handleType,
         objectTypeId: port.objectTypeId,
-        occupied,
+        validHandles,
       });
     },
-    [storeApi],
+    [storeApi, actionById],
   );
 
-  const onConnectEnd = useCallback(() => setConnecting(null), []);
+  const onConnectEnd: OnConnectEnd = useCallback(
+    (_event, state) => {
+      setConnecting(null);
+      if (state.isValid || !state.fromHandle || !state.toHandle) return;
+      const forward = state.fromHandle.type === "source";
+      const from = forward ? state.fromHandle : state.toHandle;
+      const to = forward ? state.toHandle : state.fromHandle;
+      const issue = checkConnection({
+        id: connectionId.current,
+        sourceNodeId: from.nodeId,
+        sourcePort: from.id ?? "value",
+        targetNodeId: to.nodeId,
+        targetPort: to.id ?? "value",
+      });
+      if (issue) setBanner(issue.message);
+    },
+    [checkConnection],
+  );
 
-  const onConnect = useCallback(
-    (conn: Connection) => {
+  const addConnection = useCallback(
+    (candidate: GraphEdge) => {
+      const problem = checkConnection(candidate);
+      if (problem) {
+        setBanner(problem.message);
+        return;
+      }
       const edge: Edge = {
-        id: crypto.randomUUID(),
-        source: conn.source,
-        sourceHandle: conn.sourceHandle,
-        target: conn.target,
-        targetHandle: conn.targetHandle,
+        id: candidate.id,
+        source: candidate.sourceNodeId,
+        sourceHandle: candidate.sourcePort,
+        target: candidate.targetNodeId,
+        targetHandle: candidate.targetPort,
       };
       setEdges((eds) => addEdge(edge, eds));
+      setConnectionDialog(false);
+      setBanner(null);
       markDirty();
     },
-    [setEdges, markDirty],
+    [setEdges, markDirty, checkConnection],
   );
+  const onConnect = useCallback(
+    (conn: Connection) => addConnection(candidateEdge(conn)),
+    [addConnection, candidateEdge],
+  );
+
+  const resolvedNodes = useMemo(() => resolveCanvasNodes(nodes, actionById), [nodes, actionById]);
+  const displayEdges = useMemo(() => {
+    const { backEdgeIds } = classifyEdges(resolvedNodes, edges.map(toEdgeDto));
+    return edges.map((edge) => {
+      const target = resolvedNodes.find((node) => node.id === edge.target);
+      return {
+        ...edge,
+        data: {
+          ...edge.data,
+          backEdgeLabel: backEdgeIds.has(edge.id)
+            ? `回边至「${target?.label}」 · 重入 ${target?.maxReentries ?? 0} 次 · 耗尽${target?.onExhausted === "accept" ? "接受" : "失败"}`
+            : null,
+        },
+      };
+    });
+  }, [edges, resolvedNodes]);
 
   // ---------- 加节点 ----------
   const canvasCenter = useCallback(() => {
@@ -812,7 +878,10 @@ function EditorInner({ workflowId }: { workflowId: string }) {
         </header>
 
         {banner && (
-          <div className="flex items-start justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+          <div
+            role="alert"
+            className="flex items-start justify-between gap-3 border-b border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700"
+          >
             <span>{banner}</span>
             <button
               type="button"
@@ -850,13 +919,15 @@ function EditorInner({ workflowId }: { workflowId: string }) {
               edgeTypes={edgeTypes}
               defaultEdgeOptions={defaultEdgeOptions}
               nodes={nodes}
-              edges={edges}
+              edges={displayEdges}
               nodeTypes={nodeTypes}
               onNodesChange={handleNodesChange}
               onEdgesChange={handleEdgesChange}
               onConnect={onConnect}
               onConnectStart={onConnectStart}
               onConnectEnd={onConnectEnd}
+              onClickConnectStart={onConnectStart}
+              onClickConnectEnd={onConnectEnd}
               isValidConnection={isValidConnection}
               onDrop={onDrop}
               onDragOver={onDragOver}
@@ -910,6 +981,13 @@ function EditorInner({ workflowId }: { workflowId: string }) {
                 position="top-right"
                 className="flex items-center gap-1 rounded-lg border border-zinc-200 bg-white/90 p-1 text-xs shadow-sm backdrop-blur"
               >
+                <ToolButton
+                  active={false}
+                  title="选择起点输出和终点输入，支持汇总与回边"
+                  onClick={() => setConnectionDialog(true)}
+                >
+                  添加连线
+                </ToolButton>
                 <ToolButton
                   active={boxSelect}
                   title="框选模式：左键拖出选框（关闭时按住 Shift 拖也能框选）"
@@ -1069,6 +1147,19 @@ function EditorInner({ workflowId }: { workflowId: string }) {
           )}
         </div>
       </div>
+
+      {connectionDialog && (
+        <ConnectionDialog
+          nodes={resolvedNodes}
+          edges={edges.map(toEdgeDto)}
+          onAdd={addConnection}
+          onClose={() => setConnectionDialog(false)}
+          onEdit={(nodeId) => {
+            setConnectionDialog(false);
+            openInspector(nodeId);
+          }}
+        />
+      )}
 
       {runSpecs && (
         <RunDialog

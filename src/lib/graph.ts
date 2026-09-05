@@ -157,7 +157,16 @@ export function validateGraph(nodes: ResolvedNode[], edges: GraphEdge[]): Valida
     return issues;
   }
 
+  const connections = new Set<string>();
   for (const edge of edges) {
+    const key = JSON.stringify([
+      edge.sourceNodeId,
+      edge.sourcePort,
+      edge.targetNodeId,
+      edge.targetPort,
+    ]);
+    if (connections.has(key)) issues.push({ edgeId: edge.id, message: "这两个端口之间已经有连线" });
+    connections.add(key);
     const source = nodeById.get(edge.sourceNodeId);
     const target = nodeById.get(edge.targetNodeId);
     if (!source || !target) {
@@ -224,12 +233,30 @@ export function validateGraph(nodes: ResolvedNode[], edges: GraphEdge[]): Valida
     if ((target.maxReentries ?? 0) < 1) {
       issues.push({
         edgeId: edge.id,
+        nodeId: target.id,
         message: `这是一条回边，但被回流的节点「${target.label}」没有声明重入上限，循环无法收束`,
       });
     }
   }
 
   return issues;
+}
+
+/**
+ * 编辑过程允许尚未接齐的图，只拒绝本次添加新引入的连线错误。
+ * 整图保存和拖线使用同一套规则；新增边可能把已有边重判为回边，不能只查候选边自身。
+ * 候选 id 必须沿用到实际添加，稳定 DFS 的结果才不会在松开指针后改变。
+ */
+export function connectionProblem(
+  nodes: ResolvedNode[],
+  edges: GraphEdge[],
+  candidate: GraphEdge,
+): ValidationIssue | undefined {
+  const key = (issue: ValidationIssue) => JSON.stringify([issue.edgeId, issue.message]);
+  const previous = new Set(validateGraph(nodes, edges).map(key));
+  return validateGraph(nodes, [...edges, candidate]).find(
+    (issue) => issue.edgeId && (issue.edgeId === candidate.id || !previous.has(key(issue))),
+  );
 }
 
 /** 某节点失败后，其所有下游（传递闭包）应标记 skipped。回边不参与，否则闭包会吞掉整个环。 */

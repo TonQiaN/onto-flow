@@ -19,8 +19,8 @@ export interface ConnectingState {
   handleType: "source" | "target";
   /** 起点端口的 Object Type，nominal 判等的唯一依据（ADR-0002） */
   objectTypeId: string;
-  /** 已被占用的输入端口集合（`${nodeId}:${portName}`），一个输入口最多一条入线 */
-  occupied: Set<string>;
+  /** 共享图规则接受的端口，包含方向；与实际提交使用同一个候选连线 id。 */
+  validHandles: Set<string>;
 }
 
 export interface CanvasContextValue {
@@ -45,7 +45,7 @@ export function useCanvasState(): CanvasContextValue {
 
 /**
  * 拖线过程中某个端口的可接状态：
- * - "ok"        同类型、方向相反、非同节点、输入口未被占用 → 高亮
+ * - "ok"        共享图规则接受的端口 → 高亮
  * - "blocked"   拖线进行中但接不上 → 淡化
  * - "idle"      没有在拖线 → 常态
  */
@@ -64,9 +64,7 @@ export function handleAffinity(
     connecting.handleType === side
   )
     return "idle";
-  if (connecting.nodeId === nodeId) return "blocked";
   if (connecting.handleType === side) return "blocked";
   if (connecting.objectTypeId !== objectTypeId) return "blocked";
-  if (side === "target" && connecting.occupied.has(`${nodeId}:${portName}`)) return "blocked";
-  return "ok";
+  return connecting.validHandles.has(`${nodeId}:${side}:${portName}`) ? "ok" : "blocked";
 }
