@@ -115,6 +115,7 @@ describe("buildRunGraph", () => {
       kind: "text",
       exitName: null,
       artifactPath: null,
+      jsonSchema: null,
     });
 
     // 图里没有对应节点行的节点仍然进图，只是没有坐标可画。
@@ -126,9 +127,26 @@ describe("buildRunGraph", () => {
     const graph = buildRunGraph(resolved());
     expect(parseRunGraph(JSON.parse(JSON.stringify(graph)))).toEqual(graph);
   });
+
+  it("JSON 契约跟随受理端口冻结，往返持久化后不丢失", () => {
+    const workflow = resolved();
+    const port = workflow.nodes[1].outputs[0];
+    port.kind = "json";
+    port.jsonSchema = '{"type":"object","required":["items"]}';
+    const graph = buildRunGraph(workflow);
+    port.jsonSchema = '{"type":"array"}';
+    const restored = parseRunGraph(JSON.parse(JSON.stringify(graph)));
+    expect(restored.nodes[1].outputs[0].jsonSchema).toBe('{"type":"object","required":["items"]}');
+  });
 });
 
 describe("parseRunGraph", () => {
+  it("冻结图遗漏契约字段时拒绝读取，不解释成无契约", () => {
+    const graph = buildRunGraph(resolved());
+    delete graph.nodes[1].outputs[0].jsonSchema;
+    expect(() => parseRunGraph(graph)).toThrow("缺少冻结的 jsonSchema 字段");
+  });
+
   it("空图合法：早于本列的运行就是这张图，没有旧数据分支", () => {
     expect(parseRunGraph(EMPTY_RUN_GRAPH)).toEqual(EMPTY_RUN_GRAPH);
     expect(parseRunGraph(JSON.parse('{"version":1,"nodes":[],"edges":[]}'))).toEqual(
@@ -193,7 +211,7 @@ describe("parseRunGraph", () => {
     expect(() => parseRunGraph(value)).toThrow();
   });
 
-  it("端口的出口与产物路径缺席时补 null", () => {
+  it("端口的出口与产物路径缺席时补 null，契约字段明确提供", () => {
     const parsed: RunGraph = parseRunGraph({
       version: 1,
       nodes: [
@@ -205,7 +223,15 @@ describe("parseRunGraph", () => {
           y: 2,
           actionId: null,
           objectTypeId: "t",
-          inputs: [{ name: "value", objectTypeId: "t", objectTypeName: "文本", kind: "text" }],
+          inputs: [
+            {
+              name: "value",
+              objectTypeId: "t",
+              objectTypeName: "文本",
+              kind: "text",
+              jsonSchema: null,
+            },
+          ],
           outputs: [],
         },
       ],
@@ -218,6 +244,7 @@ describe("parseRunGraph", () => {
       kind: "text",
       exitName: null,
       artifactPath: null,
+      jsonSchema: null,
     });
   });
 });

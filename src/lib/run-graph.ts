@@ -95,6 +95,7 @@ function normalizePort(port: ResolvedPort): ResolvedPort {
     kind: port.kind,
     exitName: port.exitName ?? null,
     artifactPath: port.artifactPath ?? null,
+    jsonSchema: port.jsonSchema ?? null,
   };
 }
 
@@ -128,6 +129,7 @@ function parsePort(value: unknown, where: string): ResolvedPort {
   if (typeof kind !== "string" || !PORT_KINDS.has(kind)) {
     throw new Error(`${where} 的 kind 非法：${JSON.stringify(kind)}`);
   }
+  if (port.jsonSchema === undefined) throw new Error(`${where} 缺少冻结的 jsonSchema 字段`);
   return {
     name: asString(port.name, `${where}.name`),
     objectTypeId: asString(port.objectTypeId, `${where}.objectTypeId`),
@@ -135,6 +137,7 @@ function parsePort(value: unknown, where: string): ResolvedPort {
     kind: kind as ResolvedPort["kind"],
     exitName: asNullableString(port.exitName, `${where}.exitName`),
     artifactPath: asNullableString(port.artifactPath, `${where}.artifactPath`),
+    jsonSchema: asNullableString(port.jsonSchema, `${where}.jsonSchema`),
   };
 }
 

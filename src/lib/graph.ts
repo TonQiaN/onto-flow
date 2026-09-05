@@ -14,6 +14,8 @@ export interface ResolvedPort {
   objectTypeId: string;
   objectTypeName: string;
   kind: "text" | "file" | "json";
+  /** 运行受理时冻结的 JSON 内容契约；未声明时只要求可解析 JSON。 */
+  jsonSchema?: string | null;
   /**
    * 输出端口所属的出口名。null 表示默认出口——节点没有分支，全部输出恒生效。
    * 一旦有具名出口，该 Action 的每个输出端口都必须归属某个出口。
@@ -190,7 +192,7 @@ export function validateGraph(nodes: ResolvedNode[], edges: GraphEdge[]): Valida
       continue;
     }
     // ADR-0002 经 ADR-0008 修订：对象类型是产物的契约类型，同名才能连，
-    // 约束只在编辑期成立——运行时没有任何机制核对文件里真的写了它声称的东西。
+    // 这里只约束连线；JSON 内容契约在交付前独立验收（ADR-0020）。
     if (sourcePort.objectTypeId !== targetPort.objectTypeId) {
       issues.push({
         edgeId: edge.id,

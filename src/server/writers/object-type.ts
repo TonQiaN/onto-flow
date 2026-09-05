@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, objectTypes } from "@/db";
 import { recordRevision } from "@/server/revisions";
+import { artifactSchemaProblem } from "@/server/harness/artifact-schema";
 import { asObject, type WriteResult, writeFail, writeOk } from "./types";
 
 export interface ObjectTypePayload {
@@ -27,12 +28,12 @@ export function parseObjectTypePayload(raw: unknown): WriteResult<ObjectTypePayl
   const description = typeof body.description === "string" ? body.description : "";
 
   let jsonSchema: string | null = null;
+  if (body.jsonSchema != null && typeof body.jsonSchema !== "string")
+    return writeFail(400, "jsonSchema 必须是字符串或 null");
   if (typeof body.jsonSchema === "string" && body.jsonSchema.trim() !== "") {
-    try {
-      JSON.parse(body.jsonSchema);
-    } catch {
-      return writeFail(400, "jsonSchema 必须是可解析的 JSON 字符串");
-    }
+    if (kind !== "json") return writeFail(400, "只有 JSON 对象类型可以声明 JSON Schema");
+    const problem = artifactSchemaProblem(body.jsonSchema);
+    if (problem) return writeFail(400, problem);
     jsonSchema = body.jsonSchema;
   }
 

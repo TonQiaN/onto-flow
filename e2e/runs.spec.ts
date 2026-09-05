@@ -232,6 +232,7 @@ function fixtureGraph(nodeA: string, nodeB: string): unknown {
     kind: "text",
     exitName: null,
     artifactPath,
+    jsonSchema: null,
   });
   return {
     version: 1,

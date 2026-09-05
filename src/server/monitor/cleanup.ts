@@ -111,11 +111,11 @@ function cleanWorkspaces(cutoff: number, beforeDays: number, dryRun: boolean): C
 // ---------------- events ----------------
 
 /**
- * 删 N 天前的 run_events 行（进行中的运行不动），并把够龄运行的轮次行上三个重载荷列
- *（inputs / outputs / snapshot）置空。
+ * 删 N 天前的 run_events 行（进行中的运行不动），并把够龄运行的轮次行上重载荷列
+ *（inputs / outputs / snapshot / artifact_validation）置空。
  *
  * 行本身不删：轮次行的骨架（轮次、会话、起止、终态、出口、错误）每行几十字节，是事件清理后
- * 回放退化到轮次级仍要保留的依据；能省下空间的是那三列（ADR-0018）。
+ * 回放退化到轮次级仍要保留的依据；能省下空间的是重载荷列（ADR-0018）。
  *
  * **置空的资格按运行算**（已终态且 `finished_at` 早于截止），不是按「该运行有够龄事件行」算：
  * 免费的输入→输出运行没有任何 `run_events` 行，首个事件之前就失败的 Action 也没有，
@@ -147,17 +147,18 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
       where e.ts < ${cutoff} and r.status <> 'running'
         ${activeFilter(sql`e.run_id`)}
     `);
-  // 轮次行只清三列，因此只统计还带着载荷的那些行；重复清理不会把同一行数两次。
+  // 轮次行只清重载荷列，因此只统计还带着载荷的那些行；重复清理不会把同一行数两次。
   const roundStat = db.get<{ count: number; bytes: number }>(sql`
       select count(*) as count,
         coalesce(sum(
           length(cast(coalesce(d.inputs, '') as blob))
           + length(cast(coalesce(d.outputs, '') as blob))
           + length(cast(coalesce(d.snapshot, '') as blob))
+          + length(cast(coalesce(d.artifact_validation, '') as blob))
         ), 0) as bytes
       from run_node_rounds d
       where d.run_id in (${eligibleRuns})
-        and (d.inputs is not null or d.outputs is not null or d.snapshot is not null)
+        and (d.inputs is not null or d.outputs is not null or d.snapshot is not null or d.artifact_validation is not null)
     `);
   const count = stat?.count ?? 0;
   const rounds = roundStat?.count ?? 0;
@@ -175,9 +176,9 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
       )
     `);
     db.run(sql`
-      update run_node_rounds set inputs = null, outputs = null, snapshot = null
+      update run_node_rounds set inputs = null, outputs = null, snapshot = null, artifact_validation = null
       where run_id in (${eligibleRuns})
-        and (inputs is not null or outputs is not null or snapshot is not null)
+        and (inputs is not null or outputs is not null or snapshot is not null or artifact_validation is not null)
     `);
     try {
       db.run(sql`vacuum`);
@@ -188,7 +189,7 @@ function cleanEvents(cutoff: number, beforeDays: number, dryRun: boolean): Clean
   }
 
   const detail =
-    `${beforeDays} 天前的事件明细 ${count} 条，另清空 ${rounds} 行轮次的输入输出与快照` +
+    `${beforeDays} 天前的事件明细 ${count} 条，另清空 ${rounds} 行轮次的输入输出与快照、产物验收记录` +
     `（合计约 ${formatBytes(bytes)}）；运行、节点与轮次骨架保留，` +
     `只是不再能回看逐条日志与那几轮的输入输出${vacuumNote}`;
 

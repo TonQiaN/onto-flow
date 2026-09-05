@@ -2,12 +2,13 @@
  * 轮次行的读取契约：骨架与重载荷的分界只在这里定义一次（ADR-0018）。
  *
  * 骨架（轮次、会话、起止、终态、出口、错误）每行几十字节，运行详情与 SSE 的 snapshot 帧
- * 全量带它——回放要靠它逐帧推状态。重载荷（`inputs` / `outputs` / `snapshot`）是这一轮的
+ * 全量带它——回放要靠它逐帧推状态。重载荷（`inputs` / `outputs` / `snapshot` / `artifactValidation`）是这一轮的
  * 端口值与整份运行快照（含 prompt、rule、渲染后的提示与技能正文），循环运行会成倍复制，
  * 跟着每 500ms 一帧的 snapshot 走就是把同一份大对象反复推给页面，所以按轮单独取。
  */
 import { and, asc, desc, eq, isNotNull } from "drizzle-orm";
 import { db, runNodeRounds, runNodes } from "@/db";
+import type { ArtifactValidation } from "@/lib/artifact-contract";
 
 /** 骨架列：`select` 时就不取重载荷，不是取回来再删 */
 const SKELETON_COLUMNS = {
@@ -28,6 +29,7 @@ export interface RoundPayload {
   inputs: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
+  artifactValidation: ArtifactValidation | null;
 }
 
 /**
@@ -64,6 +66,7 @@ export function readRoundPayload(
       inputs: runNodeRounds.inputs,
       outputs: runNodeRounds.outputs,
       snapshot: runNodeRounds.snapshot,
+      artifactValidation: runNodeRounds.artifactValidation,
     })
     .from(runNodeRounds)
     .where(
@@ -79,6 +82,7 @@ export function readRoundPayload(
     inputs: row.inputs ?? null,
     outputs: row.outputs ?? null,
     snapshot: row.snapshot ?? null,
+    artifactValidation: row.artifactValidation ?? null,
   };
 }
 

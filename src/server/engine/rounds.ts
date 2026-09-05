@@ -12,6 +12,7 @@
  */
 import { and, eq, inArray, max } from "drizzle-orm";
 import { db, runNodeRounds } from "@/db";
+import type { ArtifactValidation } from "@/lib/artifact-contract";
 
 export type RoundStatus = "running" | "success" | "failed" | "cancelled" | "skipped";
 
@@ -71,6 +72,7 @@ export function beginRound(start: RoundStart, writer: RoundWriter = db): void {
       inputs,
       outputs: null,
       snapshot,
+      artifactValidation: null,
     })
     .onConflictDoUpdate({
       target: CONFLICT_TARGET,
@@ -84,6 +86,7 @@ export function beginRound(start: RoundStart, writer: RoundWriter = db): void {
         inputs,
         outputs: null,
         snapshot,
+        artifactValidation: null,
       },
     })
     .run();
@@ -99,6 +102,14 @@ export function attachRoundSnapshot(
   writer: RoundWriter = db,
 ): void {
   writer.update(runNodeRounds).set({ snapshot }).where(roundWhere(key)).run();
+}
+
+/** 记录契约通过与失败的证据；不改变调度终态，也不把失败文件发布给下游。 */
+export function attachArtifactValidation(
+  key: RoundKey,
+  artifactValidation: ArtifactValidation,
+): void {
+  db.update(runNodeRounds).set({ artifactValidation }).where(roundWhere(key)).run();
 }
 
 function roundWhere(key: RoundKey) {

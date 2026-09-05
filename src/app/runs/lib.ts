@@ -156,6 +156,7 @@ export interface RunNodeRoundPayload {
   inputs: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
+  artifactValidation: import("@/lib/artifact-contract").ArtifactValidation | null;
 }
 
 /** run_events 表行（SSE event: log 的 data） */
