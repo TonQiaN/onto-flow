@@ -629,6 +629,7 @@ export function linearRunGraph(input: {
     kind: "text" as const,
     exitName: null,
     artifactPath: null,
+    jsonSchema: null,
   };
   return {
     version: 1,

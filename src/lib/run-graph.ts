@@ -129,6 +129,7 @@ function parsePort(value: unknown, where: string): ResolvedPort {
   if (typeof kind !== "string" || !PORT_KINDS.has(kind)) {
     throw new Error(`${where} 的 kind 非法：${JSON.stringify(kind)}`);
   }
+  if (port.jsonSchema === undefined) throw new Error(`${where} 缺少冻结的 jsonSchema 字段`);
   return {
     name: asString(port.name, `${where}.name`),
     objectTypeId: asString(port.objectTypeId, `${where}.objectTypeId`),

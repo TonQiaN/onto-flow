@@ -291,7 +291,8 @@ export async function runActionNode(ctx: ActionNodeContext): Promise<ActionNodeR
   // 会话用完即关：同一子进程里后续节点各自开自己的会话，互不可见。
   await ctx.proc.closeSession(sessionId);
   assertNotCancelled(ctx.runId);
-  const validation = inspectArtifacts(produced, ctx.workspace.workspaceDir);
+  const validation = await inspectArtifacts(produced, ctx.workspace.workspaceDir);
+  assertNotCancelled(ctx.runId);
   attachArtifactValidation({ runId: ctx.runId, nodeId: ctx.node.id, round: ctx.round }, validation);
   const invalid = validation.artifacts.find((artifact) => artifact.issues.length > 0);
   if (invalid) {
