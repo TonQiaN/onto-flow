@@ -145,18 +145,20 @@ export interface RunNodeRoundRow {
   /** 本轮走出的具名出口；无具名出口为 null */
   exitName: string | null;
   error: string | null;
+  payloadClearedAt: string | number | null;
 }
 
 /**
  * 一轮的重载荷：GET /api/runs/[id]/nodes/[nodeId]/rounds/[round]。
- * 抽屉的「输入输出」「快照」页签在打开或换轮时取一轮；被事件清理置空的列是 null，
- * 与「这一轮本就没有」同一形状。
+ * 抽屉按需读这一轮，运行中与终态变化时重读；清理标记与载荷一起返回，
+ * 不从 null 反推曾被清理。
  */
 export interface RunNodeRoundPayload {
   inputs: Record<string, unknown> | null;
   outputs: Record<string, unknown> | null;
   snapshot: Record<string, unknown> | null;
   artifactValidation: import("@/lib/artifact-contract").ArtifactValidation | null;
+  payloadClearedAt: string | number | null;
 }
 
 /** run_events 表行（SSE event: log 的 data） */

@@ -4,9 +4,9 @@
 
 | 层 | 分支 | 行为边界 |
 | --- | --- | --- |
-| 1 / F03 | `codex/p0-1-graph-connections` → `main` | 共享候选连线规则、实际拖线汇总与回边、添加连线按钮、拒绝原因及回边提示 |
-| 2 / F04 | `codex/p0-2-artifact-contracts` → 第 1 层 | JSON 产物契约、失败证据、校验入口与对应文档 |
-| 3 / F05 | `codex/p0-3-live-results` → 第 2 层 | 开着抽屉时自动更新、刷新按钮、明确读取状态与切轮隔离 |
+| 1 / F03 · [#59](https://github.com/TonQiaN/onto-flow/pull/59) | `codex/p0-1-graph-connections` → `main` | 共享候选连线规则、实际拖线汇总与回边、添加连线按钮、拒绝原因及回边提示 |
+| 2 / F04 · [#60](https://github.com/TonQiaN/onto-flow/pull/60) | `codex/p0-2-artifact-contracts` → 第 1 层 | JSON 产物契约、失败证据、校验入口与对应文档 |
+| 3 / F05 · [#61](https://github.com/TonQiaN/onto-flow/pull/61) | `codex/p0-3-live-results` → 第 2 层 | 开着抽屉时自动更新、刷新按钮、明确读取状态与切轮隔离 |
 
 ## 必须覆盖的矩阵
 
@@ -20,6 +20,7 @@
 | F04 | 合法 JSON、纯文本与文件 | 单测 + 引擎集成 | 正常通过，文本不被当成 JSON |
 | F04 | Schema 写边界、冻结版本、校验入口 | API/单测 + Playwright + 视觉 | 拒绝无效契约；运行使用受理版本；反馈指向字段 |
 | F05 | 抽屉一直打开，running → 终态 | Playwright + 真实运行 + 视觉 | 不切页、不重开即看到输出或失败原因 |
+| F05 | 终态先到、执行器后释放、等待中收起 | Playwright + 视觉 | 409 自动重试直到可读，释放无需额外 SSE；收起停止请求 |
 | F05 | 切节点、切轮次、迟到请求 | Playwright | 不串用旧内容，已结束轮次稳定缓存 |
 | F05 | 读取失败、手动刷新、未产出、被清理 | Playwright + 视觉 | 四种状态不同，刷新可恢复，轨迹页不预取载荷 |
 
@@ -54,4 +55,15 @@
 - 手动视觉验证：1100 px 对象类型抽屉的样例反馈；真实失败运行的验收卡、原文和下游跳过状态。截图：[样例](p0-evidence/f04-sample.jpg)、[失败验收](p0-evidence/f04-failure.jpg)。
 - 有意范围：Schema 是 Harness 已执行的子集（ADR-0020），不支持关键字会拒绝；业务质量未验收。CI 不跑模型，真实模型夹具和运行历史在本机 `data/`。
 
-第 3 层尚在开发；整体尚未完成。
+第 3 层已验证：
+
+- 原版 `f3ac6dd`：抽屉始终打开的成功、失败两条用例都红；终态头部已更新但载荷停留在初始空值。修复后两条通过。
+- `npm run check`：424 项通过、1 项按预期跳过；包括真实清理写入标记、dryRun 不伪造清理事实的断言。
+- `npm run build`：通过。
+- `npx playwright test e2e/live-results.spec.ts e2e/runs.spec.ts e2e/artifact-contracts.spec.ts`：19 项通过。
+- `live-results.spec.ts` 的 8 项回归：成功 / 失败自动更新、终态早于旧响应、503 后手动恢复与清理状态、执行中后写载荷与文件预览 409 恢复、切轮迟到请求与终态缓存、切节点迟到请求、收起停止等待预览。清理用自己合成行模拟；409 明确模拟执行器的活跃进程闸门：先发终态，确认仍被 409 拒绝后只释放占用、不再触发 SSE，预览仍自动恢复。所有 CI 夹具均不启动真实模型。
+- 真实两 Action 工作流 `体验-复用与评审`：运行 `080a6b49-d2f8-40e8-8690-306869c4142e`，DeepSeek V4 Flash / high，4 个节点全部成功，耗时 77.095 秒，费用 ¥0.0541485。自第一 Action 执行中打开输入输出页签后，未切页、未重开、未点刷新：产物自动出现，先前因整条运行活跃而 409 的文件预览在整条运行结束后自动显示正文。
+- 云端 Codex 审查指出取消时终态可能先于执行器释放：新增用例在 `9634efb` 上失败，修复后自动恢复；另测等待中「收起」跨过 2 秒周期也不再发请求。
+- 手动视觉验证：1100 px 下「刷新结果」、自动更新说明、尚未产出提示、最终契约卡与正文均可读。截图：[执行中](p0-evidence/f05-running.jpg)、[自动完成](p0-evidence/f05-completed.jpg)、[等待文件可读](p0-evidence/f05-file-preview-wait.png)（最后一张来自明确模拟 409 的浏览器用例）。
+
+矩阵的功能通过标准已逐项落实。三层按顺序合并；各 PR 当前 head 的 CI 与云端审查状态以 GitHub Checks / Review 为准。本次真实模型验收三次合计 ¥0.0734884，运行与日志只保留在本机 `data/p0-validation/` 和对应运行目录，截图与矩阵随 PR 提交。

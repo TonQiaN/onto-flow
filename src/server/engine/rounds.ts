@@ -73,6 +73,7 @@ export function beginRound(start: RoundStart, writer: RoundWriter = db): void {
       outputs: null,
       snapshot,
       artifactValidation: null,
+      payloadClearedAt: null,
     })
     .onConflictDoUpdate({
       target: CONFLICT_TARGET,
@@ -87,6 +88,7 @@ export function beginRound(start: RoundStart, writer: RoundWriter = db): void {
         outputs: null,
         snapshot,
         artifactValidation: null,
+        payloadClearedAt: null,
       },
     })
     .run();

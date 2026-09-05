@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { asPortValue } from "../lib";
 
 const PRE_CLS =
@@ -35,6 +35,7 @@ interface FilePreviewState {
   truncated?: boolean;
   size?: number;
   error?: string;
+  retrying?: boolean;
 }
 
 /**
@@ -46,40 +47,81 @@ function FileValue({
   runId,
   file,
   previewLabel,
+  refreshKey,
 }: {
   runId: string;
   file: { path: string; name: string; mime: string };
   previewLabel: string;
+  refreshKey?: string;
 }) {
   const [preview, setPreview] = useState<FilePreviewState>({ status: "idle" });
+  const requested = useRef(false);
+  const requestVersion = useRef(0);
+  const requestController = useRef<AbortController | null>(null);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const load = async () => {
-    setPreview({ status: "loading" });
-    try {
-      const res = await fetch(
-        `/api/runs/${encodeURIComponent(runId)}/files?path=${encodeURIComponent(file.path)}`,
-        { cache: "no-store" },
-      );
-      const body = (await res.json()) as {
-        content?: string;
-        truncated?: boolean;
-        size?: number;
-        error?: string;
-      };
-      if (!res.ok) {
-        setPreview({ status: "error", error: body?.error ?? "读取失败" });
-        return;
+  const load = useCallback(
+    async function readFile() {
+      requested.current = true;
+      clearTimeout(retryTimer.current);
+      const version = ++requestVersion.current;
+      requestController.current?.abort();
+      const controller = new AbortController();
+      requestController.current = controller;
+      setPreview({ status: "loading" });
+      try {
+        const res = await fetch(
+          `/api/runs/${encodeURIComponent(runId)}/files?path=${encodeURIComponent(file.path)}`,
+          {
+            cache: "no-store",
+            signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+          },
+        );
+        const body = (await res.json()) as {
+          content?: string;
+          truncated?: boolean;
+          size?: number;
+          error?: string;
+        };
+        if (version !== requestVersion.current) return;
+        if (!res.ok) {
+          setPreview({
+            status: "error",
+            error: body?.error ?? "读取失败",
+            retrying: res.status === 409,
+          });
+          // 终态可以早于 activeRuns 释放（取消或用量结算）；释放本身没有 SSE 帧。
+          // 只对活跃执行器的 409 继续串行重试，文件不存在/无权限不自动循环。
+          if (res.status === 409) retryTimer.current = setTimeout(() => void readFile(), 2000);
+          return;
+        }
+        setPreview({
+          status: "loaded",
+          content: body.content ?? "",
+          truncated: body.truncated === true,
+          size: body.size,
+        });
+      } catch {
+        if (version === requestVersion.current)
+          setPreview({ status: "error", error: "网络错误，读取失败" });
       }
-      setPreview({
-        status: "loaded",
-        content: body.content ?? "",
-        truncated: body.truncated === true,
-        size: body.size,
-      });
-    } catch {
-      setPreview({ status: "error", error: "网络错误，读取失败" });
-    }
-  };
+    },
+    [file.path, runId],
+  );
+
+  // 用户已展开的文件在运行收束或手动刷新后重读，包括运行中曾被 409 拒绝的预览。
+  useEffect(() => {
+    if (requested.current) void load();
+  }, [refreshKey, load]);
+  useEffect(
+    () => () => {
+      requested.current = false;
+      clearTimeout(retryTimer.current);
+      requestVersion.current++;
+      requestController.current?.abort();
+    },
+    [],
+  );
 
   return (
     <div>
@@ -101,10 +143,16 @@ function FileValue({
             {preview.status === "loading" ? "读取中…" : previewLabel}
           </button>
         )}
-        {preview.status === "loaded" && (
+        {preview.status !== "idle" && (
           <button
             type="button"
-            onClick={() => setPreview({ status: "idle" })}
+            onClick={() => {
+              requested.current = false;
+              clearTimeout(retryTimer.current);
+              requestVersion.current++;
+              requestController.current?.abort();
+              setPreview({ status: "idle" });
+            }}
             className="text-xs text-zinc-500 underline transition-colors hover:text-zinc-900"
           >
             收起
@@ -112,6 +160,11 @@ function FileValue({
         )}
       </div>
       {preview.status === "error" && <p className="mt-1 text-xs text-red-700">{preview.error}</p>}
+      {preview.retrying && (
+        <p className="mt-1 text-xs text-zinc-500">
+          每 2 秒自动重试，文件可读取后会直接显示；收起可停止等待。
+        </p>
+      )}
       {preview.status === "loaded" && (
         <div className="mt-2">
           <CollapsibleText text={preview.content ?? ""} />
@@ -131,10 +184,12 @@ export function PortValueView({
   value,
   runId,
   previewLabel = "查看内容",
+  refreshKey,
 }: {
   value: unknown;
   runId?: string;
   previewLabel?: string;
+  refreshKey?: string;
 }) {
   // 输入端口的值恒是 PortValue[]（一个口可接多条入线的汇总），逐项渲染，
   // 否则数组落到 JSON dump、文件值的预览入口在输入区永远不出现。
@@ -145,7 +200,13 @@ export function PortValueView({
     return (
       <div className="space-y-2">
         {value.map((item, index) => (
-          <PortValueView key={index} value={item} runId={runId} previewLabel={previewLabel} />
+          <PortValueView
+            key={index}
+            value={item}
+            runId={runId}
+            previewLabel={previewLabel}
+            refreshKey={refreshKey}
+          />
         ))}
       </div>
     );
@@ -163,6 +224,7 @@ export function PortValueView({
         runId={runId}
         file={pv.file}
         previewLabel={previewLabel}
+        refreshKey={refreshKey}
       />
     );
   }

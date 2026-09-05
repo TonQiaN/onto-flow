@@ -475,6 +475,8 @@ export const runNodeRounds = sqliteTable(
     artifactValidation: text("artifact_validation", {
       mode: "json",
     }).$type<ArtifactValidation | null>(),
+    /** 事件清理的事实；null 表示没有清理，不能从空载荷反推。 */
+    payloadClearedAt: integer("payload_cleared_at", { mode: "timestamp_ms" }),
   },
   (t) => [uniqueIndex("run_node_rounds_unique").on(t.runId, t.nodeId, t.round)],
 );

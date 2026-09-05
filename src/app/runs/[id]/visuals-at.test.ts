@@ -88,6 +88,7 @@ function roundRow(
     finishedAt: finishedSecond == null ? null : at(finishedSecond),
     exitName: null,
     error: null,
+    payloadClearedAt: null,
     ...overrides,
   };
 }
