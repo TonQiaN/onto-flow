@@ -15,7 +15,7 @@ import type {
   SkillRow,
   ToolRow,
 } from "@/components/library";
-import type { ValidationIssue } from "@/lib/graph";
+import type { ResolvedNode, ValidationIssue } from "@/lib/graph";
 import {
   COMPOSITION_TOGGLE_KEYS,
   estimateTokens,
@@ -188,6 +188,25 @@ export function toEdgeDto(edge: Edge): EdgeDto {
     targetNodeId: edge.target,
     targetPort: edge.targetHandle ?? "value",
   };
+}
+
+/** 画布与服务端共用图规则；重入策略取当前 Action，不能靠旧的 DAG 规则猜。 */
+export function resolveCanvasNodes(
+  nodes: FlowNode[],
+  actions: ReadonlyMap<string, ActionDto>,
+): ResolvedNode[] {
+  return nodes.map(({ id, data }) => {
+    const action = data.actionId ? actions.get(data.actionId) : undefined;
+    return {
+      id,
+      kind: data.kind,
+      label: data.label,
+      inputs: data.inputs,
+      outputs: data.outputs,
+      maxReentries: action?.maxReentries,
+      onExhausted: action?.onExhausted,
+    };
+  });
 }
 
 /** 从 Action 构造画布节点的端口快照 */
