@@ -1,22 +1,25 @@
 # 评审清单
 
-给 Codex 自动评审与 `@claude` 按需评审共用，人工评审也照此勾选。清单把根 [AGENTS.md](../AGENTS.md) 的不变量按「评审时看什么」重排成可勾选条目；每条括注 AGENTS.md 里对应的那句或那节，规则的理由在那里，这里不重复。
+给 Codex 自动评审与 `@claude` 按需评审共用，人工评审也照此勾选。清单把根 [AGENTS.md](../AGENTS.md) 与 [专题工程约束](../docs/development/documentation.md) 的不变量按「评审时看什么」重排。先读取本次 diff 涉及的专题；括注保留对应原句，理由在所属专题中，不再假设全部位于根文件。
 
 评审的产出只有一种：带文件与行号的具体问题。不复述 diff、不评价风格、不夸奖。能被 `src/rules.test.ts` 机械核对的条目 CI 已经跑过，评审盯 CI 看不见的那些。
 
 ## 0. 门槛先看（PR 描述「跑了哪些命令」一节）
 
-- [ ] 写明跑过 `npm run check`（typecheck + lint + fmt:check + knip + vitest）。仓库没有 CI 之外的任何钩子，命令就是全部门槛（Checks）
-- [ ] `npm run knip` 是门禁（在 `check` 里，CI 同步跑）：输出必须为空。新增的豁免只有两种合法形状——`knip.json` 里带理由的条目，或给「有主人但仓库内没有引用点的公开面」打 `@public` 标记；两者都要问「这是公开面还是没人用的死代码」，能删就删而不是豁免（Checks）
+规则来源：[验证指南](../docs/development/checks.md)。
+
+- [ ] 写明跑过 `npm run check`（typecheck + lint + fmt:check + knip + vitest）。仓库没有 CI 之外的任何钩子，命令就是全部门槛（验证指南）
+- [ ] `npm run knip` 是门禁（在 `check` 里，CI 同步跑）：输出必须为空。新增的豁免只有两种合法形状——`knip.json` 里带理由的条目，或给「有主人但仓库内没有引用点的公开面」打 `@public` 标记；两者都要问「这是公开面还是没人用的死代码」，能删就删而不是豁免（验证指南）
 - [ ] 关掉一条 lint 规则只在 `.oxlintrc.json` 里带理由地关，行内 `oxlint-disable-next-line` 必须带 `-- 理由`；没有整文件关闭（Checks / ADR-0019）
-- [ ] diff 触及 `src/app/`、`next.config.ts` 或 `tsconfig.json` → 写明跑过 `npm run build`；`build` 抓得到 `typecheck` 抓不到的路由与配置破损（Checks）
-- [ ] 用户可见的改动 → 跑了**对应的那一个** e2e spec 并写明是哪个，不是「跑了全套」也不是没跑（Checks）
+- [ ] diff 触及 `src/app/`、`next.config.ts` 或 `tsconfig.json` → 写明跑过 `npm run build`；`build` 抓得到 `typecheck` 抓不到的路由与配置破损（验证指南）
+- [ ] 用户可见的改动 → 跑了**对应的那一个** e2e spec 并写明是哪个，不是「跑了全套」也不是没跑（验证指南）
 - [ ] 触及 harness 接缝（会话、事件、用量、取消、组合）→ 写明是否跑了付费冒烟（`smoke-harness` / `smoke-engine`）与退出码；冒烟失败即非零退出，退出码就是结论；没跑要说为什么可以不跑（The harness seam）
-- [ ] 新增原生或 server-only 依赖 → `next.config.ts` 的 `serverExternalPackages` 有它；Turbopack `root` 钉住没动（Checks）
-- [ ] CI 的 `check` 作业跑 `src/rules.test.ts`：它机械核对的约定（`force-dynamic`、`handle()` 的唯一例外、`await db.`、客户端与 `@/server` / `@/db` 的边界与 `"use server"`、`globalThis` 的 `ontoflow` 前缀、列表信封的三个导入、raw-SQL 白名单与 `LIKE` 转义、每种 `EntityKind` 都有写入器、`@deepseek-ai` 精确钉版、`.claude/skills/` ↔ `.codex/skills/` 字节一致、`docs/simplifications/` 记录树骨架与记录间相对 `.md` 链接可解析）评审**不必重复勾**；要看的是**白名单或例外名单变长了没有——变长了就问为什么**（Checks）
-- [ ] `@deepseek-ai/*` 版本精确钉死，没有 `^` / `~`；不是 `latest`；`@deepseek-ai/dsh-*` 直接与传递依赖同时在 `overrides` 里同版（Pin `@deepseek-ai` versions exactly）
+- [ ] 新增原生或 server-only 依赖 → `next.config.ts` 的 `serverExternalPackages` 有它；Turbopack `root` 钉住没动（验证指南）
+- [ ] `src/rules.test.ts` 已覆盖的机械规则不重复人工勾选；只核对本次增加的白名单、豁免或指令预算是否有必要理由，以及搬移后的规则仍有读取入口（验证指南）
 
 ## 1. 立场：不做兼容层（Stance: no compatibility layers）
+
+规则来源：[根指令](../AGENTS.md)。
 
 - [ ] 没有为「旧数据 / 旧调用方 / 旧字段」保留分支、回退默认值、别名导出、迁移脚本。废弃的路径要删，不是留着
 - [ ] schema 改动直接改 `src/db/schema.ts` 由 `drizzle-kit push` 原地应用，没有提交 migration 文件
@@ -24,7 +27,9 @@
 
 ## 2. 写路径与数据库（Conventions）
 
-- [ ] 写路径返回结果对象（`WriteResult` + `writeOk` / `writeFail`），没有新长出私有副本；成功体就是 `result.data` 的 route 用 `respond()` 而不是手抄三行拆包。只有引擎 `throw`，由 `runner.ts` 变成 `run_nodes.error`
+规则来源：[应用约束](../docs/development/application.md)、[能力约束](../docs/development/capabilities.md)。
+
+- [ ] 写路径返回结果对象（`WriteResult` + `writeOk` / `writeFail`），没有新长出私有副本；成功体就是 `result.data` 的 route 用 `respond()` 而不是手抄三行拆包。引擎 `throw` 由 `runner.ts` 变成 `run_nodes.error`；`fs-safety.ts` 与 `monitor/cleanup.ts` 是有意抛错、由调用方映射的例外
 - [ ] 名称冲突交给数据库：writer 没有预查名字，`handle()` 把 `UNIQUE constraint failed` 映射成 409；folders 是唯一例外（根级 parent 为 NULL 无法约束）
 - [ ] 实体体校验在 writer 的 `parse…Payload` 里，route 只窄化自己的非实体参数；仍是手写 `typeof` 窄化，没有引入 schema 库
 - [ ] 每次实体写入在**同一事务**里记一版修订，包含关系；回滚复用同一个 `write<Kind>()`
@@ -35,6 +40,8 @@
 
 ## 3. 删除保护与引用（Delete protection is per-owner and there are exactly four）
 
+规则来源：[应用约束](../docs/development/application.md)、[运行约束](../docs/development/runs.md)。
+
 - [ ] 没有新增第五种删除保护。四种是：四个可被引用库经 `usedByNames()` 答 409；workflow DELETE 的运行中守卫；folder DELETE 的重名守卫；run DELETE 经 `monitor/cleanup.ts` 的 `deleteRun` 拒绝运行中
 - [ ] 没有手写引用 join：`src/server/references.ts` 是唯一 join 引用关系的模块；Skill / Tool 的引用方是**工作流**（`workflow_skills` / `workflow_tools`，detail「技能集」/「Tool 集」，href 指向工作流设置页），Action 的预载与可见 Tool 不是引用、不进删除保护
 - [ ] 破坏性路径仍只在 `src/server/monitor/cleanup.ts`；没有第二处删 `run_events` / `runs` / `data/runs/<id>`
@@ -44,6 +51,8 @@
 
 ## 4. 路由载荷与页面（Conventions）
 
+规则来源：[应用约束](../docs/development/application.md)。
+
 - [ ] 新增的 route 若能到达修订还原——**含经 helper 间接调用** `restoreRevision`——带 `import "@/server/writers";`，否则 restore 静默答 501。`src/rules.test.ts` 只认字面出现 `restoreRevision` 的 route，间接到达的它看不见（Conventions）
 - [ ] 五个库的列表 GET 与 `/api/runs` 仍返回 `{ items, total, page, pageSize }`（`/api/runs` 另带 `summary`）：库五个由 `parseListQuery` + `selectLibraryPage` + `listEnvelope` 组出，`/api/runs` 自组信封但分页参数走同一个 `parsePageQuery`；排序键与 30 / 100 只在 `src/lib/list-query.ts` 写一遍，服务端与共享列表 UI 都从它取，没有第二处（`src/rules.test.ts` 钉住四个 `src/lib/` 规则模块的「只声明一次 + 消费者必须 import」）；其它 GET 各自定形
 - [ ] 改了 `/api/runs` 的筛选或汇总 → `summary` 仍按同一组筛选**不分页**算：`runs` 是 distinct 的运行数（零用量的运行也算），token / 费用与每行同源、从按 `run_id` 预聚合的 `run_nodes` 子查询 **left join** 求和（权威汇总，`node_usage` 缺一条明细时不掉账），只有 `byModel` 走 `node_usage`；没有退化成内连接把无用量的运行挤掉；数组消费者一个不剩地改读 `items`（`rg -n '"/api/runs' src e2e scripts`）
@@ -52,6 +61,8 @@
 - [ ] 不可信路径过 `@/server/fs-safety`：请求边界 `isWithinData`，使用处 `resolveWithinData` / `safeBasename`
 
 ## 5. 进程级状态与运行隔离（Conventions / The harness seam）
+
+规则来源：[运行约束](../docs/development/runs.md)、[Harness 接缝](../docs/development/harness.md)、[能力约束](../docs/development/capabilities.md)。
 
 - [ ] 进程级可变状态挂在 `globalThis` 且键以 `ontoflow` 开头；模块级 `const map = new Map()` 是这条规则要防的 bug
 - [ ] 跨运行状态按 runId 键在 `globalThis` 上或落在运行自己的目录里；没有任何东西把运行串行化。`startRun` 仍是唯一准入口，满 `MAX_CONCURRENT_RUNS` 答 429 不排队
@@ -75,6 +86,8 @@
 
 ## 6. 三方同步：组合 / 目录 / docs/harness（ADR-0013）
 
+规则来源：[Harness 接缝](../docs/development/harness.md)、[能力约束](../docs/development/capabilities.md)、[上游审查规则](../docs/harness/AGENTS.md)。
+
 - [ ] 改了 `src/server/harness/composition.ts` 的条目 → `src/server/harness/catalog.ts` 的 `PLUGIN_CATALOG` 与 `docs/harness/` 的散文同一 PR 里跟上；`catalog.test.ts` 会红，但评审要看散文是否**说对了**，不只是不红
 - [ ] 新插件的 `decision` / `mountedByDefault` / `workflowToggle` / `reason` 与它在组合里的实际挂载一致
 - [ ] 新增 `models` 行走 `scripts/seed.ts` 的 `upsertModel`；新 provider 路由有 `runCompositionEntries` 里的 adapter；没有 route 写 `models`
@@ -84,12 +97,16 @@
 
 ## 7. 专用付费入口的行为钉死（A specialized paid invocation pins behavior, not names）
 
+规则来源：[运行约束](../docs/development/runs.md)、[能力约束](../docs/development/capabilities.md)。
+
 - [ ] 改了参与专用入口的 Action 的 prompt / rule / provider / model / 思考强度 / 重入策略 / 预载技能 / 可见 Tool，或工作流的指令 / 开关覆盖 / MCP 子集 / 技能集 / Tool 集，或校验 Tool 的任一契约字段 → 对应的三类 digest pin（`src/lib/resume-match.ts` 的 `RESUME_MATCH_WORKFLOW_BEHAVIOR_SHA256` / `RESUME_MATCH_ACTION_BEHAVIOR_SHA256` / `RESUME_MATCH_VALIDATOR_TOOL_SHA256`，经 `src/server/resume-match-*-integrity.ts` 与其测试）**显式**审阅并更新，PR 描述列出新旧值；种子改了而 pin 没动，种子与测试必须红。工作流描述与 Tool 展示名不进契约，改它们不该动 pin
 - [ ] 专用入口的业务结果仍写 `run_results`，没有塞进 `runs.imports`（运行列表 / 详情 API 会暴露它）
 - [ ] Skill 投影仍是 `data/skills/<slug>` 链接指向 `.versions/<slug>-<stamp>/`，重写只换链接、路径没有空档，旧版本等持有释放再删（A Skill is a directory…）
 - [ ] Skill 目录名仍是 id 稳定的 ASCII slug（`skillSlug()`），没有用中文库名；预载手势用的也是这个 slug。一定要生效的内容放进 Action 的 rule、工作流指令或全局默认指令，必定要用的技能由 Action 预载，不是靠模型「判断相关」；预载有 token 代价，编辑器旁的估算没有被拿掉
 
 ## 8. 测试（Checks / Test fixtures）
+
+规则来源：[验证指南](../docs/development/checks.md)。
 
 - [ ] e2e **没有**断言会随真实使用增长的东西：计数、首页包含、某一行恰好是种子 / 最新一次运行。正确写法是在用例里取 API 载荷、断言 DOM 与载荷一致。这个 bug 已经修过三次
 - [ ] e2e 不依赖任何种子实体：`db:seed` 只种平台基线（内置对象类型与模型表），夹具由本 spec 在 `beforeAll` 自建、`afterAll` 收走；断言只对自建夹具或 API 载荷
@@ -99,16 +116,20 @@
 
 ## 9. 文字、注释与文档（Conventions / Comments and documentation）
 
+规则来源：[文档维护](../docs/development/documentation.md)。
+
 - [ ] 用户可见文字、错误信息、代码注释、测试名是中文；标识符是英文
 - [ ] 没有删掉记录「为什么要这么绕」的注释（`SUM` 汇总、`LIKE` 转义、静默 tick 收流）；新注释说的是行为、失败、时序、归属，不是复述控制流
 - [ ] 新增的 `any` 带注释说明为何无法窄化
 - [ ] 改了 `docs/DESIGN.md` / `docs/DESIGN-V2.md` 所陈述的契约 → 同一 PR 更新那份文档；定了新术语 → `CONTEXT.md` 只放词汇与语义，不放实现
-- [ ] README 与 AGENTS.md 的 Commands 块、引擎 spec 三者要一起改或都不改（README 复述了它们）
+- [ ] 命令示例与 package.json / CI 一致；改命令同步验证指南、根指令和 README 中仍展示的示例，改变契约再同步所属 DESIGN；不复制第二份完整命令清单
 
 ## 10. ADR（Decisions and the glossary）
+
+规则来源：[文档维护](../docs/development/documentation.md)。
 
 - [ ] 决定同时满足「难以逆转、脱离上下文会令人费解、真有取舍」三条 → 立 ADR `docs/adr/NNNN-slug.md`：中文标题、决定、`理由：` 段落以代价收尾；三条不全满足的不立
 - [ ] 被取代的 ADR 原地留着，新旧互相链接（ADR-0003 ↔ ADR-0005 的写法）
 - [ ] 代码里引用 ADR 用裸 id，写在被该决定约束的那一行的注释里（`（ADR-0005）`）
-- [ ] 改了 AGENTS.md → 只陈述仓库已经遵守的规则；代码不再遵守的那条要删掉，不是改软
+- [ ] 改了 AGENTS.md 或专题约束 → 只陈述仓库已经遵守的规则；代码不再遵守的那条删除，未实施决定显式标注；搬移规则后其理由、例外和读取入口仍完整
 - [ ] 删减类改动有对应的 `docs/simplifications/` 记录：实施 PR 链接它、合并时移到 `done/` 并补「落地」；否决理由留在 `rejected/`，不回流 AGENTS.md（Decisions and the glossary）
