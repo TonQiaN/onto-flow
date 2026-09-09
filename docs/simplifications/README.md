@@ -2,7 +2,7 @@
 
 一个简化候选一份文件，记它的证据、提议、放弃了什么、怎么验收——这是 `find-simplifications`
 skill 的产出物，也是「为什么这块没了 / 为什么这块留着」的唯一存放处。AGENTS.md 只在
-「Decisions and the glossary」里指向本文，**否决理由不回流 AGENTS.md**：AGENTS.md 每个会话整份进
+「开始工作」里经文档维护专题指向本文，**否决理由不回流 AGENTS.md**：AGENTS.md 默认作为会话的常驻指令进入
 上下文，多一句就是长期的 token 税；这里的记录只在需要时读。
 
 ## 目录与文件名

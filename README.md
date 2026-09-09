@@ -115,6 +115,8 @@ token 与费用等脱敏指标，不回显岗位、简历或结果正文。
 
 ## 测试
 
+完整命令、CI 门禁、隔离夹具与付费验收前提见 [验证指南](docs/development/checks.md)；开发前按 [AGENTS.md](AGENTS.md) 读取任务相关约束。
+
 ```bash
 npm run check      # typecheck + lint + fmt:check + knip + 单测；提交前跑这个
 npm test           # vitest 单测

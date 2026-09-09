@@ -1,5 +1,5 @@
 /**
- * 约定测试化：把根 AGENTS.md 里能机械核对的约定写成断言，测试名引用它的原句。
+ * 约定测试化：根 AGENTS.md 与 docs/development/ 专题中可机械核对的约定写成断言。
  *
  * 规则按仓库现状定。白名单列的是「今天恰好例外的文件」，并且断言它们**仍然是**例外：
  * 修好一个例外就必须把它从白名单删掉，白名单不会悄悄变成长期豁免。
@@ -26,6 +26,73 @@ function walk(dir: string, out: string[] = []): string[] {
 const rel = (file: string): string => path.relative(ROOT, file).split(path.sep).join("/");
 const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isSource = (file: string): boolean => /\.tsx?$/.test(file);
+
+describe("AGENTS.md · 指令体积、导航与别名", () => {
+  const instructions = [
+    path.join(ROOT, "AGENTS.md"),
+    ...["src", "scripts", "e2e", "docs", ".github"].flatMap((dir) =>
+      walk(path.join(ROOT, dir)).filter((file) => path.basename(file) === "AGENTS.md"),
+    ),
+  ];
+  const topics = walk(path.join(ROOT, "docs/development")).filter((file) => file.endsWith(".md"));
+
+  it("根指令含自动区块不超过 8 KiB，仓库内每条指令链不超过 24 KiB", () => {
+    expect(fs.statSync(path.join(ROOT, "AGENTS.md")).size).toBeLessThanOrEqual(8 * 1024);
+    for (const file of instructions) {
+      const chain = instructions.filter((candidate) => {
+        const relative = path.relative(path.dirname(candidate), path.dirname(file));
+        return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+      });
+      // 合并时文件之间还有空行；预留其字节，不能只检查每个文件各自的体积。
+      const bytes = chain.reduce((sum, entry) => sum + fs.statSync(entry).size, 0);
+      expect(bytes + (chain.length - 1) * 2, rel(file)).toBeLessThanOrEqual(24 * 1024);
+    }
+  });
+
+  it("每份专题都能从根指令找到，指导文档的本地链接都存在", () => {
+    const rootInstructions = read(path.join(ROOT, "AGENTS.md"));
+    expect(topics.length).toBeGreaterThan(0);
+    for (const file of topics) expect(rootInstructions, rel(file)).toContain(`](${rel(file)})`);
+
+    const documents = [
+      ...instructions,
+      ...topics,
+      ...["README.md", ".github/REVIEW.md", ".github/pull_request_template.md"].map((file) =>
+        path.join(ROOT, file),
+      ),
+    ];
+    const missing: string[] = [];
+    for (const file of documents) {
+      for (const match of read(file).matchAll(/\[[^\]\n]+\]\(([^)\s]+)\)/g)) {
+        const target = match[1];
+        if (/^(?:[a-z][a-z0-9+.-]*:|#)/i.test(target)) continue;
+        const localPath = decodeURIComponent(target.split("#")[0]);
+        if (!fs.existsSync(path.resolve(path.dirname(file), localPath))) {
+          missing.push(`${rel(file)} → ${target}`);
+        }
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("CLAUDE 别名仍是同目录相对链接，Next.js 自动区块完整保留", () => {
+    for (const dir of [ROOT, path.join(ROOT, "docs/harness")]) {
+      const alias = path.join(dir, "CLAUDE.md");
+      expect(fs.lstatSync(alias).isSymbolicLink(), rel(alias)).toBe(true);
+      expect(fs.readlinkSync(alias)).toBe("AGENTS.md");
+    }
+    const content = read(path.join(ROOT, "AGENTS.md"));
+    const start = "<!-- BEGIN:nextjs-agent-rules -->";
+    const end = "<!-- END:nextjs-agent-rules -->";
+    expect(content.split(start)).toHaveLength(2);
+    expect(content.split(end)).toHaveLength(2);
+    expect(content.indexOf(end)).toBeGreaterThan(content.indexOf(start));
+    expect(content.slice(content.indexOf(start), content.indexOf(end))).toContain(
+      "node_modules/next/dist/docs/",
+    );
+  });
+});
+
 /**
  * `/` 前面是这些就当正则字面量的开头，否则当除号。关键字列表取「除号的左操作数不可能是它」的那一批，
  * 宁滥勿缺：多认一个只会把某段多抹白 → 误报（红），少认一个才会让藏在正则里的假代码蒙混过关
@@ -141,7 +208,7 @@ function violations(files: string[], check: (content: string, file: string) => s
   );
 }
 
-describe("AGENTS.md · Repository layout", () => {
+describe("application.md · Repository layout", () => {
   it('src/app/api 的每个 route.ts 都 `export const dynamic = "force-dynamic"`', () => {
     expect(apiRoutes.length).toBeGreaterThan(0);
     const missing = apiRoutes
@@ -151,7 +218,7 @@ describe("AGENTS.md · Repository layout", () => {
   });
 });
 
-describe("AGENTS.md · Conventions · handle()", () => {
+describe("application.md · Conventions · handle()", () => {
   /**
    * 「Every API route body runs inside handle() from @/lib/http. One does not:
    * api/runs/[id]/events returns a raw SSE Response — do not copy it.」
@@ -278,7 +345,7 @@ describe("AGENTS.md · Conventions · handle()", () => {
   });
 });
 
-describe("AGENTS.md · Conventions · better-sqlite3 is synchronous", () => {
+describe("application.md · Conventions · better-sqlite3 is synchronous", () => {
   it("「Drizzle calls end in .get() / .all() / .run(); never await db.…」——src 与 scripts 里没有 await db. / await tx.", () => {
     const found = violations(sourceFiles, (content) =>
       [...content.matchAll(/\bawait\s+(?:db|tx)\s*\./g)].map(
@@ -289,7 +356,7 @@ describe("AGENTS.md · Conventions · better-sqlite3 is synchronous", () => {
   });
 });
 
-describe("AGENTS.md · Checks · 单元测试的内存库", () => {
+describe("checks.md · Checks · 单元测试的内存库", () => {
   it("「内存库一律经 createTestDb() 从 schema.ts 生成，不手写 CREATE TABLE」——src 下的测试里没有 CREATE TABLE", () => {
     // 手写子集 DDL 会在 schema 变化时悄悄失真：漏掉的外键让级联不发生、漏掉的唯一键让
     // 重复行静默落库，测试照样绿。白名单为空——出现例外就是要修，不是要加进来。
@@ -304,7 +371,7 @@ describe("AGENTS.md · Checks · 单元测试的内存库", () => {
   });
 });
 
-describe("AGENTS.md · Conventions · client / server boundary", () => {
+describe("application.md · Conventions · client / server boundary", () => {
   /**
    * 「Client code imports nothing from @/server or @/db, import type included.」豁免曾为
    * @/server/monitor/types 而开，客户端一处都没用过（前端在 src/app/monitor/lib.ts 自带视图模型），
@@ -397,7 +464,7 @@ describe("AGENTS.md · Conventions · client / server boundary", () => {
   });
 });
 
-describe("AGENTS.md · Conventions · globalThis", () => {
+describe("application.md · Conventions · globalThis", () => {
   /**
    * 「Process-level mutable state is parked on globalThis under an ontoflow-prefixed key so HMR
    * cannot lose it.」既查通过别名读写的属性，也查 cast 出来的类型字面量 / 接口声明的顶层键。
@@ -490,7 +557,7 @@ describe("AGENTS.md · Conventions · globalThis", () => {
   });
 });
 
-describe("AGENTS.md · Conventions · revision restore", () => {
+describe("application.md · Conventions · revision restore", () => {
   /**
    * 「a route that can reach revision restore carries import "@/server/writers"; or restore
    * silently answers 501」——注册发生在 writers/index.ts 模块加载时。
@@ -515,7 +582,7 @@ describe("AGENTS.md · Conventions · revision restore", () => {
   });
 });
 
-describe("AGENTS.md · Conventions · library list GETs", () => {
+describe("application.md · Conventions · library list GETs", () => {
   /**
    * 「The five library list GETs and /api/runs return { items, total, page, pageSize }（/api/runs
    * 另带 summary），built from parseListQuery + selectLibraryPage + listEnvelope in
@@ -548,7 +615,7 @@ describe("AGENTS.md · Conventions · library list GETs", () => {
   });
 });
 
-describe("AGENTS.md · Repository layout · src/lib 的四个规则模块", () => {
+describe("application.md · Repository layout · src/lib 的四个规则模块", () => {
   /**
    * 「the four rule modules the write boundary and its editor both call so neither copies the
    * other」——这四组规则（技能资源文件、Tool 公名、对象根 schema 形状、列表排序键与页长）
@@ -641,7 +708,7 @@ describe("AGENTS.md · Repository layout · src/lib 的四个规则模块", () =
   });
 });
 
-describe("AGENTS.md · Conventions · raw SQL", () => {
+describe("application.md · Conventions · raw SQL", () => {
   /**
    * 「Raw SQL goes through drizzle's sql tag … and only where the query builder cannot express
    * the aggregate」。允许范围按现状定：monitor/cleanup.ts 与 monitor/health.ts 的聚合、
@@ -710,7 +777,7 @@ describe("AGENTS.md · Conventions · raw SQL", () => {
   });
 });
 
-describe("AGENTS.md · The harness seam · Pin @deepseek-ai versions exactly", () => {
+describe("harness.md · The harness seam · Pin @deepseek-ai versions exactly", () => {
   it("package.json 里每个 @deepseek-ai/* 依赖与 override 都是精确版本，没有 ^ / ~ / latest", () => {
     const pkg = JSON.parse(read(path.join(ROOT, "package.json"))) as Record<
       string,
@@ -733,8 +800,8 @@ describe("AGENTS.md · The harness seam · Pin @deepseek-ai versions exactly", (
   });
 });
 
-describe("AGENTS.md · Decisions and the glossary · skills 双树", () => {
-  it("「.claude/skills/ and .codex/skills/ hold byte-identical copies of all five skills」", () => {
+describe("documentation.md · 文档维护 · skills 双树", () => {
+  it("「.claude/skills/ 与 .codex/skills/ 保持字节一致」", () => {
     const claude = path.join(ROOT, ".claude", "skills");
     const codex = path.join(ROOT, ".codex", "skills");
     const listing = (root: string): string[] =>
@@ -752,7 +819,7 @@ describe("AGENTS.md · Decisions and the glossary · skills 双树", () => {
   });
 });
 
-describe("AGENTS.md · Decisions and the glossary · docs/simplifications 记录树", () => {
+describe("documentation.md · 文档维护 · docs/simplifications 记录树", () => {
   /**
    * 「A simplification candidate is one record under docs/simplifications/ (proposed / done /
    * rejected, skeleton pinned by src/rules.test.ts)」：状态目录、文件名与骨架按
