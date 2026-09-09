@@ -1,6 +1,6 @@
 # 简化：把根指令缩成任务入口
 
-状态: proposed
+状态: done
 
 ## 问题
 
@@ -30,3 +30,11 @@
 ## 风险
 
 跨专题规则漏读是主要风险，通过根导航、专题交叉引用与 REVIEW 来源链接处理；术语与 ADR 决策不变。文档调整是可逆维护，不满足新增 ADR 的三项门槛。独立 worktree 不改主工作区现有业务修改，不读取 `.data/` 或操作真实运行数据。
+
+## 落地
+
+实施 PR：[#63](https://github.com/TonQiaN/onto-flow/pull/63)，关联 [Issue #62](https://github.com/TonQiaN/onto-flow/issues/62)。本记录随该 PR 合并进入 done；GitHub 上的当前检查与合并结果以 PR 页面为准。
+
+根文件 7,670 字节，比原文减少 88.9%；六份专题承接原技术约束，Next.js 自动区块逐字不变。方案未增加目录级 AGENTS，而以根导航显式读取专题，避免误认自动递归加载；除此之外与提议一致。
+
+本地验收：`npx vitest run src/rules.test.ts` 26 项通过；`npm run check` 全部阶段通过，46 个测试文件、395 个测试通过、1 个跳过；`git diff --check` 通过。没有产品行为变更，本地 build、e2e 与付费冒烟不适用，CI 仍执行原有 build / Playwright 门禁。
