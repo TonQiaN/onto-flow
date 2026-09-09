@@ -8,6 +8,12 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
+import {
+  AGENT_RULES_START_MARKER,
+  AGENT_RULES_END_MARKER,
+  hasCurrentAgentRules,
+} from "next/dist/server/lib/generate-agent-files";
 import { describe, expect, it } from "vitest";
 import { ENTITY_KINDS } from "@/db/schema";
 
@@ -28,12 +34,30 @@ const read = (file: string): string => fs.readFileSync(file, "utf8");
 const isSource = (file: string): boolean => /\.tsx?$/.test(file);
 
 describe("AGENTS.md · 指令体积、导航与别名", () => {
-  const instructions = [
-    path.join(ROOT, "AGENTS.md"),
-    ...["src", "scripts", "e2e", "docs", ".github"].flatMap((dir) =>
-      walk(path.join(ROOT, dir)).filter((file) => path.basename(file) === "AGENTS.md"),
-    ),
-  ];
+  // Git 同时列出已跟踪与尚未提交但未忽略的指令，覆盖隐藏目录和未来新增的目录；
+  // 不遍历私人运行数据或依赖树。已删除但尚未暂存的文件不参与链计算。
+  const instructions = execFileSync(
+    "git",
+    [
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "-z",
+      "--",
+      "AGENTS.md",
+      "**/AGENTS.md",
+      ":(exclude)**/node_modules/**",
+      ":(exclude)_reference/**",
+      ":(exclude)data/**",
+      ":(exclude).data/**",
+    ],
+    { cwd: ROOT, encoding: "utf8" },
+  )
+    .split("\0")
+    .filter(Boolean)
+    .map((file) => path.join(ROOT, file))
+    .filter((file) => fs.existsSync(file));
   const topics = walk(path.join(ROOT, "docs/development")).filter((file) => file.endsWith(".md"));
 
   it("根指令含自动区块不超过 8 KiB，仓库内每条指令链不超过 24 KiB", () => {
@@ -82,14 +106,14 @@ describe("AGENTS.md · 指令体积、导航与别名", () => {
       expect(fs.readlinkSync(alias)).toBe("AGENTS.md");
     }
     const content = read(path.join(ROOT, "AGENTS.md"));
-    const start = "<!-- BEGIN:nextjs-agent-rules -->";
-    const end = "<!-- END:nextjs-agent-rules -->";
+    const start = AGENT_RULES_START_MARKER;
+    const end = AGENT_RULES_END_MARKER;
     expect(content.split(start)).toHaveLength(2);
     expect(content.split(end)).toHaveLength(2);
     expect(content.indexOf(end)).toBeGreaterThan(content.indexOf(start));
-    expect(content.slice(content.indexOf(start), content.indexOf(end))).toContain(
-      "node_modules/next/dist/docs/",
-    );
+    // 安装版本的生成器逐字比较完整区块；不维护会随 Next 升级过时的正文副本。
+    // 上面已确认 CLAUDE 是同一文件的链接，生成器不会被另一个文件里的正确区块蒙混。
+    expect(hasCurrentAgentRules(ROOT)).toBe(true);
   });
 });
 

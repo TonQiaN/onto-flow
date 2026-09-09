@@ -35,6 +35,6 @@
 
 实施 PR：[#63](https://github.com/TonQiaN/onto-flow/pull/63)，关联 [Issue #62](https://github.com/TonQiaN/onto-flow/issues/62)。本记录随该 PR 合并进入 done；GitHub 上的当前检查与合并结果以 PR 页面为准。
 
-根文件 7,670 字节，比原文减少 88.9%；六份专题承接原技术约束，Next.js 自动区块逐字不变。方案未增加目录级 AGENTS，而以根导航显式读取专题，避免误认自动递归加载；除此之外与提议一致。
+根文件 7,670 字节，比原文减少 88.9%；六份专题承接原技术约束，Next.js 自动区块逐字不变。自动评审指出扫描漏掉其他顶层目录、区块只验路径两个缺口；改为 Git 全仓库发现指令并调用安装版本的生成器验证全文。方案未增加目录级 AGENTS，而以根导航显式读取专题，避免误认自动递归加载；除此之外与提议一致。
 
 本地验收：`npx vitest run src/rules.test.ts` 26 项通过；`npm run check` 全部阶段通过，46 个测试文件、395 个测试通过、1 个跳过；`git diff --check` 通过。没有产品行为变更，本地 build、e2e 与付费冒烟不适用，CI 仍执行原有 build / Playwright 门禁。

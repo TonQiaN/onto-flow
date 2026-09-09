@@ -34,7 +34,7 @@
 - `AGENTS.md` 是根入口；任务专题是显式按需读取的普通 Markdown，不声称工具会递归自动加载所有子目录。目录级 AGENTS 仅承接确实只适用于该目录的规则；从根启动后修改深层文件，仍需主动检查沿途指令。
 - 根文件保留启动、边界、任务导航、完成定义与 `Code Review Rules`。细节下沉，避免把设计说明、排错过程、文件数量和版本清单重新拼回根文件。
 - 根文件（含 Next.js 自动区块）上限 **8 KiB**；仓库内沿路径合并的 AGENTS 链上限 **24 KiB**，给默认 32 KiB 预算留出空间。两者是本项目的工程预算，不是官方强制值，也不能保证任意全局用户指令都放得下。扩大预算必须在 Issue/PR 说明必要性，并同步修改 `src/rules.test.ts`。
-- 根 `CLAUDE.md` 与 `docs/harness/CLAUDE.md` 保持相对 symlink 到同目录的 `AGENTS.md`，不复制第二份正文。规则测试检查预算、本地 Markdown 链接、别名及 Next.js 区块存在性。
+- 根 `CLAUDE.md` 与 `docs/harness/CLAUDE.md` 保持相对 symlink 到同目录的 `AGENTS.md`，不复制第二份正文。规则测试从 Git 全仓库已跟踪与未忽略文件中发现指令，覆盖隐藏目录；检查预算、本地 Markdown 链接、别名，并调用安装版本的 Next.js 生成器逐字核对完整区块。
 - 修改规则时，同一提交更新根/专题、机械测试与对应人工条目；机械检查交给 CI，人工评审盯测试看不见的时序、所有权和失败语义。规则不再被代码遵守就删掉，不能改软后继续留着。
 - `nextjs-agent-rules` 由 `next dev` 重写并补回；保留且随工作提交。机制见安装版本的 `node_modules/next/dist/server/lib/generate-agent-files.js`；写 Next 代码前读同版本的 `node_modules/next/dist/docs/`。
 
