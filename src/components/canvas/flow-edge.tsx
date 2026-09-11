@@ -54,10 +54,12 @@ export const FlowEdgeView = memo(function FlowEdgeView({
   markerEnd,
   sourceHandleId,
   selected,
+  data,
 }: EdgeProps<Edge>) {
   const visuals = useCanvasVisuals();
   const sourceNode = useNodesData<FlowNode>(source);
   const exitName = sourceExitName(sourceNode?.data, sourceHandleId);
+  const backEdgeLabel = typeof data?.backEdgeLabel === "string" ? data.backEdgeLabel : null;
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -91,13 +93,12 @@ export const FlowEdgeView = memo(function FlowEdgeView({
             : undefined
         }
       />
-      {exitName && (
+      {(exitName || backEdgeLabel) && (
         <EdgeLabelRenderer>
           <div
-            data-testid={`workflow-edge-exit-${id}`}
             role="note"
-            aria-label={`出口：${exitName}`}
-            className="pointer-events-none absolute z-10 max-w-40 rounded-lg border px-2 py-0.5 text-center text-[10px] leading-4 font-semibold break-words whitespace-normal shadow-sm select-none"
+            aria-label={backEdgeLabel ?? `出口：${exitName}`}
+            className="pointer-events-none absolute z-10 max-w-56 rounded-lg border px-2 py-0.5 text-center text-[10px] leading-4 font-semibold break-words whitespace-normal shadow-sm select-none"
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               color: labelColor.text,
@@ -105,7 +106,8 @@ export const FlowEdgeView = memo(function FlowEdgeView({
               borderColor: labelColor.border,
             }}
           >
-            {exitName}
+            {exitName && <span data-testid={`workflow-edge-exit-${id}`}>{exitName}</span>}
+            {backEdgeLabel && <span className="block text-violet-700">{backEdgeLabel}</span>}
           </div>
         </EdgeLabelRenderer>
       )}

@@ -18,7 +18,7 @@
  *   结束后是本轮耗时 +（节点收束后的）token 与费用（失败再补一行错误摘要）。
  */
 import { memo, useEffect, useRef, useState } from "react";
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Handle, Position, useNodeConnections, type NodeProps } from "@xyflow/react";
 import { formatCost, formatDuration, formatTokens } from "@/app/runs/lib";
 import {
   EFFORT_LABEL,
@@ -200,6 +200,7 @@ function PortRow({
   side: "source" | "target";
 }) {
   const { connecting } = useCanvasState();
+  const connections = useNodeConnections({ id: nodeId, handleType: side, handleId: port.name });
   const [hover, setHover] = useState(false);
   const isOut = side === "source";
   const affinity = handleAffinity(connecting, nodeId, port.name, port.objectTypeId, side);
@@ -229,6 +230,14 @@ function PortRow({
         />
       )}
       <span className="truncate text-xs text-zinc-700">{port.name}</span>
+      {!isOut && connections.length > 1 && (
+        <span
+          title="汇总输入：每轮接收已激活的上游产物列表"
+          className="rounded bg-blue-50 px-1 text-[10px] text-blue-700"
+        >
+          {connections.length} 条入线
+        </span>
+      )}
       {isOut && (
         <span
           className="h-2 w-2 shrink-0 rounded-full"

@@ -53,7 +53,7 @@ src/
 - 服务端校验：name 非空且唯一冲突返回 409；未知 id 返回 404。
 - 前端数据获取：凡是要数据的页面都是 client component（`"use client"` 起手），一律 `fetch` 打 `/api/*` 后在 `useEffect` 里取数。没有 Server Action，也没有任何 Server Component 读 DB——只有根 `app/page.tsx`（仅 redirect）与 `app/layout.tsx`（静态外壳）不带 `"use client"`。
 - UI 文案全部中文；Tailwind 工具类直接写，不引组件库；整体风格与既有外壳（zinc 系工作台）一致。
-- 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；连线校验用 `isValidConnection` 调 graph.ts 的同款逻辑（Object Type id 相等）。
+- 画布：@xyflow/react 12。node.data 只放展示与引用所需（actionId、端口清单、objectType 名与 kind），实体真身在 DB；拖线、点击端口与「添加连线」对话框都调用 `graph.ts` 的 `connectionProblem`，与整图校验共用 nominal 类型、重复边和回边重入规则。未接齐的其他输入不阻塞本次连线；同口多入线是汇总，回边允许创建但目标必须设重入上限。被拒绝的连线显示原因，回边标签显示目标、次数与耗尽策略；端口提示入线数量。候选边 id 沿用到实际创建，避免稳定 DFS 在松开指针后改变判定。
 - 执行引擎：就绪节点并行、并发上限 10；前向边决定首轮就绪，具名出口激活分支，回边触发受上限约束的新一轮会话，且要等环体里全部在跑的节点收束后才重置（ADR-0009）。
 - 运行之间并行且互相独立：同一个工作流可同时发起多次运行，跨运行状态一律按 runId 隔离（工作区目录、子进程、globalThis 上的取消/进程/输入表）。唯一的准入闸门在 `startRun`：同时 running 的运行数达 `MAX_CONCURRENT_RUNS`（16）即返回 429 而不排队——每个运行是一整个 node+tsx+dsh 子进程，队列归外部调用方管。仓库内付费批量脚本实行全有或全撤：任一项被拒时取消并等齐同批已经受理的运行后才报错。
 - 运行页是看一次运行的唯一地方（ADR-0018）：`/runs/<id>` 只读画受理时冻结进 `runs.graph` 的图（从不回查 `workflow_nodes` / `workflow_edges`，早于该决定的运行拿到空图，同一条渲染路径），底部时间轴一节点一行、一轮一段（段来自 `run_node_rounds`），事件按 `run_events.session_id` 落在所属段上；单一时间光标经纯函数 `visualsAt(t)` 推出任一时刻每个节点处于哪一轮、什么状态、哪些连线已激活，进行中默认钉在「现在」跟 SSE、往回拖即暂停跟随，已结束默认停在 `finishedAt`，事件被清理后退化为轮次级；点节点开抽屉看**光标所在那一轮**的轨迹、输入输出与快照——轮次骨架随详情与 SSE 下发，输入输出与快照这两份重载荷在页签打开或换轮时按轮单取。多路并行的切换在导航与运行列表上：导航侧栏的「运行中」面板逐路列出进行中的运行（轮询 `/api/runs?status=running&pageSize=100`，一页取完不翻页），每一路深链 `/runs/<runId>`；工作流卡片的「运行中」徽标链到按该工作流筛选的运行列表。编辑器只编排与发起——运行对话框受理成功即跳 `/runs/<runId>`，画布上没有运行条、没有并行切换器、没有 `?runId=` 深链。

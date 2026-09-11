@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyEdges,
+  connectionProblem,
   downstreamOf,
   exitsOf,
   hasNamedExits,
@@ -11,6 +12,84 @@ import {
 
 const TYPE_A = { objectTypeId: "t-a", objectTypeName: "甲", kind: "text" as const };
 const TYPE_B = { objectTypeId: "t-b", objectTypeName: "乙", kind: "text" as const };
+
+describe("候选连线与整图规则一致", () => {
+  const nodes: ResolvedNode[] = [
+    { id: "in", kind: "input", label: "输入", inputs: [], outputs: [{ name: "value", ...TYPE_A }] },
+    {
+      id: "draft",
+      kind: "action",
+      label: "起草",
+      maxReentries: 2,
+      inputs: [
+        { name: "x", ...TYPE_A },
+        { name: "feedback", ...TYPE_A },
+      ],
+      outputs: [{ name: "y", ...TYPE_A }],
+    },
+    {
+      id: "review",
+      kind: "action",
+      label: "评审",
+      inputs: [{ name: "x", ...TYPE_A }],
+      outputs: [{ name: "y", ...TYPE_A }],
+    },
+    {
+      id: "wrong",
+      kind: "output",
+      label: "异型",
+      inputs: [{ name: "value", ...TYPE_B }],
+      outputs: [],
+    },
+  ];
+  const initial = [
+    edge("first", "in", "value", "draft", "x"),
+    edge("second", "draft", "y", "review", "x"),
+  ];
+
+  it("未连齐的图仍可添加扇出与同口汇总，不把已有连线当作占用", () => {
+    expect(
+      connectionProblem(nodes, initial, edge("synthesis", "in", "value", "review", "x")),
+    ).toBeUndefined();
+  });
+
+  it("合法回边可添加，零上限的回边指出要修改的节点", () => {
+    const back = edge("back", "review", "y", "draft", "feedback");
+    expect(connectionProblem(nodes, initial, back)).toBeUndefined();
+    expect(
+      connectionProblem(
+        nodes.map((n) => ({ ...n, maxReentries: 0 })),
+        initial,
+        back,
+      ),
+    ).toMatchObject({
+      nodeId: "draft",
+      edgeId: "back",
+      message: expect.stringContaining("重入上限"),
+    });
+  });
+
+  it("拒绝重复、异型与失效端口，原因来自共享校验", () => {
+    for (const [candidate, message] of [
+      [edge("duplicate", "in", "value", "draft", "x"), "已经有连线"],
+      [edge("mismatch", "in", "value", "wrong", "value"), "类型不匹配"],
+      [edge("missing", "in", "missing", "draft", "x"), "没有输出端口"],
+    ] as const) {
+      expect(connectionProblem(nodes, initial, candidate)?.message).toContain(message);
+      expect(
+        validateGraph(nodes, [...initial, candidate]).some(
+          (issue) => issue.edgeId === candidate.id && issue.message.includes(message),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("新增正向边把已有边变成非法回边时同样拒绝", () => {
+    const prior = [initial[0], edge("return", "review", "y", "draft", "feedback")];
+    const noLimit = nodes.map((n) => ({ ...n, maxReentries: 0 }));
+    expect(connectionProblem(noLimit, prior, initial[1])?.message).toContain("重入上限");
+  });
+});
 
 function actionNode(
   id: string,
